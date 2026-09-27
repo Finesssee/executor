@@ -1,6 +1,7 @@
 import { folderSkillsEffect } from "./skill-files.ts";
 import { AppSkills, SkillFile, SkillLoadFailed } from "../contracts/skills.ts";
 import { parseProviderError } from "./provider-error.ts";
+import { McpError } from "../contracts/mcp.ts";
 import { OpenapiResponseError } from "../contracts/api-response-error.ts";
 import { toPromise } from "./authoring.ts";
 import type { WorkflowControls, WorkflowReads } from "../contracts/workflows.ts";
@@ -77,12 +78,16 @@ const evaluationSafe = <A>(work: Effect.Effect<A, unknown>) =>
       const error = Cause.squash(cause);
       const provider = parseProviderError(error);
       const skills = parseSkillLoadFailed(error);
+      // An MCP server that cannot be reached is not an invalid app definition; keep its safe fields.
+      const mcp = parseMcpError(error);
       return Effect.fail(
         Option.isSome(provider)
           ? provider.value
           : Option.isSome(skills)
             ? skills.value
-            : new HostEvaluationFailed(),
+            : Option.isSome(mcp)
+              ? mcp.value
+              : new HostEvaluationFailed(),
       );
     }),
   );
@@ -143,7 +148,7 @@ function requirements(slots: AccountSlots, database?: typeof DeclaredRequirement
     }
     return yield* Schema.decodeUnknownEffect(DeclaredRequirements)({
       accounts: Object.fromEntries(accounts),
-      capabilities: { skills: true, toolIndex: true },
+      capabilities: { skills: true, toolIndex: true, skillSources: true, scheduledTools: true },
       ...(database === undefined ? {} : { database }),
     }).pipe(Effect.mapError(() => new HostDeclarationInvalid()));
   });
@@ -349,9 +354,10 @@ function dispatch(
             : yield* evaluationSafe(Effect.suspend(source.list)).pipe(
                 Effect.withSpan("app.skills.load"),
               );
-        return yield* Schema.decodeUnknownEffect(AppSkills)([...declared, ...dynamic]).pipe(
+        const skills = yield* Schema.decodeUnknownEffect(AppSkills)([...declared, ...dynamic]).pipe(
           Effect.mapError(() => new HostDeclarationInvalid()),
         );
+        return request.sources === true ? { skills, dynamic: source !== undefined } : skills;
       }
       if (request.operation === "workflows") {
         return yield* Effect.forEach(Object.entries(definition.workflows ?? {}), ([name, entry]) =>
@@ -441,15 +447,17 @@ function dispatch(
         ] as const) {
           for (const [name, operation] of Object.entries(catalog ?? {})) {
             if (wanted !== undefined && !wanted.has(`${prefix}${name}`)) continue;
+            const schedules = Object.entries(definition.schedules ?? {})
+              .filter(([, schedule]) => schedule.tool === `${prefix}${name}`)
+              .map(([name, { tool: _tool, ...schedule }]) => ({ name, ...schedule }));
+            if (request.scheduled === true && schedules.length === 0) continue;
             metadata.push(
               yield* safe(
                 () =>
                   Effect.gen(function* () {
                     const fields = {
                       name: `${prefix}${name}`,
-                      schedules: Object.entries(definition.schedules ?? {})
-                        .filter(([, schedule]) => schedule.tool === `${prefix}${name}`)
-                        .map(([name, { tool: _tool, ...schedule }]) => ({ name, ...schedule })),
+                      schedules,
                       description:
                         operation.description ?? `${readOnly ? "Query" : "Mutate"} ${name}`,
                       ...(operation.title === undefined ? {} : { title: operation.title }),
@@ -474,7 +482,9 @@ function dispatch(
             );
           }
         }
-        const dynamic = definition.dynamicTools;
+        // Schedules only target declared operations. Dynamic catalogs can be expensive to
+        // discover, so scheduled inspection never evaluates them.
+        const dynamic = request.scheduled === true ? undefined : definition.dynamicTools;
         if (dynamic !== undefined && (wanted === undefined || metadata.length < wanted.size)) {
           const declared = new Set(metadata.map((tool) => tool.name));
           const discover = (): Effect.Effect<readonly unknown[], unknown> => {
@@ -755,9 +765,18 @@ const parseSkillLoadFailed = (error: unknown): Option.Option<SkillLoadFailed> =>
     ),
   );
 
+const parseMcpError = (error: unknown): Option.Option<McpError> =>
+  Schema.decodeUnknownOption(McpError)(error).pipe(
+    Option.map(
+      ({ phase, reason, status }) =>
+        new McpError({ phase, reason, ...(status === undefined ? {} : { status }) }),
+    ),
+  );
+
 const errorStatus = Match.type<HostError>().pipe(
   Match.tagsExhaustive({
     ProviderError: () => 502,
+    McpError: () => 502,
     SkillLoadFailed: () => 502,
     OpenapiResponseError: () => 502,
     WorkflowFailure: () => 422,

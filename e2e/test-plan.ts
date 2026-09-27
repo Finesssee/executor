@@ -300,6 +300,44 @@ export const scenarios = {
       local: na("Shared app client covered on hosted targets"),
     },
   },
+  browserErrorProvenance: {
+    fixtures: "actors",
+    file: "browser-error-provenance.spec.ts",
+    title: "automatic browser error reports include only failures raised by first-party scripts",
+    targets: {
+      cloud: managedCloud,
+      "self-host": na("Cloud Sentry receiver"),
+      local: na("Cloud Sentry receiver"),
+    },
+  },
+  safariErrorProvenance: {
+    file: "safari-error-provenance.spec.ts",
+    title: "Safari reports only the page's own failures, not code evaluated into it",
+    targets: {
+      cloud: managedCloud,
+      "self-host": na("Cloud Sentry receiver"),
+      local: na("Cloud Sentry receiver"),
+    },
+  },
+  hostedMalformedResourceLinks: {
+    fixtures: "actors",
+    file: "malformed-resource-links.spec.ts",
+    title: "Hosted resource links with malformed identifiers show the missing-page state",
+    targets: {
+      cloud: scheduled,
+      "self-host": scheduled,
+      local: na("Local has no organization routes; its links run in the local scenario."),
+    },
+  },
+  localMalformedResourceLinks: {
+    file: "malformed-resource-links.spec.ts",
+    title: "Local resource links with malformed identifiers show the missing-page state",
+    targets: {
+      local: scheduled,
+      "self-host": na("Hosted links run in the organization-scoped scenario."),
+      cloud: na("Hosted links run in the organization-scoped scenario."),
+    },
+  },
   browserObservability: {
     fixtures: "actors",
     file: "browser-observability.spec.ts",
@@ -400,6 +438,16 @@ export const scenarios = {
       local: na("This scenario uses hosted organization routes."),
     },
   },
+  invocationSnapshotTransaction: {
+    fixtures: "actors",
+    file: "invocation-snapshot.spec.ts",
+    title: "Tool invocations resolve one saved selection without holding a transaction",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("This scenario reads SQL spans from the self-host Motel collector."),
+      local: na("This scenario uses hosted organization routes."),
+    },
+  },
   toolAccountContext: {
     fixtures: "actors",
     file: "tool-account-context.spec.ts",
@@ -463,7 +511,7 @@ export const scenarios = {
     fixtures: "actors",
     file: "resource-access.spec.ts",
     appOrigin: true,
-    title: "Groups protect app drafts and independent copies",
+    title: "Groups protect undeployed apps and independent copies",
     targets: {
       "self-host": scheduled,
       cloud: scheduled,
@@ -539,7 +587,7 @@ export const scenarios = {
   appPackageMetadata: {
     fixtures: "actors",
     file: "app-package-metadata.spec.ts",
-    title: "App templates retain package names independently of installed labels",
+    title: "Quick-add MCP apps retain package names independently of installed labels",
     targets: {
       "self-host": scheduled,
       cloud: na(
@@ -561,11 +609,11 @@ export const scenarios = {
   templateAccounts: {
     fixtures: "actors",
     file: "template-accounts.spec.ts",
-    title: "Imported templates route shared tools to explicitly selected accounts",
+    title: "Skill-authored templates route shared tools to explicitly selected accounts",
     targets: {
       "self-host": scheduled,
       cloud: na("Uses loopback upstream fixtures for the shared protocol templates."),
-      local: na("Exercises the hosted import and profile APIs."),
+      local: na("Exercises the hosted deployment and profile APIs."),
     },
   },
   cloudDashboardRoutes: {
@@ -692,13 +740,13 @@ export const scenarios = {
       local: na("Shared error views and SDK are exercised through hosted APIs."),
     },
   },
-  graphqlCatalogImport: {
+  catalogAgentSetup: {
     fixtures: "actors",
-    file: "graphql-catalog.spec.ts",
-    title: "GraphQL catalog import hides CLI entries and connects account tools",
+    file: "catalog-agent-setup.spec.ts",
+    title: "Catalog services without quick add copy an agent setup prompt",
     targets: {
       "self-host": scheduled,
-      cloud: na("Uses a loopback GraphQL upstream to verify the shared catalog importer."),
+      cloud: na("The shared catalog view and install rule are exercised through self-host."),
       local: na("The shared catalog form is exercised through hosted installation."),
     },
   },
@@ -753,15 +801,47 @@ export const scenarios = {
       local: na("Exercises the shared OAuth lifecycle through hosted APIs."),
     },
   },
+  oauthErrorResponses: {
+    fixtures: "actors",
+    file: "oauth-error-responses.spec.ts",
+    title:
+      "OAuth classifies token and callback error responses, accepts Bearer resources' token types, and rejects DPoP, unsigned and mismatched ID tokens",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Uses a scoped loopback issuer with controlled wire responses."),
+      local: na("Exercises the shared OAuth lifecycle through hosted APIs."),
+    },
+  },
+  oauthRefreshResilience: {
+    fixtures: "actors",
+    file: "oauth-refresh-resilience.spec.ts",
+    title:
+      "OAuth renewal keeps the grant through outages and unreadable responses, reconnects only when refused, and traces the cause",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Uses a scoped loopback issuer with controlled token endpoint failures."),
+      local: na("Exercises the shared OAuth lifecycle through hosted APIs."),
+    },
+  },
   importDiagnostics: {
     fixtures: "actors",
     managementProfiles: ["owner"],
     file: "import-diagnostics.spec.ts",
-    title: "OpenAPI imports distinguish download, parse and generation failures safely",
+    title: "Agents learn safely when an MCP server needs them to write the app",
     targets: {
       "self-host": scheduled,
-      cloud: na("Uses a loopback definition host to exercise the shared importer."),
+      cloud: na("Uses a loopback MCP server to exercise the shared importer."),
       local: na("The shared importer is exercised through the hosted import route."),
+    },
+  },
+  oauthRevocation: {
+    fixtures: "actors",
+    file: "oauth-revocation.spec.ts",
+    title: "OAuth account deletion revokes the refresh token and succeeds when revocation fails",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Uses a scoped loopback issuer that records revocation requests."),
+      local: na("Exercises the shared SDK account deletion through hosted APIs."),
     },
   },
   setupDiagnostics: {
@@ -777,17 +857,27 @@ export const scenarios = {
   mcpAuthDiscovery: {
     fixtures: "actors",
     file: "mcp-auth-discovery.spec.ts",
-    title: "MCP imports defer discovery and OAuth setup honors POST authentication challenges",
+    title: "MCP quick add confirms public or OAuth servers and sends others to agent setup",
     targets: {
       "self-host": scheduled,
       cloud: na("Uses a scoped loopback MCP issuer."),
       local: na("Exercises the shared import and OAuth implementation through hosted APIs."),
     },
   },
+  mcpUrlDefaults: {
+    fixtures: "actors",
+    file: "mcp-url-defaults.spec.ts",
+    title: "Custom MCP imports apply provider tool defaults",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Import generation is shared; self-host covers it without contacting providers."),
+      local: na("Exercises the shared import implementation through hosted APIs."),
+    },
+  },
   mcpDeferredSetup: {
     fixtures: "actors",
     file: "mcp-deferred-setup.spec.ts",
-    title: "MCP outages preserve added apps and recover in account setup and tools",
+    title: "MCP outages block quick add with a retry and recover in account setup and tools",
     targets: {
       "self-host": scheduled,
       cloud: na("Uses controlled loopback MCP and OAuth servers through shared product code."),
@@ -812,6 +902,37 @@ export const scenarios = {
     file: "oauth-provisioning.spec.ts",
     title: "OAuth resources are provisioned before client registration",
     targets: { local: scheduled, "self-host": scheduled, cloud: scheduled },
+  },
+  appDeclarations: {
+    fixtures: "actors",
+    file: "app-declarations.spec.ts",
+    title:
+      "evaluated app declarations are reused only for identical inputs and never bypass access",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("Hosted members and app access use organization routes; see localAppDeclarations."),
+    },
+  },
+  appDeclarationsOAuth: {
+    fixtures: "actors",
+    file: "app-declarations-oauth.spec.ts",
+    title: "kept app declarations are refused once an OAuth grant needs reconnecting",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Uses a scoped loopback token service; the grant check is shared SDK code."),
+      local: na("Exercises shared OAuth through the hosted API."),
+    },
+  },
+  localAppDeclarations: {
+    file: "local-app-declarations.spec.ts",
+    title:
+      "local app declarations follow credentials and deployments and refresh within the stale bound",
+    targets: {
+      local: scheduled,
+      "self-host": na("Hosted declaration reuse is covered by appDeclarations."),
+      cloud: na("Hosted declaration reuse is covered by appDeclarations."),
+    },
   },
   workspaceSource: {
     fixtures: "actors",
@@ -965,7 +1086,7 @@ export const scenarios = {
     fixtures: "actors",
     file: "oauth-client-recovery.spec.ts",
     title:
-      "Rejected OAuth clients remain editable and replacements commit only after successful sign-in",
+      "Rejected OAuth clients remain editable, other failures retry without blaming the client, and replacements commit only after successful sign-in",
     targets: {
       "self-host": scheduled,
       cloud: na("Uses a scoped loopback OAuth issuer."),
@@ -993,6 +1114,16 @@ export const scenarios = {
       local: na("Local connection-link coverage is in the local OAuth scenario."),
     },
   },
+  oauthDiscoveryFallback: {
+    fixtures: "actors",
+    file: "oauth-discovery-fallback.spec.ts",
+    title: "OAuth discovery falls back to the origin only when path metadata is missing",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Uses a scoped loopback OAuth issuer."),
+      local: na("Exercises shared OAuth discovery through the hosted API."),
+    },
+  },
   oauthErrorReport: {
     fixtures: "actors",
     file: "oauth-error-report.spec.ts",
@@ -1001,6 +1132,15 @@ export const scenarios = {
       cloud: managedCloud,
       "self-host": na("Only Cloud records product failures for the Executor team."),
       local: na("Only Cloud records product failures for the Executor team."),
+    },
+  },
+  localCustomImport: {
+    file: "local-custom-import.spec.ts",
+    title: "Local custom MCP imports generate app source on concurrent first use",
+    targets: {
+      local: scheduled,
+      "self-host": na("Hosted custom MCP imports are covered by the MCP auth discovery scenario."),
+      cloud: na("Cloud egress refuses loopback MCP hosts, so no Cloud scenario imports one."),
     },
   },
   localOAuth: {
@@ -1048,6 +1188,38 @@ export const scenarios = {
     fixtures: "actors",
     file: "oauth-provider-config.spec.ts",
     title: "OAuth provider code controls scopes, resources, and client authentication",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Uses a scoped loopback OAuth issuer."),
+      local: na("Exercises shared OAuth through the hosted API."),
+    },
+  },
+  oauthCompletionReasons: {
+    fixtures: "actors",
+    file: "oauth-completion-reasons.spec.ts",
+    title:
+      "OAuth completion names each callback failure, and the callback page offers only the recovery that reason allows",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Uses a scoped loopback OAuth issuer."),
+      local: na("Hosted callback page and account dialogs."),
+    },
+  },
+  oauthDeclaredEndpoints: {
+    fixtures: "actors",
+    file: "oauth-declared-endpoints.spec.ts",
+    title:
+      "Declared OAuth endpoints accept the service's callback and ID token issuer, refresh, and, like discovered servers open to public and secret clients, leave client authentication to the client",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Uses a scoped loopback OAuth issuer."),
+      local: na("Hosted account dialogs and saved-client management."),
+    },
+  },
+  oauthAuthorizationParams: {
+    fixtures: "actors",
+    file: "oauth-authorization-params.spec.ts",
+    title: "OAuth authorization parameters reach sign-in without replacing protocol parameters",
     targets: {
       "self-host": scheduled,
       cloud: na("Uses a scoped loopback OAuth issuer."),
@@ -1218,6 +1390,17 @@ export const scenarios = {
       local: na("The shared browser client is exercised through hosted app authentication."),
     },
   },
+  deferredServerPaths: {
+    fixtures: "actors",
+    file: "deferred-server-paths.spec.ts",
+    title:
+      "Hosted API document is identical across concurrent reads and matches the installed Executor app",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("The API document and catalog installation are hosted product surfaces."),
+    },
+  },
   appUiDiscovery: {
     fixtures: "actors",
     managementProfiles: ["owner"],
@@ -1327,6 +1510,25 @@ export const scenarios = {
       cloud: managedCloud,
       "self-host": na("Cloud social sign-in instrumentation."),
       local: na("Cloud social sign-in instrumentation."),
+    },
+  },
+  clientRejectionReporting: {
+    fixtures: "actors",
+    file: "client-rejection-reporting.spec.ts",
+    title: "client request rejections are recorded on their request span, not as server incidents",
+    targets: {
+      "self-host": scheduled,
+      cloud: managedCloud,
+      local: na("This scenario uses hosted APIs; localRejectionRecording covers Local."),
+    },
+  },
+  localRejectionRecording: {
+    file: "client-rejection-reporting.spec.ts",
+    title: "local request rejections are recorded on their request span",
+    targets: {
+      local: scheduled,
+      "self-host": na("clientRejectionReporting covers hosted request rejections."),
+      cloud: na("clientRejectionReporting covers hosted request rejections."),
     },
   },
   observabilityOutcomes: {
@@ -1488,6 +1690,93 @@ export const scenarios = {
       "self-host": scheduled,
       cloud: scheduled,
       local: na("Local has no personal access tokens."),
+    },
+  },
+  mcpExecuteTimeoutReport: {
+    fixtures: "actors",
+    file: "mcp-execute-failures.spec.ts",
+    title: "Timed-out hosted MCP executions report completed calls and output",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("Local runs the same execution driver in its own scenario."),
+    },
+  },
+  mcpExecuteTimeoutApproval: {
+    fixtures: "actors",
+    file: "mcp-execute-failures.spec.ts",
+    title: "MCP executions never pause for approval after their budget ends",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("Local executions use the same driver; hosted PAT approvals cover the pause."),
+    },
+  },
+  mcpExecuteApprovalAfterRefresh: {
+    fixtures: "actors",
+    file: "mcp-execute-failures.spec.ts",
+    title: "Hosted MCP approvals are requested without waiting for background cache refreshes",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("Local runs the same execution driver in its own scenario."),
+    },
+  },
+  mcpExecuteRefreshNotAwaited: {
+    fixtures: "actors",
+    file: "mcp-execute-failures.spec.ts",
+    title: "Hosted MCP executions return without waiting for background cache refreshes",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("Local runs the same execution driver in its own scenario."),
+    },
+  },
+  mcpExecuteUnavailableApp: {
+    fixtures: "actors",
+    file: "mcp-execute-failures.spec.ts",
+    title: "MCP calls into an app that could not load report why it is unavailable",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("Hosted account selection covers the shared catalog diagnostics."),
+    },
+  },
+  mcpExecuteServerRefused: {
+    fixtures: "actors",
+    file: "mcp-execute-failures.spec.ts",
+    title: "MCP apps whose server refuses connections report the MCP failure",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("The refusing MCP server is a loopback listener."),
+      local: na("Hosted self-host covers the shared app runtime error mapping."),
+    },
+  },
+  localMcpExecuteTimeoutReport: {
+    file: "mcp-execute-failures.spec.ts",
+    title: "Timed-out local MCP executions report completed calls and output",
+    targets: {
+      local: scheduled,
+      "self-host": na("Hosted products use the organization scenario."),
+      cloud: na("Hosted products use the organization scenario."),
+    },
+  },
+  localMcpExecuteApprovalAfterRefresh: {
+    file: "mcp-execute-failures.spec.ts",
+    title: "Local MCP approvals are requested without waiting for background cache refreshes",
+    targets: {
+      local: scheduled,
+      "self-host": na("Hosted products use the organization scenario."),
+      cloud: na("Hosted products use the organization scenario."),
+    },
+  },
+  localMcpExecuteRefreshNotAwaited: {
+    file: "mcp-execute-failures.spec.ts",
+    title: "Local MCP executions return without waiting for background cache refreshes",
+    targets: {
+      local: scheduled,
+      "self-host": na("Hosted products use the organization scenario."),
+      cloud: na("Hosted products use the organization scenario."),
     },
   },
   patMcpInFlight: {
@@ -1670,6 +1959,16 @@ export const scenarios = {
       "self-host": scheduled,
       cloud: scheduled,
       local: na("Hosted profile authorization"),
+    },
+  },
+  hostedProfileStaticSchedules: {
+    fixtures: "actors",
+    file: "hosted-profile-scheduling.spec.ts",
+    title: "profile setup and schedules do not depend on dynamic tool discovery",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("Hosted profile setup"),
     },
   },
   hostedProfileRevocation: {
@@ -2015,6 +2314,16 @@ export const scenarios = {
       "self-host": scheduled,
       cloud: scheduled,
       local: na("This scenario tests hosted organization consent, which Local does not have."),
+    },
+  },
+  localMcp: {
+    file: "local-claude-mcp.spec.ts",
+    title:
+      "Claude Code connects to Local through /mcp, paired browser consent and a real tool call",
+    targets: {
+      local: scheduled,
+      "self-host": na("Hosted consent is covered by the organization Claude Code scenario."),
+      cloud: na("Hosted consent is covered by the organization Claude Code scenario."),
     },
   },
   mcpProtocol: {

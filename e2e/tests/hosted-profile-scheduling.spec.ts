@@ -1,10 +1,15 @@
 import { expect, layer } from "@effect/vitest";
-import { Clock, Effect } from "effect";
-import { body } from "../support/api.ts";
-import { Resource } from "../support/contracts.ts";
+import { Clock, Effect, Schema } from "effect";
+import { randomUUID } from "node:crypto";
+import { Api, body } from "../support/api.ts";
+import { Actors } from "../support/actors.ts";
+import { App, Resource } from "../support/contracts.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { Profile, sharedProfileFixture } from "../support/hosted-profile.ts";
+import { createProfile } from "../support/profiles.ts";
 import { scenarios } from "../test-plan.ts";
+
+const SetupStatus = Schema.Struct({ status: Schema.String, failure: Schema.NullOr(Schema.String) });
 layer(HostedLive, { excludeTestServices: true })("Hosted profiles", (it) => {
   it.effect(scenarios.hostedProfileScheduling.title, (context) =>
     withHostedCase(
@@ -67,6 +72,79 @@ layer(HostedLive, { excludeTestServices: true })("Hosted profiles", (it) => {
           (yield* api.request(actors.member, "POST", `${path}/workflow-runs/${run.id}/terminate`))
             .status,
         ).toBe(403);
+      }),
+    ),
+  );
+  // Schedules only target declared mutations. Profile setup and schedule controls
+  // must not wait on, or fail with, a dynamic catalog that is slow or unavailable.
+  it.effect(scenarios.hostedProfileStaticSchedules.title, (context) =>
+    withHostedCase(
+      context,
+      Effect.gen(function* () {
+        const api = yield* Api,
+          actors = yield* Actors;
+        const prefix = `/api/organizations/${actors.organization.id}/apps`;
+        const deployed = yield* api.request(actors.owner, "POST", `${prefix}/deploy`, {
+          name: `Static schedules ${randomUUID().slice(0, 8)}`,
+          files: [
+            {
+              path: "index.ts",
+              content: `import { defineApp, dynamicTools, mutation, object, interval } from "apps";
+const tick = mutation({ input: object({}) }, async () => "ticked");
+export default defineApp({ accounts: {} }, async () => ({
+  mutations: { tick },
+  schedules: { tick: interval({ minutes: 1 }, tick, {}) },
+  dynamicTools: dynamicTools({
+    list: async () => { throw new Error("Dynamic catalog unavailable"); },
+    resolve: async () => undefined,
+  }),
+}));`,
+            },
+          ],
+        });
+        expect(deployed.status, JSON.stringify(deployed.body)).toBe(200);
+        const path = `${prefix}/${(yield* body(App, deployed)).id}`;
+        yield* Effect.addFinalizer(() =>
+          api.request(actors.owner, "DELETE", path).pipe(Effect.orDie),
+        );
+        const profile = yield* createProfile(actors.owner, path);
+        yield* Effect.addFinalizer(() =>
+          api.request(actors.owner, "DELETE", `${path}/profiles/${profile.id}`).pipe(Effect.orDie),
+        );
+        // The dynamic catalog really fails for the full tool listing.
+        const catalog = yield* api.request(
+          actors.owner,
+          "GET",
+          `${path}/tools?profile=${profile.id}`,
+        );
+        expect(catalog.status, JSON.stringify(catalog.body)).not.toBe(200);
+        const deadline = (yield* Clock.currentTimeMillis) + 30000;
+        let setup = yield* body(
+          SetupStatus,
+          yield* api.request(actors.owner, "POST", `${path}/profiles/${profile.id}/reconcile`),
+        );
+        while (setup.status === "pending") {
+          expect(yield* Clock.currentTimeMillis).toBeLessThan(deadline);
+          yield* Effect.sleep("200 millis");
+          setup = yield* body(
+            SetupStatus,
+            yield* api.request(actors.owner, "POST", `${path}/profiles/${profile.id}/reconcile`),
+          );
+        }
+        expect(setup).toMatchObject({ status: "ready", failure: null });
+        const definitions = yield* api.request(
+          actors.owner,
+          "GET",
+          `${path}/schedules/definitions?profile=${profile.id}`,
+        );
+        expect(definitions.status, JSON.stringify(definitions.body)).toBe(200);
+        expect(definitions.body).toMatchObject([{ name: "tick", tool: "mutations.tick" }]);
+        const enabled = yield* api.request(actors.owner, "PATCH", `${path}/schedules/tick`, {
+          profile: profile.id,
+          enabled: true,
+        });
+        expect(enabled.status, JSON.stringify(enabled.body)).toBe(200);
+        expect(enabled.body).toMatchObject({ name: "tick", enabled: true });
       }),
     ),
   );

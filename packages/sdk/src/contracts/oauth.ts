@@ -34,7 +34,8 @@ export const OAuthClientSetup = Schema.Union([
   Schema.Struct({
     ...clientSetup,
     grant: Schema.Literal("authorization_code"),
-    tokenEndpointAuthMethod: OAuthClientAuth,
+    /** Omitted when the provider does not declare one; the client secret is then optional. */
+    tokenEndpointAuthMethod: Schema.optional(OAuthClientAuth),
   }),
   Schema.Struct({
     ...clientSetup,
@@ -72,6 +73,7 @@ export const OAuthProviderErrorCode = Schema.Literals([
   "invalid_redirect_uri",
   "invalid_client_metadata",
   "access_denied",
+  "unsupported_response_type",
   "server_error",
   "temporarily_unavailable",
 ]);
@@ -92,7 +94,14 @@ export const OAuthResponseField = Schema.Literals([
 ]);
 /** Safe protocol evidence for diagnosis. Fixed vocabularies only; never a body, message, or URL. */
 export const OAuthFailureCause = Schema.Struct({
-  stage: Schema.Literals(["discover", "register", "exchange", "clientCredentials"]),
+  stage: Schema.Literals([
+    "discover",
+    "register",
+    "authorize",
+    "exchange",
+    "clientCredentials",
+    "refresh",
+  ]),
   status: Schema.optional(Schema.Int),
   providerError: Schema.optional(OAuthProviderErrorCode),
   field: Schema.optional(OAuthResponseField),
@@ -170,6 +179,7 @@ export const OAuthSetupFailed = UserFacingError.define({
       "discovery_blocked",
       "resource_mismatch",
       "client_not_approved",
+      "client_registration_required",
       "registration_rejected",
       "incompatible_response",
       "invalid_client",
@@ -245,6 +255,21 @@ export const OAuthSetupFailed = UserFacingError.define({
             },
             agentFixable: false,
           },
+          // RFC 7591 lets a registration endpoint require an initial access token. Executor has
+          // none, so a 401 or 403 there means the service registers clients only by hand.
+          client_registration_required: {
+            title: "Register an OAuth client with the service",
+            description:
+              "This service does not let Executor register itself for sign-in. Its OAuth clients must be registered manually.",
+            recovery: {
+              action:
+                "Create an OAuth app in the service’s developer settings with Executor’s callback URL, then enter its client details.",
+              instructions:
+                "The service’s dynamic client registration endpoint requires authorization, such as an RFC 7591 initial access token, which Executor does not have. Explain how to create an OAuth client in the service’s developer settings with Executor’s callback URL, then enter its client ID and secret in Executor. Do not repeatedly register clients or ask for the service’s registration credentials." +
+                callback,
+            },
+            agentFixable: false,
+          },
           registration_rejected: {
             title: "Service rejected Executor’s registration",
             description: "The service refused Executor’s request to register as an OAuth client.",
@@ -309,67 +334,141 @@ export const OAuthSetupFailed = UserFacingError.define({
 export const oauthClientEntryReasons: ReadonlySet<OAuthSetupFailed["reason"]> = new Set([
   "invalid_client",
   "client_not_approved",
+  "client_registration_required",
   "registration_rejected",
 ]);
 /** Parsed OAuthSetupFailed failure. */
 export type OAuthSetupFailed = typeof OAuthSetupFailed.Type;
+/** Every way sign-in completion can fail. Each reason names one cause, so recovery never guesses. */
+export const OAuthCompletionReason = Schema.Literals([
+  // Executor matches the callback to the sign-in it started.
+  "callback_malformed",
+  "sign_in_not_found",
+  "sign_in_replaced",
+  "redirect_mismatch",
+  "sign_in_expired",
+  "sign_in_used",
+  "account_unavailable",
+  // The service's authorization response, validated before its `error` is read.
+  "issuer_mismatch",
+  "denied",
+  "invalid_scope",
+  "invalid_client",
+  "authorization_rejected",
+  // The token exchange.
+  "authorization_code_rejected",
+  "exchange_failed",
+  "destination_blocked",
+  "service_unavailable",
+  "incompatible_response",
+  "unsupported",
+  "oauth_unavailable",
+]);
+export type OAuthCompletionReason = typeof OAuthCompletionReason.Type;
+
+const restart = (
+  presentation: Omit<ErrorPresentation, "recovery"> & { readonly instructions: string },
+): ErrorPresentation => ({
+  title: presentation.title,
+  description: presentation.description,
+  recovery: { action: "Start the connection again.", instructions: presentation.instructions },
+  agentFixable: false,
+});
+
 /** Sign-in completion failed. Saved account credentials are not changed. */
 export const OAuthCompletionFailed = UserFacingError.define({
   tag: "OAuthCompletionFailed",
   status: 400,
   fields: {
-    /** Each reason has a different recovery. A consumed attempt always needs a new sign-in. */
-    reason: Schema.Literals([
-      "invalid_callback",
-      "denied",
-      "sign_in_expired",
-      "exchange_failed",
-      "invalid_client",
-      "account_unavailable",
-      "service_unavailable",
-      "incompatible_response",
-    ]),
+    /** A consumed attempt always needs a new sign-in. */
+    reason: OAuthCompletionReason,
     cause: Schema.optional(OAuthFailureCause),
   },
   presentation: ({ reason, cause }) =>
     withCause(
       (
         {
-          invalid_callback: {
+          callback_malformed: restart({
             title: "Sign-in response not recognised",
+            description: "The service returned to Executor without a usable sign-in response.",
+            instructions:
+              "The callback URL had no single valid state value, or carried a fragment or credentials. Start a fresh sign-in from Executor; never replay or edit a callback URL.",
+          }),
+          sign_in_not_found: restart({
+            title: "Sign-in not found",
             description: "This sign-in response does not match a sign-in that Executor started.",
+            instructions:
+              "No pending sign-in matches the callback's state. The sign-in may have started on another Executor instance or origin. Start a fresh sign-in from the Executor instance that should own the account; never replay a callback.",
+          }),
+          sign_in_replaced: restart({
+            title: "Sign-in replaced",
+            description:
+              "A newer sign-in was started for this connection, possibly in another tab, so this one can no longer finish.",
+            instructions:
+              "Only the latest sign-in for a connection can complete. Finish the newest sign-in or start a fresh one; never replay a callback.",
+          }),
+          redirect_mismatch: {
+            title: "Sign-in returned to a different address",
+            description:
+              "The service returned to a callback URL other than the one Executor sent it to.",
             recovery: {
-              action: "Start the connection again from Executor.",
+              action:
+                "Check Executor’s public address and the service’s allowed redirect URLs. Copy the fix prompt into your agent to find the mismatch.",
               instructions:
-                "Check that the callback came from the sign-in Executor started, in the same browser session, and that the service returns to Executor’s exact callback URL. Start a fresh sign-in; never replay a callback.",
+                "Compare the callback URL Executor registered for this sign-in with the address the browser returned to, including origin, path and query parameters. Check the instance’s public origin and any proxy or relay rewriting the callback. Preserve exact redirect matching.",
+            },
+          },
+          sign_in_expired: restart({
+            title: "Sign-in expired",
+            description: "This sign-in took longer than ten minutes to finish.",
+            instructions: "Sign-ins expire after ten minutes. Start a fresh sign-in.",
+          }),
+          sign_in_used: restart({
+            title: "Sign-in already used",
+            description: "This sign-in response was already used, possibly in another tab.",
+            instructions:
+              "Each sign-in can complete once. Check Accounts for an account the other completion created, or start a fresh sign-in; never replay a callback.",
+          }),
+          account_unavailable: {
+            title: "Account changed during sign-in",
+            description:
+              "The account being reconnected was removed or changed before sign-in finished.",
+            recovery: {
+              action: "Open Accounts and start the connection again.",
+              instructions:
+                "Check whether the reconnected account still exists with the same provider and sign-in method. Start a fresh connection for the intended account.",
+            },
+            agentFixable: false,
+          },
+          issuer_mismatch: {
+            title: "Service identified itself differently",
+            description:
+              "The service’s sign-in response named a different issuer than this app’s OAuth settings, or none when one was required.",
+            recovery: {
+              action:
+                "Check the app’s OAuth issuer settings. Copy the fix prompt into your agent to correct them.",
+              instructions:
+                "Compare the issuer the app's provider definition declares, or the issuer its discovery URL publishes, with the service's documented issuer. Prefer the service's discovery document, or declare its exact issuer alongside explicit endpoints. Do not disable issuer validation (RFC 9207).",
             },
           },
           denied: {
-            title: "Sign-in was not approved",
-            description: "The service reported that sign-in was cancelled or refused.",
+            title: "Sign-in was cancelled",
+            description: "Access was not approved on the service’s sign-in page.",
             recovery: {
               action: "Start the connection again and approve access.",
               instructions:
-                "Check whether the user cancelled consent or the service refused the requested scopes or account. Start a fresh sign-in after resolving the refusal.",
+                "The service returned access_denied: the user cancelled consent, or the service refused access for this account. Start a fresh sign-in after resolving the refusal.",
             },
+            agentFixable: false,
           },
-          sign_in_expired: {
-            title: "Sign-in expired",
-            description: "This sign-in expired or was already used.",
-            recovery: {
-              action: "Start the connection again.",
-              instructions:
-                "Start a fresh sign-in. Sign-ins expire after ten minutes and each can complete once; never replay a consumed code.",
-            },
-          },
-          exchange_failed: {
-            title: "Service rejected the sign-in",
-            description: "The service refused to complete this sign-in.",
+          invalid_scope: {
+            title: "Requested access not accepted",
+            description: "The service refused the permissions this app requested.",
             recovery: {
               action:
-                "Start the connection again. If this continues, copy the fix prompt to investigate.",
+                "Check the app’s requested scopes. Copy the fix prompt into your agent to correct them.",
               instructions:
-                "Inspect the app’s OAuth token endpoint, client authentication method, callback configuration, and requested scopes. Fix verified configuration errors and start a fresh sign-in; never replay a consumed code.",
+                "Compare the scopes the app’s provider definition requests with the scopes the service documents and advertises for this client. Remove or correct unknown or unavailable scopes, then start a fresh sign-in. Do not request broader access to work around the refusal.",
             },
           },
           invalid_client: {
@@ -381,14 +480,42 @@ export const OAuthCompletionFailed = UserFacingError.define({
                 "Compare the selected OAuth client ID, secret availability, authentication method, and redirect URL with the service’s developer settings without exposing secret values. Correct the mismatch and start a fresh sign-in.",
             },
           },
-          account_unavailable: {
-            title: "Account changed during sign-in",
-            description:
-              "The account being reconnected was removed or changed before sign-in finished.",
+          authorization_rejected: {
+            title: "Service rejected the sign-in request",
+            description: "The service’s sign-in page refused the request Executor sent it.",
             recovery: {
-              action: "Open Accounts and start the connection again.",
+              action:
+                "Check the app’s OAuth settings. Copy the fix prompt into your agent to find what the service rejected.",
               instructions:
-                "Check whether the reconnected account still exists with the same provider and sign-in method. Start a fresh connection for the intended account.",
+                "The service returned an authorization error other than access_denied, invalid_scope or a client rejection. Compare the app's declared authorization parameters, response type and endpoints with the service's documentation, then start a fresh sign-in.",
+            },
+          },
+          authorization_code_rejected: restart({
+            title: "Service rejected the sign-in code",
+            description:
+              "The service refused the code from this sign-in. It may have expired or already been used.",
+            instructions:
+              "The token endpoint returned invalid_grant. Start a fresh sign-in; never replay a consumed code. If it repeats, compare the redirect URI and PKCE handling with the service's requirements.",
+          }),
+          exchange_failed: {
+            title: "Service rejected the sign-in",
+            description: "The service refused to complete this sign-in.",
+            recovery: {
+              action:
+                "Check the app’s OAuth settings. Copy the fix prompt into your agent to investigate.",
+              instructions:
+                "Inspect the app’s OAuth token endpoint, client authentication method, callback configuration, and requested scopes. Fix verified configuration errors and start a fresh sign-in; never replay a consumed code.",
+            },
+          },
+          destination_blocked: {
+            title: "OAuth address blocked",
+            description:
+              "This Executor instance does not allow access to the service’s token endpoint.",
+            recovery: {
+              action:
+                "Review the app’s OAuth endpoints and this instance’s network policy. Copy the fix prompt into your agent to find an allowed configuration.",
+              instructions:
+                "Inspect the app's token endpoint against this Executor instance's network policy. Correct unintended addresses. Do not bypass address validation or weaken network protections.",
             },
           },
           service_unavailable: {
@@ -400,29 +527,134 @@ export const OAuthCompletionFailed = UserFacingError.define({
             retryable: false,
           },
           incompatible_response: incompatibleResponse,
+          unsupported: {
+            title: "Sign-in method unavailable",
+            description: "The service issued a kind of access token that Executor cannot use.",
+            recovery: {
+              action:
+                "Retrying will not help. Copy the fix prompt into your agent to find a supported configuration.",
+              instructions:
+                "Check the recorded response field. Executor sends access tokens as Bearer tokens and cannot create DPoP proofs (RFC 9449). Determine whether the service can issue Bearer tokens for this client, and configure that if it can. Do not strip sender constraints from tokens to work around it.",
+            },
+            agentFixable: false,
+          },
+          oauth_unavailable: {
+            title: "OAuth sign-in unavailable",
+            description: "This Executor instance is not configured to complete OAuth sign-in.",
+            recovery: {
+              action: "Ask the instance administrator to enable OAuth sign-in.",
+              instructions:
+                "The host was started without OAuth transport options. Check the instance configuration that supplies OAuth support.",
+            },
+            agentFixable: false,
+          },
+        } satisfies Record<OAuthCompletionReason, ErrorPresentation>
+      )[reason],
+      cause,
+    ),
+});
+/**
+ * What the person finishing sign-in can do next, for every completion reason:
+ * - `restart`: start the same connection again.
+ * - `client`: the service rejected the OAuth client; correct its details.
+ * - `configuration`: retrying will not help until the app or instance changes.
+ * - `account`: the account being reconnected changed; start from Accounts.
+ * - `cancelled`: the user declined; nothing is wrong.
+ */
+export type OAuthCompletionRecovery =
+  | "restart"
+  | "client"
+  | "configuration"
+  | "account"
+  | "cancelled";
+export const oauthCompletionRecovery = {
+  callback_malformed: "restart",
+  sign_in_not_found: "restart",
+  sign_in_replaced: "restart",
+  redirect_mismatch: "configuration",
+  sign_in_expired: "restart",
+  sign_in_used: "restart",
+  account_unavailable: "account",
+  issuer_mismatch: "configuration",
+  denied: "cancelled",
+  invalid_scope: "configuration",
+  invalid_client: "client",
+  authorization_rejected: "configuration",
+  authorization_code_rejected: "restart",
+  exchange_failed: "configuration",
+  destination_blocked: "configuration",
+  service_unavailable: "restart",
+  incompatible_response: "configuration",
+  unsupported: "configuration",
+  oauth_unavailable: "configuration",
+} as const satisfies Record<OAuthCompletionReason, OAuthCompletionRecovery>;
+/** Parsed OAuthCompletionFailed failure. */
+export type OAuthCompletionFailed = typeof OAuthCompletionFailed.Type;
+
+/**
+ * The saved grant cannot supply a fresh token. Its account identity remains available for
+ * reconnection. `cause` is present when the token endpoint refused a renewal.
+ */
+export const OAuthReconnectRequired = UserFacingError.define({
+  tag: "OAuthReconnectRequired",
+  status: 409,
+  fields: { account: AccountId, cause: Schema.optional(OAuthFailureCause) },
+  presentation: ({ cause }) =>
+    withCause(
+      {
+        title: "An account needs to reconnect",
+        description: "The saved sign-in can no longer be used for this account.",
+        recovery: {
+          action: "Open Accounts and reconnect the affected account, then return to Tools.",
+          instructions:
+            "Identify the selected account whose OAuth grant needs renewal. Guide the user through the supported reconnect flow for that same account. Preserve its identity and profile bindings, then verify tool discovery. Do not replace the account or switch authentication methods as a workaround.",
+        },
+      },
+      cause,
+    ),
+});
+/** Parsed expired or revoked account sign-in. */
+export type OAuthReconnectRequired = typeof OAuthReconnectRequired.Type;
+
+/**
+ * Renewing a saved grant failed without the service refusing it. The grant, including its
+ * refresh token, is kept unchanged, so the account does not need to reconnect.
+ */
+export const OAuthRenewalFailed = UserFacingError.define({
+  tag: "OAuthRenewalFailed",
+  status: 502,
+  fields: {
+    account: AccountId,
+    /** An outage or temporary refusal, or a successful response Executor could not use. */
+    reason: Schema.Literals(["service_unavailable", "incompatible_response"]),
+    cause: Schema.optional(OAuthFailureCause),
+  },
+  presentation: ({ reason, cause }) =>
+    withCause(
+      (
+        {
+          service_unavailable: {
+            ...serviceUnavailable,
+            description:
+              "Executor could not renew this account’s access because the service’s sign-in is down, busy, or unreachable. The saved sign-in is kept, so the account does not need to reconnect.",
+            recovery: {
+              action: "Try again in a moment. If this continues, check the service’s status.",
+              instructions:
+                "The account’s saved OAuth grant is intact; do not reconnect or replace the account for this failure. Check the service’s status and the reachability of the token endpoint recorded in the app’s provider definition, and distinguish a temporary outage from an incorrect endpoint. Retry a temporary failure; fix incorrect configuration only when the evidence supports it.",
+            },
+          },
+          incompatible_response: {
+            ...incompatibleResponse,
+            description:
+              "The service answered Executor’s request to renew this account’s access, but its response did not match what Executor expects. The saved sign-in is kept; this is a compatibility problem, not a problem with your account.",
+          },
         } satisfies Record<typeof reason, ErrorPresentation>
       )[reason],
       cause,
     ),
 });
-/** Parsed OAuthCompletionFailed failure. */
-export type OAuthCompletionFailed = typeof OAuthCompletionFailed.Type;
-
-/** The saved grant cannot supply a fresh token. Its account identity remains available for reconnection. */
-export const OAuthReconnectRequired = UserFacingError.define({
-  tag: "OAuthReconnectRequired",
-  status: 409,
-  fields: { account: AccountId },
-  title: "An account needs to reconnect",
-  description: "The saved sign-in can no longer be used for this account.",
-  recovery: {
-    action: "Open Accounts and reconnect the affected account, then return to Tools.",
-    instructions:
-      "Identify the selected account whose OAuth grant needs renewal. Guide the user through the supported reconnect flow for that same account. Preserve its identity and profile bindings, then verify tool discovery. Do not replace the account or switch authentication methods as a workaround.",
-  },
-});
-/** Parsed expired or revoked account sign-in. */
-export type OAuthReconnectRequired = typeof OAuthReconnectRequired.Type;
+/** Parsed failed renewal that kept the saved grant. */
+export type OAuthRenewalFailed = typeof OAuthRenewalFailed.Type;
 
 /** Registration and attempt IDs also bind encrypted data to the record which owns it. */
 export const OAuthClientId = Schema.NonEmptyString.pipe(Schema.brand("OAuthClientId"));
@@ -433,9 +665,16 @@ export type OAuthAttemptId = typeof OAuthAttemptId.Type;
 /** Validated subset of authorization-server metadata used for saved grants. */
 export const OAuthTokenServer = Schema.Struct({
   issuer: HttpUrl,
+  /**
+   * The provider declared endpoints without an issuer. Executor derives `issuer` from the token
+   * URL to key saved clients, but it is not the service's identifier, so callbacks are not checked against it.
+   */
+  issuer_derived: Schema.optional(Schema.Literal(true)),
   authorization_endpoint: Schema.optional(HttpUrl),
   token_endpoint: HttpUrl,
   registration_endpoint: Schema.optional(HttpUrl),
+  /** RFC 7009 endpoint. Optional so grants saved before it was retained still decode. */
+  revocation_endpoint: Schema.optional(HttpUrl),
   jwks_uri: Schema.optional(HttpUrl),
   id_token_signing_alg_values_supported: Schema.optional(Schema.Array(Schema.String)),
   authorization_response_iss_parameter_supported: Schema.optional(Schema.Boolean),
@@ -456,6 +695,7 @@ export const OAuthResource = Schema.Struct({
   resource: HttpUrl,
   authorization_servers: Schema.Array(HttpUrl),
   scopes_supported: Schema.optional(Schema.Array(Schema.String)),
+  bearer_methods_supported: Schema.optional(Schema.Array(Schema.String)),
 });
 /** This record is only read inside encrypted host state; never return it to app code. */
 const registration = {
@@ -492,12 +732,20 @@ export const OAuthAttempt = Schema.Struct({
   /** User-entered clients become reusable only when this attempt completes successfully. */
   clientKey: Schema.optionalKey(OAuthClientId),
   resource: Schema.optional(HttpUrl),
+  /** The protected resource advertised Bearer tokens; see `grantFields.bearerResource`. */
+  bearerResource: Schema.optional(Schema.Literal(true)),
   response: JsonObject,
 });
 export type OAuthAttempt = typeof OAuthAttempt.Type;
 /** Private refresh context. Access-token projections are stored separately on the account. */
 const grantFields = {
   resource: Schema.optional(HttpUrl),
+  /**
+   * The protected resource advertised Bearer tokens during discovery, through RFC 9728
+   * `bearer_methods_supported` or an RFC 6750 Bearer challenge. Its tokens are then used as
+   * Bearer tokens even when the service labels them with a nonstandard `token_type`.
+   */
+  bearerResource: Schema.optional(Schema.Literal(true)),
   response: JsonObject,
   expiresAt: Schema.optional(Schema.Number),
   fields: JsonObject,
@@ -510,6 +758,8 @@ export const OAuthGrant = Schema.Union([
     server: OAuthServer,
     client: OAuthRegistration,
     refreshToken: Schema.optional(Schema.NonEmptyString),
+    /** The first validated ID token's `sub`. A refreshed ID token must keep it (OIDC Core §12.2). */
+    idTokenSubject: Schema.optional(Schema.NonEmptyString),
   }),
   Schema.Struct({
     ...grantFields,

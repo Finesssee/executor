@@ -4,7 +4,7 @@ import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
 import { AppId, DeploymentId, OwnerId, RequestInvalid, StorageError } from "./shared.ts";
 import { AccountNotFound } from "./account.ts";
 import { CredentialsError } from "./shared.ts";
-import { OAuthReconnectRequired } from "./oauth.ts";
+import { OAuthReconnectRequired, OAuthRenewalFailed } from "./oauth.ts";
 import { ProfileErrors, ProfileRevision } from "./profiles.ts";
 import { ProfileId } from "./shared.ts";
 import { AppEvaluationFailed } from "./tools.ts";
@@ -101,6 +101,7 @@ export const AppSkillErrors = [
   AccountNotFound,
   CredentialsError,
   OAuthReconnectRequired,
+  OAuthRenewalFailed,
   ...ProfileErrors,
 ] as const;
 

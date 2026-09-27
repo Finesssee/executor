@@ -30,7 +30,7 @@ layer(HostedLive, { excludeTestServices: true })("Workspace source", (it) => {
         const prefix = `/api/organizations/${actors.organization.id}/apps`;
         const create = (label: string) =>
           Effect.gen(function* () {
-            const response = yield* api.request(actors.owner, "POST", `${prefix}/drafts`, {
+            const response = yield* api.request(actors.owner, "POST", prefix, {
               name: `Source ${label} ${randomUUID().slice(0, 8)}`,
               files: files("initial"),
             });

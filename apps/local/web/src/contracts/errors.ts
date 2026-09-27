@@ -86,6 +86,8 @@ const errorMessage = Match.type<DashboardError>().pipe(
       description: "Reconnect to load its tools.",
       account: error.account,
     }),
+    OAuthRenewalFailed: (error) =>
+      message(error.title, `${error.description} ${error.recovery.action}`),
     DashboardUnauthorized: () =>
       message(
         "Session ended",

@@ -539,9 +539,12 @@ export default defineApp({ accounts: { service } }, async () => ({ queries: {} }
         yield* browser.use("Simulate the external provider cancelling consent", (page) =>
           page.route("https://oauth.example.test/authorize**", (route) => {
             const authorization = new URL(route.request().url());
+            // RFC 6749 §3.1.2: the redirect URI's own query survives an error response too.
+            const denied = new URL(authorization.searchParams.get("redirect_uri") ?? origin);
+            denied.searchParams.set("error", "access_denied");
+            denied.searchParams.set("state", authorization.searchParams.get("state") ?? "");
             const callback = new URL("/oauth/callback", origin);
-            callback.searchParams.set("error", "access_denied");
-            callback.searchParams.set("state", authorization.searchParams.get("state") ?? "");
+            callback.search = denied.search;
             return route.fulfill({ status: 302, headers: { location: callback.href } });
           }),
         );

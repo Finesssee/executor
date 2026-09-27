@@ -120,10 +120,16 @@ export const oauthRecoveryIssuer = (callbackOrigin: string, interactive = false)
             );
           }
           if (parameters.get("decision") === "cancel") {
-            const denied = new URL("/oauth/callback", callbackOrigin);
+            // RFC 6749 §3.1.2: the redirect URI's own query survives an error response too.
+            const denied = new URL(redirect);
             denied.searchParams.set("error", "access_denied");
             denied.searchParams.set("state", parameters.get("state") ?? "");
-            return HttpServerResponse.empty({ status: 302, headers: { location: denied.href } });
+            const browserReturn = new URL("/oauth/callback", callbackOrigin);
+            browserReturn.search = denied.search;
+            return HttpServerResponse.empty({
+              status: 302,
+              headers: { location: browserReturn.href },
+            });
           }
           const code = randomUUID();
           codes.set(code, { clientId, redirect, challenge });

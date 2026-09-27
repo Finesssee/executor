@@ -46,7 +46,7 @@ layer(HostedLive, { excludeTestServices: true })("Source display budgets", (it) 
         ];
         const draft = yield* body(
           App,
-          yield* api.request(actors.owner, "POST", `${prefix}/apps/drafts`, {
+          yield* api.request(actors.owner, "POST", `${prefix}/apps`, {
             name: `Formatting budget ${randomUUID().slice(0, 6)}`,
             files: largeFiles,
           }),

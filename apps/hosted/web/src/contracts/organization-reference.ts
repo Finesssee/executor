@@ -3,7 +3,7 @@ import {
   type OrganizationAccess,
   type OrganizationId,
 } from "@executor-js/hosted-server/organization";
-import { Effect, Layer, Option, Schema } from "effect";
+import { Effect, Equal, Layer, Option, Schema } from "effect";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http";
 import { Atom } from "effect/unstable/reactivity";
 
@@ -11,9 +11,16 @@ import { Atom } from "effect/unstable/reactivity";
 export const organizationTargetAtom = Atom.family((_reference: OrganizationReference) =>
   Atom.make<OrganizationId | undefined>(undefined).pipe(Atom.keepAlive),
 );
-/** Display snapshot keyed by verified identity; API middleware remains the authority for every action. */
+/**
+ * Display snapshot keyed by verified identity; API middleware remains the authority for every action.
+ * Every access read writes a fresh object, so compare structurally: an unchanged role must not
+ * restart dependent queries that are already refreshing.
+ */
 export const organizationPresentationAtom = Atom.family((_id: OrganizationId) =>
-  Atom.make<OrganizationAccess | undefined>(undefined).pipe(Atom.keepAlive),
+  Atom.make<OrganizationAccess | undefined>(undefined).pipe(
+    Atom.withEquality(Equal.equals),
+    Atom.keepAlive,
+  ),
 );
 /** Permission changes revalidate every reference observed by this tab. */
 export const organizationAccessVersionAtom = Atom.make(0).pipe(Atom.keepAlive);

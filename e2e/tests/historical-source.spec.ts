@@ -28,7 +28,7 @@ layer(HostedLive, { excludeTestServices: true })("Historical source", (it) => {
           telemetry = yield* Telemetry,
           target = yield* Target;
         const prefix = `/api/organizations/${actors.organization.id}/apps`;
-        const created = yield* api.request(actors.owner, "POST", `${prefix}/drafts`, {
+        const created = yield* api.request(actors.owner, "POST", prefix, {
           name: `Historical source ${randomUUID().slice(0, 8)}`,
           files,
         });

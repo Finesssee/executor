@@ -196,7 +196,11 @@ export const workerdApps = (options: {
       url.protocol = "ws:";
       return url.href;
     };
-    const connect = (pathname: string) => new NodeWebSocket(websocketUrl(pathname), { headers });
+    // Loopback RPC does not need compression. With permessage-deflate negotiated between
+    // ws and workerd, frames written after a large compressed invocation are sometimes never
+    // delivered to the host Worker. The session then waits forever for its result.
+    const connect = (pathname: string) =>
+      new NodeWebSocket(websocketUrl(pathname), { headers, perMessageDeflate: false });
     const rpc = <A, E>(
       work: (api: RpcStub<WorkerdAppApi>, signal: AbortSignal) => Effect.Effect<A, E>,
     ) =>
@@ -254,22 +258,27 @@ export const workerdApps = (options: {
             };
             socket.on("message", changed);
             socket.on("close", failed);
+            // Keep the error listener for the socket's whole life. Closing a socket that is
+            // still connecting emits "error" after release; with no listener, the EventEmitter
+            // throws and terminates the host process. Failing the finished queue is a no-op.
             socket.on("error", failed);
             yield* Effect.addFinalizer(() =>
               Effect.sync(() => {
                 socket.off("message", changed);
                 socket.off("close", failed);
-                socket.off("error", failed);
               }),
             );
           }),
         { bufferSize: 1, strategy: "sliding" },
       );
+    // workerd closes an idle keep-alive connection after 5 seconds, and reconciliation polls
+    // every 5 seconds. A pooled socket can then close while a request is written to it, and
+    // the fetch fails with a transport error. Each workflow request uses its own connection.
     const backend = (operation: "start" | "status" | "terminate", run: WorkflowRunId) =>
       Effect.scoped(
         Effect.gen(function* () {
           const request = yield* HttpClientRequest.post(new URL("/workflow", origin), {
-            headers,
+            headers: { ...headers, connection: "close" },
           }).pipe(HttpClientRequest.bodyJson({ operation, run }));
           const response = yield* http.execute(request);
           if (response.status !== 200) return yield* engineFailure();

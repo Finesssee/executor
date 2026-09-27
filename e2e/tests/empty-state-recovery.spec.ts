@@ -21,15 +21,15 @@ layer(HostedLive, { excludeTestServices: true })("Empty state recovery", (it) =>
           actors = yield* Actors,
           browser = yield* Browser;
         const prefix = `/api/organizations/${actors.organization.id}`;
-        const draft = yield* body(
+        const undeployed = yield* body(
           App,
-          yield* api.request(actors.owner, "POST", `${prefix}/apps/drafts`, {
-            name: `Empty draft ${randomUUID().slice(0, 8)}`,
+          yield* api.request(actors.owner, "POST", `${prefix}/apps`, {
+            name: `Empty app ${randomUUID().slice(0, 8)}`,
             files: [{ path: "index.ts", content: source }],
           }),
         );
         yield* Effect.addFinalizer(() =>
-          api.request(actors.owner, "DELETE", `${prefix}/apps/${draft.id}`).pipe(Effect.orDie),
+          api.request(actors.owner, "DELETE", `${prefix}/apps/${undeployed.id}`).pipe(Effect.orDie),
         );
         yield* browser.login(actors.owner);
         yield* browser.use("Use dark theme", (page) => page.emulateMedia({ colorScheme: "dark" }));
@@ -37,11 +37,13 @@ layer(HostedLive, { excludeTestServices: true })("Empty state recovery", (it) =>
           { width: 1440, height: 960 },
           { width: 390, height: 844 },
         ]) {
-          yield* browser.use("Set draft viewport", (page) => page.setViewportSize(viewport));
-          yield* browser.use("Open draft overview", (page) =>
-            page.goto(`/org/${actors.organization.slug}/apps/${draft.id}`),
+          yield* browser.use("Set undeployed app viewport", (page) =>
+            page.setViewportSize(viewport),
           );
-          yield* browser.use("Draft has a direct source action", (page) =>
+          yield* browser.use("Open undeployed app overview", (page) =>
+            page.goto(`/org/${actors.organization.slug}/apps/${undeployed.id}`),
+          );
+          yield* browser.use("Undeployed app has a direct source action", (page) =>
             page.getByRole("link", { name: "Open source", exact: true }).waitFor(),
           );
           yield* browser.use("The source preview has loaded", (page) =>
@@ -53,14 +55,14 @@ layer(HostedLive, { excludeTestServices: true })("Empty state recovery", (it) =>
             ),
           ).toBe(1);
           expect(
-            yield* browser.use("Draft source is visible without scrolling", (page) =>
+            yield* browser.use("Undeployed app source is visible without scrolling", (page) =>
               page
                 .getByRole("region", { name: "App source", exact: true })
                 .evaluate((element) => element.getBoundingClientRect().top < window.innerHeight),
             ),
           ).toBe(true);
-          yield* browser.checkpoint(`${viewport.width} draft overview`);
-          yield* browser.use("Open draft schedules", (page) =>
+          yield* browser.checkpoint(`${viewport.width} undeployed overview`);
+          yield* browser.use("Open undeployed app schedules", (page) =>
             page
               .getByRole("navigation", { name: "App navigation" })
               .getByRole("link", { name: "Schedules", exact: true })
@@ -70,20 +72,21 @@ layer(HostedLive, { excludeTestServices: true })("Empty state recovery", (it) =>
             page.getByRole("heading", { name: "No deployment yet", exact: true }).waitFor(),
           );
           expect(
-            yield* browser.use("No useless retry for a draft", (page) =>
+            yield* browser.use("No useless retry for an undeployed app", (page) =>
               page.getByRole("button", { name: "Retry", exact: true }).count(),
             ),
           ).toBe(0);
-          yield* browser.use("Draft schedules offer source after access resolves", (page) =>
-            page.getByRole("link", { name: "Open source", exact: true }).waitFor(),
+          yield* browser.use(
+            "Undeployed app schedules offer source after access resolves",
+            (page) => page.getByRole("link", { name: "Open source", exact: true }).waitFor(),
           );
-          yield* browser.use("The draft header has finished loading", (page) =>
+          yield* browser.use("The undeployed app header has finished loading", (page) =>
             page.locator("[data-slot=skeleton]").first().waitFor({ state: "hidden" }),
           );
-          yield* browser.checkpoint(`${viewport.width} draft schedules`);
+          yield* browser.checkpoint(`${viewport.width} undeployed schedules`);
         }
         yield* browser.use("Open sharing without groups", (page) =>
-          page.goto(`/org/${actors.organization.slug}/apps/${draft.id}?view=settings`),
+          page.goto(`/org/${actors.organization.slug}/apps/${undeployed.id}?view=settings`),
         );
         yield* browser.use("Choose sharing audience", (page) =>
           page.getByRole("combobox", { name: "Who can use this app?", exact: true }).click(),

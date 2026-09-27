@@ -26,7 +26,7 @@ import {
 } from "./apps.ts";
 import { AccountNotFound } from "./account.ts";
 import { DeploymentNotFound } from "./deployment.ts";
-import { OAuthReconnectRequired } from "./oauth.ts";
+import { OAuthReconnectRequired, OAuthRenewalFailed } from "./oauth.ts";
 
 /** SDK deadlines and coordination lease for webhook work; durations are milliseconds. */
 export const WebhookLifecycleLimits = Schema.Struct({
@@ -100,6 +100,7 @@ export const WebhookErrors = [
   AccountRequired,
   AccountSelectionInvalid,
   OAuthReconnectRequired,
+  OAuthRenewalFailed,
   WebhookNotFound,
   WebhookConflict,
   WebhookFailed,

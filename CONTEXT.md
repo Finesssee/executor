@@ -24,8 +24,10 @@ exist before its first deployment. Configured copies can share code and select
 different accounts.
 _Avoid_: Integration, artifact project as a separate kind of app.
 
-**Draft app**:
-An app with editable source and no active deployment.
+**Undeployed app**:
+An app with editable source and no active deployment. It is the same app as
+after deployment, not a separate draft resource.
+_Avoid_: Draft app.
 
 **Working source**:
 The app's current editable source. Saving changes does not change the running

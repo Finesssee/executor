@@ -27,14 +27,14 @@ return await tools.executor.profiles["<management-profile-id>"].mutations.apps_d
 });
 ```
 
-For an app you will edit, use the draft workflow. Local and hosted management
+For an app you will edit, use the create, commit and deploy workflow. Local and hosted management
 apps generate `mutations.appManagement_create`, `queries.appManagement_source`,
 `mutations.appManagement_commit`, `mutations.appManagement_deploy`, and
 `mutations.appManagement_copy` from the serving OpenAPI contracts. Discover
 their exact signatures first. They use ordinary app IDs, with route parameters
 under `path` and request payloads under `body`.
 
-Create the draft, read its working source, and save the complete file list with
+Create the app, read its working source, and save the complete file list with
 `expected: source.revision.commit` and a commit message. Deploy the returned
 `revision.commit` with `body: { commit }`, or deploy a complete file list with
 `body: { files }`. Supply exactly one. `appManagement_deploy` does not accept
@@ -141,7 +141,7 @@ local path. Submit the actual contents through the available tool interface.
 
 ## Updating a hosted app
 
-Use the shared draft workflow to edit an existing app. `appManagement_source`
+Use the shared commit and deploy workflow to edit an existing app. `appManagement_source`
 reads working Git source; `apps_source` reads immutable deployed source. Saving
 one does not change the other. Read both when you need to compare pending edits
 with the running app.

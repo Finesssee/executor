@@ -19,6 +19,7 @@ import {
   InputInvalid,
   Json,
   OAuthReconnectRequired,
+  OAuthRenewalFailed,
   StorageError,
   RequestInvalid,
   ToolBlocked,
@@ -54,6 +55,7 @@ const discoveryErrors = [
   AccountRequired,
   AccountSelectionInvalid,
   OAuthReconnectRequired,
+  OAuthRenewalFailed,
 ] as const;
 const prefix = "/api/organizations/:organization/apps/:app/tools";
 /** Members may discover tools; execution requires an administrator in the handler. */

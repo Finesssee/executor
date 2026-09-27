@@ -81,3 +81,12 @@ make behavioral regressions fail automatically.
 Report the commands and scenario that ran, the outcome, the saved evidence path,
 and any behavior or target left unverified. Diagnose failures within the task's
 scope; do not skip cases, loosen assertions, or call a blocked run a pass.
+
+## Remove tests that do not earn their cost
+
+Tests are not sacred. Every scenario costs CI time and can fail for reasons
+unrelated to a change. When a scenario no longer proves behavior a user or
+public API caller depends on, or another scenario already proves it, delete it
+and its `test-plan.ts` entry. Record what it covered and why that coverage is
+not needed. A flaky scenario that still guards real behavior is fixed, not
+deleted: find the race in the product or in the scenario's waits.

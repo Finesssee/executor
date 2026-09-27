@@ -50,6 +50,13 @@ export interface ExecutorOptions {
   readonly runtime: AppRuntime;
   readonly credentials: Credentials;
   readonly oauth?: OAuthOptions;
+  /** Evaluated skills, workflows and webhooks, shared per process or isolate. Defaults to this executor. */
+  readonly declarations?: import("./declarations.ts").DeclarationCache;
+  /**
+   * Revalidates stale declarations and revokes deleted accounts' OAuth grants after the response.
+   * Without it, stale declarations revalidate first and revocation runs inline.
+   */
+  readonly background?: import("./declarations.ts").BackgroundWork;
 }
 
 /** No valid remote response was received; the operation may already have completed. */

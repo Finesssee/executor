@@ -137,7 +137,7 @@ export const AppNotFound = UserFacingError.define({
 /** Parsed AppNotFound failure. */
 export type AppNotFound = typeof AppNotFound.Type;
 
-/** A draft has source but no active executable deployment. */
+/** An undeployed app has source but no active executable deployment. */
 export const AppNotDeployed = UserFacingError.define({
   tag: "AppNotDeployed",
   status: 409,
@@ -288,7 +288,7 @@ const ownerQuery = { owner: AppInputs.get.fields.owner };
 /** Creation and deployment share a build pipeline; copies own independent source. */
 export const AppsGroup = HttpApiGroup.make("apps")
   .add(
-    HttpApiEndpoint.post("create", "/v1/apps/drafts", {
+    HttpApiEndpoint.post("create", "/v1/apps", {
       payload: AppInputs.create,
       success: App,
       error: [StorageError, ...sourceErrors, AppNameTaken, AppSlugTaken],

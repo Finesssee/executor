@@ -332,12 +332,12 @@ export const appsCommand = (platform: string) =>
         files: files.pipe(Flag.optional),
       }).pipe(
         Command.withDescription(
-          "Create a draft app from source files, or from a starter app when --files is omitted. Saving source does not run the app",
+          "Create an app from source files, or from a starter app when --files is omitted. Saving source does not run the app",
         ),
         Command.withHandler((args) =>
           Effect.gen(function* () {
             const files = Option.isSome(args.files) ? yield* readFiles(args.files.value) : starter;
-            yield* send(args.host, args.organization, "/apps/drafts", { name: args.name, files });
+            yield* send(args.host, args.organization, "/apps", { name: args.name, files });
           }),
         ),
       ),

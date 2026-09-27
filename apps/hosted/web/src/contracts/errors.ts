@@ -84,6 +84,7 @@ const errorMessage = Match.type<HostedError>().pipe(
       "The app’s account setup changed. Close this form and try again.",
     ProviderNotFound: () => "This provider is no longer available. Reload the app and try again.",
     OAuthReconnectRequired: () => "This account needs to sign in again.",
+    OAuthRenewalFailed: (error) => `${error.description} ${error.recovery.action}`,
     OAuthClientUnavailable: () =>
       "This provider needs an OAuth client. Enter its client details below.",
     OAuthSetupFailed: (error) => `${error.description} ${error.recovery.action}`,

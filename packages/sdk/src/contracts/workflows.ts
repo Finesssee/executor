@@ -16,7 +16,7 @@ import { AppId, StorageError, CredentialsError, RequestInvalid } from "./shared.
 import { AppNotDeployed, AppNotFound, AccountRequired, AccountSelectionInvalid } from "./apps.ts";
 import { AccountNotFound } from "./account.ts";
 import { DeploymentNotFound } from "./deployment.ts";
-import { OAuthReconnectRequired } from "./oauth.ts";
+import { OAuthReconnectRequired, OAuthRenewalFailed } from "./oauth.ts";
 
 export { HostedWorkflow, WorkflowRun, WorkflowRunId, WorkflowRunPage, WorkflowFailure };
 /** Start keys deduplicate retries within one configured app. */
@@ -60,6 +60,7 @@ export const WorkflowErrors = [
   AccountSelectionInvalid,
   DeploymentNotFound,
   OAuthReconnectRequired,
+  OAuthRenewalFailed,
   WorkflowFailure,
 ] as const;
 

@@ -7,7 +7,7 @@ import { AppId, DeploymentId, Json, StorageError, CredentialsError } from "./sha
 import { AppNotFound, AppNotDeployed, AccountRequired, AccountSelectionInvalid } from "./apps.ts";
 import { AccountNotFound } from "./account.ts";
 import { DeploymentNotFound } from "./deployment.ts";
-import { OAuthReconnectRequired } from "./oauth.ts";
+import { OAuthReconnectRequired, OAuthRenewalFailed } from "./oauth.ts";
 
 /** Transportable invocation, independent of closures, credentials or server module imports. */
 export const AppDataInput = Schema.Struct({
@@ -50,6 +50,7 @@ const errors = [
   AccountRequired,
   AccountSelectionInvalid,
   OAuthReconnectRequired,
+  OAuthRenewalFailed,
   AppDataNotFound,
   AppDataFailed,
 ] as const;

@@ -218,6 +218,13 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
             true,
           ],
           [
+            "protected",
+            { registrationStatus: 401 },
+            "Register an OAuth client with the service",
+            "Create an OAuth app in the service’s developer settings",
+            true,
+          ],
+          [
             "rejected",
             { registrationStatus: 400, registrationError: "invalid_client_metadata" },
             "Service rejected Executor’s registration",

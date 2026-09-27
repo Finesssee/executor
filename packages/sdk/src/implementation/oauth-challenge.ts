@@ -1,5 +1,10 @@
-/** Read Bearer metadata without mistaking another scheme's parameters for Bearer. */
-export const bearerResourceMetadata = (header: string | undefined): string | undefined => {
+/**
+ * Read an RFC 6750 Bearer challenge and its RFC 9728 metadata URL without mistaking another
+ * scheme's parameters for Bearer. Undefined when the header is absent or malformed.
+ */
+const bearerChallenge = (
+  header: string | undefined,
+): { readonly bearer: boolean; readonly metadata: string | undefined } | undefined => {
   if (header === undefined) return undefined;
   const parts: string[] = [];
   let part = "";
@@ -26,6 +31,7 @@ export const bearerResourceMetadata = (header: string | undefined): string | und
   parts.push(part.trim());
   let scheme: string | undefined;
   let metadata: string | undefined;
+  let bearer = false;
   for (const part of parts) {
     if (!part) continue;
     // A new scheme is separated from its first parameter by whitespace.
@@ -34,6 +40,7 @@ export const bearerResourceMetadata = (header: string | undefined): string | und
       : /^([!#$%&'*+.^_`|~A-Za-z0-9-]+)(?:[ \t]+(.*))?$/.exec(part);
     const parameter = challenge ? challenge[2] : part;
     if (challenge) scheme = challenge[1]?.toLowerCase();
+    if (challenge && scheme === "bearer") bearer = true;
     if (parameter === undefined) continue;
     const field = /^([!#$%&'*+.^_`|~A-Za-z0-9-]+)[ \t]*=[ \t]*("(?:\\.|[^"\\])*"|[^\s,"]+)$/.exec(
       parameter,
@@ -47,5 +54,13 @@ export const bearerResourceMetadata = (header: string | undefined): string | und
     if (raw === undefined || metadata !== undefined) return undefined;
     metadata = raw.startsWith('"') ? raw.slice(1, -1).replace(/\\(.)/g, "$1") : raw;
   }
-  return metadata;
+  return { bearer, metadata };
 };
+
+/** Read Bearer metadata without mistaking another scheme's parameters for Bearer. */
+export const bearerResourceMetadata = (header: string | undefined): string | undefined =>
+  bearerChallenge(header)?.metadata;
+
+/** Whether a resource challenged with the RFC 6750 Bearer scheme. */
+export const bearerChallenged = (header: string | undefined): boolean =>
+  bearerChallenge(header)?.bearer ?? false;

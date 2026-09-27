@@ -241,15 +241,15 @@ layer(HostedLive, { excludeTestServices: true })("MCP server", (it) => {
         expect(executorSource.files.find((file) => file.path === "index.ts")?.content).toContain(
           "wellKnownSkills",
         );
-        // A draft that never deployed and an app still waiting for its account must not hide
+        // An app that never deployed and an app still waiting for its account must not hide
         // other apps' skills, and a direct read must say what the agent should do next.
         const prefix = `/api/organizations/${actors.organization.id}`;
-        const drafted = yield* api.request(actors.owner, "POST", `${prefix}/apps/drafts`, {
+        const created = yield* api.request(actors.owner, "POST", `${prefix}/apps`, {
           name: `Undeployed ${randomUUID().slice(0, 8)}`,
           files: [{ path: "index.ts", content: "export default {};" }],
         });
-        expect(drafted).toMatchObject({ status: 200 });
-        const draft = yield* body(App, drafted);
+        expect(created).toMatchObject({ status: 200 });
+        const undeployed = yield* body(App, created);
         const deployed = yield* api.request(actors.owner, "POST", `${prefix}/apps/deploy`, {
           name: `Needs account ${randomUUID().slice(0, 8)}`,
           files: [
@@ -270,7 +270,7 @@ export default defineApp({ accounts: { service: provider.many() } }, async () =>
         expect(deployed).toMatchObject({ status: 200 });
         const needsAccount = yield* body(App, deployed);
         yield* Effect.addFinalizer(() =>
-          Effect.forEach([draft, needsAccount], (removed) =>
+          Effect.forEach([undeployed, needsAccount], (removed) =>
             api.request(actors.owner, "DELETE", `${prefix}/apps/${removed.id}`),
           ).pipe(Effect.orDie),
         );
@@ -290,7 +290,7 @@ export default defineApp({ accounts: { service: provider.many() } }, async () =>
         )(partial.structuredContent);
         expect(partialIndex.skills.some((entry) => entry.app.id === app.id)).toBe(true);
         expect(partialIndex.skills.some((entry) => entry.app.id === guide.app.id)).toBe(true);
-        expect(partialIndex.unavailableApps.map((entry) => entry.app)).toContain(draft.id);
+        expect(partialIndex.unavailableApps.map((entry) => entry.app)).toContain(undeployed.id);
         const accountless = yield* client.use(
           "Reading an account-less app's skills explains the missing account",
           (client, signal) =>

@@ -29,12 +29,21 @@ export const storedAccount = (db: Query, account: AccountId, owner?: OwnerId) =>
 export const ownedAccount = (db: Query, input: Parameters<Executor["accounts"]["get"]>[0]) =>
   storedAccount(db, input.account, input.owner);
 
+/** An encrypted OAuth grant whose account deletion has committed. */
+export interface RemovedGrant {
+  readonly account: AccountId;
+  readonly provider: string;
+  readonly encrypted: Uint8Array;
+}
+
 /** Bind account operations to caller-owned storage and credentials. */
 export const makeAccounts = (
   db: Query,
   credentials: Credentials,
   crypto: Crypto.Crypto,
   lifecycle?: ResourceLifecycle,
+  /** Best-effort provider-side revocation; it never fails and runs only after the delete commits. */
+  revokeRemoved?: (removed: RemovedGrant) => Effect.Effect<void>,
 ) => ({
   add: (input: Parameters<Executor["accounts"]["add"]>[0]) =>
     Effect.gen(function* () {
@@ -134,49 +143,60 @@ export const makeAccounts = (
       }),
     ).pipe(Effect.withSpan("sdk.accounts.replaceCredentials")),
   remove: (input: Parameters<Executor["accounts"]["remove"]>[0]) =>
-    transaction(db, (tx) =>
-      Effect.gen(function* () {
-        const row = yield* query(() =>
-          tx.findFirst("accounts", {
-            where: (b) =>
-              b.and(
-                b("id", "=", input.account),
-                input.owner === undefined ? true : b("owner", "=", input.owner),
-              ),
-          }),
-        );
-        if (row !== null) {
-          yield* query(() =>
-            tx.updateMany("accounts", {
-              where: (b) => b("id", "=", row.id),
-              set: { createdAt: row.createdAt },
+    Effect.gen(function* () {
+      const removed = yield* transaction(db, (tx) =>
+        Effect.gen(function* () {
+          const row = yield* query(() =>
+            tx.findFirst("accounts", {
+              where: (b) =>
+                b.and(
+                  b("id", "=", input.account),
+                  input.owner === undefined ? true : b("owner", "=", input.owner),
+                ),
             }),
           );
-          const linked = yield* query(() =>
-            tx.findFirst("webhookAccounts", { where: (b) => b("account", "=", row.id) }),
-          );
-          if (linked !== null) return yield* new AccountWebhooksActive({ account: row.id });
-          const workflow = yield* query(() =>
-            tx.findFirst("workflowAccounts", { where: (b) => b("account", "=", row.id) }),
-          );
-          if (workflow !== null) return yield* new AccountWorkflowsActive({ account: row.id });
-          if (lifecycle) {
-            const account = yield* Schema.decodeUnknownEffect(Account)(row).pipe(
-              Effect.mapError(() => new StorageError()),
+          if (row !== null) {
+            yield* query(() =>
+              tx.updateMany("accounts", {
+                where: (b) => b("id", "=", row.id),
+                set: { createdAt: row.createdAt },
+              }),
             );
-            yield* lifecycle.accountRemoving(account);
+            const linked = yield* query(() =>
+              tx.findFirst("webhookAccounts", { where: (b) => b("account", "=", row.id) }),
+            );
+            if (linked !== null) return yield* new AccountWebhooksActive({ account: row.id });
+            const workflow = yield* query(() =>
+              tx.findFirst("workflowAccounts", { where: (b) => b("account", "=", row.id) }),
+            );
+            if (workflow !== null) return yield* new AccountWorkflowsActive({ account: row.id });
+            if (lifecycle) {
+              const account = yield* Schema.decodeUnknownEffect(Account)(row).pipe(
+                Effect.mapError(() => new StorageError()),
+              );
+              yield* lifecycle.accountRemoving(account);
+            }
+            const grant = yield* query(() =>
+              tx.findFirst("oauthGrants", { where: (b) => b("id", "=", input.account) }),
+            );
+            yield* query(() =>
+              tx.deleteMany("oauthGrants", { where: (b) => b("id", "=", input.account) }),
+            );
+            yield* query(() =>
+              tx.deleteMany("accounts", { where: (b) => b("id", "=", input.account) }),
+            );
+            return grant === null
+              ? undefined
+              : { account: row.id, provider: row.provider, encrypted: grant.encrypted };
           }
-          yield* query(() =>
-            tx.deleteMany("oauthGrants", { where: (b) => b("id", "=", input.account) }),
-          );
-          yield* query(() =>
-            tx.deleteMany("accounts", { where: (b) => b("id", "=", input.account) }),
-          );
-        }
-        // Keep selected IDs as unresolved references. An app must never silently switch accounts or run a partial collection.
-        return { account: input.account };
-      }),
-    ).pipe(Effect.withSpan("sdk.accounts.remove")),
+          return undefined;
+        }),
+      );
+      // Revoke only after the deletion is durable; the outcome cannot change the result.
+      if (removed !== undefined && revokeRemoved !== undefined) yield* revokeRemoved(removed);
+      // Keep selected IDs as unresolved references. An app must never silently switch accounts or run a partial collection.
+      return { account: input.account };
+    }).pipe(Effect.withSpan("sdk.accounts.remove")),
   list: (input: NonNullable<Parameters<Executor["accounts"]["list"]>[0]> = {}) =>
     Effect.gen(function* () {
       const rows = yield* query(() =>

@@ -35,8 +35,8 @@ export function AppOverview({
   readonly entries: ReactNode;
 }) {
   const { AppLink } = useDashboard();
-  const draft = app.activeDeployment === null;
-  if (draft)
+  const undeployed = app.activeDeployment === null;
+  if (undeployed)
     return (
       <div className="p-7 max-[740px]:p-4">
         <EmptyState
@@ -52,7 +52,7 @@ export function AppOverview({
           }
         >
           {source
-            ? "Your draft is saved. Open its source to deploy the first version."
+            ? "Your source is saved. Open it to deploy the first version."
             : "The app owner needs to deploy this app before it can be used."}
         </EmptyState>
         {source && (
@@ -77,7 +77,7 @@ export function AppOverview({
         >
           <div className="mb-1 flex min-h-9 shrink-0 items-center justify-between gap-3 border-b pb-3">
             <h3 className="text-sm font-medium">Accounts</h3>
-            {!draft && (
+            {!undeployed && (
               <AppLink
                 app={app.id}
                 view="accounts"

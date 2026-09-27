@@ -2,7 +2,7 @@
 import { Clock, Cron, Effect, Result, Schema, SchemaAST, type Crypto } from "effect";
 import { ScheduleTiming } from "apps/contracts";
 import type { Executor } from "../contracts/executor.ts";
-import { Cursor, StorageError, RequestInvalid, type OwnerId } from "../contracts/shared.ts";
+import { StorageError, RequestInvalid, type OwnerId } from "../contracts/shared.ts";
 import {
   AppSchedule,
   ScheduleInputs,
@@ -23,6 +23,7 @@ import { database, query, transaction } from "./database.ts";
 import { lockApp } from "./apps.ts";
 import { storedProfile } from "./profiles.ts";
 import { makeToolApprovals } from "./tool-approvals.ts";
+import type { makeTools } from "./tools.ts";
 
 const terminal = (status: ScheduledRun["status"]) =>
   !["running", "ready", "awaiting-approval"].includes(status);
@@ -49,7 +50,8 @@ const nextOccurrence = (timing: ScheduleTiming, after: Date) =>
 export const makeSchedules = (
   storage: ExecutorDatabase,
   apps: Pick<Executor["apps"], "get">,
-  tools: Pick<Executor["tools"], "list" | "call" | "resume">,
+  tools: Pick<Executor["tools"], "call" | "resume"> &
+    Pick<ReturnType<typeof makeTools>, "scheduled">,
   credentials: Credentials,
   crypto: Crypto.Crypto,
 ) => {
@@ -97,25 +99,12 @@ export const makeSchedules = (
         }),
       );
       const settings = yield* parse(Schema.Array(ScheduleSettings), saved);
-      const results: AppSchedule[] = [];
-      let cursor: Cursor | undefined;
-      do {
-        const page = yield* tools.list({
-          app: input.app,
-          profile: input.profile,
-          cursor,
-        });
-        for (const tool of page.items)
-          for (const schedule of tool.schedules ?? []) {
-            results.push({
-              ...schedule,
-              app: input.app,
-              tool: tool.name,
-              settings: settings.find((setting) => setting.name === schedule.name) ?? null,
-            });
-          }
-        cursor = page.next;
-      } while (cursor !== undefined);
+      const declared = yield* tools.scheduled({ app: input.app, profile: input.profile });
+      const results: AppSchedule[] = declared.map((schedule) => ({
+        ...schedule,
+        app: input.app,
+        settings: settings.find((setting) => setting.name === schedule.name) ?? null,
+      }));
       return results.sort((left, right) => left.name.localeCompare(right.name));
     });
   const definition = (input: typeof ScheduleInputs.runNow.Type) =>

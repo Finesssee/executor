@@ -128,6 +128,45 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
         yield* browser.use("Choose an account for the app", (page) =>
           page.getByRole("button", { name: "Add Recoverable OAuth account", exact: true }).click(),
         );
+        yield* issuer.configure({ tokenFails: true });
+        yield* browser.use("Enter a valid client while the service is unavailable", (page) =>
+          page
+            .getByLabel("Client secret", { exact: true })
+            .waitFor({ state: "visible" })
+            .then(() => page.getByLabel("Account name", { exact: true }).fill("Recovery account"))
+            .then(() =>
+              page.getByLabel("Client ID", { exact: true }).fill(recoveryClients.original.clientId),
+            )
+            .then(() =>
+              page
+                .getByLabel("Client secret", { exact: true })
+                .fill(recoveryClients.original.clientSecret),
+            )
+            .then(() =>
+              page
+                .getByRole("dialog")
+                .getByRole("button", { name: "Connect Recoverable OAuth", exact: true })
+                .click(),
+            ),
+        );
+        yield* browser.use("A failure unrelated to the client offers a plain retry", (page) =>
+          page.getByRole("link", { name: "Try again", exact: true }).waitFor({ state: "visible" }),
+        );
+        expect(
+          yield* browser.use("Do not suggest changing a client the service accepted", (page) =>
+            page.getByRole("link", { name: "Update client details", exact: true }).count(),
+          ),
+        ).toBe(0);
+        yield* browser.checkpoint("Unavailable service callback");
+        yield* issuer.configure({ tokenFails: false });
+        yield* browser.use("Retry reopens the unsaved client fields", (page) =>
+          page.getByRole("link", { name: "Try again", exact: true }).click(),
+        );
+        expect(
+          yield* browser.use("Keep the account name across the retry", (page) =>
+            page.getByLabel("Account name", { exact: true }).inputValue(),
+          ),
+        ).toBe("Recovery account");
         yield* browser.use("Enter a rejected secret", (page) =>
           page
             .getByLabel("Client secret", { exact: true })
@@ -158,6 +197,7 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
             page.getByLabel("Account name", { exact: true }).inputValue(),
           ),
         ).toBe("Recovery account");
+        // Pasted secrets often carry surrounding whitespace; the issuer compares secrets exactly.
         yield* browser.use("Correct the client and finish connecting", (page) =>
           page
             .getByLabel("Client ID", { exact: true })
@@ -165,7 +205,7 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
             .then(() =>
               page
                 .getByLabel("Client secret", { exact: true })
-                .fill(recoveryClients.original.clientSecret),
+                .fill(` ${recoveryClients.original.clientSecret} `),
             )
             .then(() =>
               page.getByRole("button", { name: "Connect Recoverable OAuth", exact: true }).click(),

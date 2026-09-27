@@ -141,14 +141,14 @@ export const appManagementApi = <I extends HttpApiMiddleware.AnyId, S>(
           success: Schema.Array(App),
           error: appOperationErrors,
         }),
-        HttpApiEndpoint.post("create", "/apps/drafts", {
+        HttpApiEndpoint.post("create", "/apps", {
           params: tenant,
           payload: Schema.Struct({ name: AppName, files: SourceFiles }),
           success: App,
           error: appOperationErrors,
         }).annotate(
           OpenApi.Description,
-          "Create a draft in Apps from its complete source file list. It keeps its app identity when deployed. Saving source does not run the app.",
+          "Create an app from its complete source file list. It keeps its app identity when deployed. Saving source does not run the app.",
         ),
         HttpApiEndpoint.get("authoring", "/apps/:app/authoring", {
           params: app,

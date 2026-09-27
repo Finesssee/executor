@@ -69,7 +69,7 @@ layer(HostedLive, { excludeTestServices: true })("Source highlighting", (it) => 
         const api = yield* Api;
         const browser = yield* Browser;
         const prefix = `/api/organizations/${actors.organization.id}/apps`;
-        const created = yield* api.request(actors.owner, "POST", `${prefix}/drafts`, {
+        const created = yield* api.request(actors.owner, "POST", prefix, {
           name: `Highlighting ${randomUUID().slice(0, 8)}`,
           files: [{ path: "index.ts", content: "export default {};" }, ...files],
         });

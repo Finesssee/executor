@@ -534,7 +534,7 @@ layer(HostedLive, { excludeTestServices: true })("Resource access", (it) => {
         );
         const draft = yield* body(
           App,
-          yield* api.request(actors.member, "POST", `${prefix}/apps/drafts`, {
+          yield* api.request(actors.member, "POST", `${prefix}/apps`, {
             name: `Member draft ${suffix}`,
             files: [{ path: "index.ts", content: identitySource }],
           }),
@@ -567,7 +567,7 @@ layer(HostedLive, { excludeTestServices: true })("Resource access", (it) => {
         ).toMatchObject({ audience: { kind: "private" }, canManage: true, canUse: true });
         const hidden = yield* body(
           App,
-          yield* api.request(actors.owner, "POST", `${prefix}/apps/drafts`, {
+          yield* api.request(actors.owner, "POST", `${prefix}/apps`, {
             name: `Owner draft ${suffix}`,
             files: [{ path: "index.ts", content: identitySource }],
           }),

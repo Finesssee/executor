@@ -15,7 +15,7 @@ import {
 import { AppNotDeployed, AppNotFound, AccountRequired, AccountSelectionInvalid } from "./apps.ts";
 import { AccountNotFound } from "./account.ts";
 import { DeploymentNotFound } from "./deployment.ts";
-import { OAuthReconnectRequired } from "./oauth.ts";
+import { OAuthReconnectRequired, OAuthRenewalFailed } from "./oauth.ts";
 import { CredentialsError } from "./shared.ts";
 import { AppProviderFailed, AppEvaluationFailed, ToolInvocation } from "./tools.ts";
 
@@ -164,6 +164,7 @@ export const ScheduleErrors = [
   AccountNotFound,
   DeploymentNotFound,
   OAuthReconnectRequired,
+  OAuthRenewalFailed,
   CredentialsError,
   AppEvaluationFailed,
   AppProviderFailed,

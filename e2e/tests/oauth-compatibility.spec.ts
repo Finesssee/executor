@@ -9,6 +9,7 @@ import { HostedLive, withHostedCase } from "../support/case.ts";
 import { Resource } from "../support/contracts.ts";
 import { oauthSetupIssuer } from "../support/oauth-setup-issuer.ts";
 import { createProfile, Profile } from "../support/profiles.ts";
+import { oauthMcpAppFiles } from "../support/authored-templates.ts";
 import { scenarios } from "../test-plan.ts";
 
 const SignIn = Schema.Struct({ authorizationUrl: Schema.String });
@@ -42,7 +43,7 @@ layer(HostedLive, { excludeTestServices: true })("OAuth compatibility", (it) => 
         } as const;
         const cases: ReadonlyArray<{
           readonly name: string;
-          readonly registrationStatus: 200 | 201 | 400;
+          readonly registrationStatus: 200 | 201 | 400 | 401;
           readonly registrationError: "invalid_client_metadata" | "invalid_redirect_uri";
           readonly omitSecretExpiry: boolean;
           readonly malformedRegistration: boolean;
@@ -102,18 +103,23 @@ layer(HostedLive, { excludeTestServices: true })("OAuth compatibility", (it) => 
             registrationError: "invalid_redirect_uri",
             setupFailure: "client_not_approved",
           },
+          // RFC 7591 registration that needs an initial access token: a manual client is required.
+          {
+            ...valid,
+            name: "Protected registration",
+            registrationStatus: 401,
+            setupFailure: "client_registration_required",
+          },
         ];
         for (const scenario of cases) {
           yield* issuer.configure(scenario);
-          const imported = yield* api.request(actors.owner, "POST", `${prefix}/apps/import`, {
-            source: {
-              kind: "mcp",
-              name: `${scenario.name} ${randomUUID().slice(0, 8)}`,
-              url: `${issuer.origin}/mcp`,
-              auth: { type: "auto" },
-            },
+          // Deploy the quick-add OAuth source directly; these cases break discovery on purpose.
+          const name = `${scenario.name} ${randomUUID().slice(0, 8)}`;
+          const imported = yield* api.request(actors.owner, "POST", `${prefix}/apps/deploy`, {
+            name,
+            files: oauthMcpAppFiles(name, `${issuer.origin}/mcp`),
           });
-          expect(imported.status).toBe(200);
+          expect(imported.status, JSON.stringify(imported.body)).toBe(200);
           const app = yield* body(Resource, imported);
           yield* Effect.addFinalizer(() =>
             api.request(actors.owner, "DELETE", `${prefix}/apps/${app.id}`).pipe(Effect.orDie),

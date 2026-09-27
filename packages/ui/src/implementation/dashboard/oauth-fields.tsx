@@ -92,7 +92,10 @@ export function OAuthFields<A, E>({
   const [customClient, setManual] = useState(manualClient);
   const manual = customClient || (setup !== "unresolved" && setup.mode === "client-required");
   const machine = setup !== "unresolved" && setup.grant === "client_credentials";
-  const needsSecret = setup !== "unresolved" && setup.tokenEndpointAuthMethod !== "none";
+  const method = setup === "unresolved" ? "none" : setup.tokenEndpointAuthMethod;
+  // An undeclared method accepts either a public client or one with a secret.
+  const acceptsSecret = method !== "none";
+  const needsSecret = method !== undefined && method !== "none";
   const [clientId, setClientId] = useState("");
   const [clientSecret, setClientSecret] = useState("");
   const [pending, setPending] = useState(false);
@@ -103,7 +106,7 @@ export function OAuthFields<A, E>({
     setup === "unresolved" ||
     pending ||
     !label.trim() ||
-    (manual && (!clientId.trim() || (needsSecret && !clientSecret)));
+    (manual && (!clientId.trim() || (needsSecret && !clientSecret.trim())));
   const connect = () => {
     if (blocked) return;
     setPending(true);
@@ -112,7 +115,9 @@ export function OAuthFields<A, E>({
     const client = manual
       ? {
           clientId: clientId.trim(),
-          ...(needsSecret ? { clientSecret: Redacted.make(clientSecret) } : {}),
+          ...(acceptsSecret && clientSecret.trim()
+            ? { clientSecret: Redacted.make(clientSecret.trim()) }
+            : {}),
         }
       : undefined;
     const operation = start({ label: label.trim(), ...(client ? { client } : {}) });
@@ -153,7 +158,9 @@ export function OAuthFields<A, E>({
                 <li>
                   {needsSecret
                     ? "Enter its client ID and client secret here."
-                    : "Enter its client ID here."}
+                    : acceptsSecret
+                      ? "Enter its client ID here, and its client secret if it has one."
+                      : "Enter its client ID here."}
                 </li>
               </ol>
             </AlertDescription>
@@ -201,9 +208,9 @@ export function OAuthFields<A, E>({
               autoComplete="off"
             />
           </label>
-          {needsSecret && (
+          {acceptsSecret && (
             <label className="field-label flex flex-col gap-2.25 text-[13px] font-medium [&_[data-slot='select-trigger']]:w-full">
-              Client secret
+              {needsSecret ? "Client secret" : "Client secret (optional)"}
               <Input
                 type="password"
                 autoComplete="off"

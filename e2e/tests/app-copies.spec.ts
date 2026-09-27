@@ -120,7 +120,7 @@ layer(HostedLive, { excludeTestServices: true })("Independent app copies", (it) 
         ).toEqual(files("unpublished"));
         const unfinished = yield* body(
           App,
-          yield* api.request(actors.owner, "POST", `${prefix}/apps/drafts`, {
+          yield* api.request(actors.owner, "POST", `${prefix}/apps`, {
             name: `${name} unfinished`,
             files: [{ path: "index.ts", content: "Unfinished source" }],
           }),

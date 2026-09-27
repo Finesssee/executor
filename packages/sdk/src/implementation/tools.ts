@@ -1,4 +1,5 @@
 import {
+  McpError,
   ProviderError,
   SkillLoadFailed,
   type HostedTool,
@@ -48,13 +49,24 @@ import type { ExecutorDatabase } from "./storage.ts";
 import { type Credentials, StoredApp, StoredDeployment } from "../contracts/storage.ts";
 import { makeToolApprovals } from "./tool-approvals.ts";
 import { storedDeployment } from "./apps.ts";
-import { database, query, transaction, type Query } from "./database.ts";
+import { database, query, type Query } from "./database.ts";
 import { storedProfile } from "./profiles.ts";
 import { CurrentProfile, ProfileConflict } from "../contracts/profiles.ts";
 import type { ProfileId } from "../contracts/shared.ts";
 import { validateSelection } from "./selection.ts";
 
-/** Resolve one consistent app/deployment/account selection before invoking authored code. */
+/**
+ * Resolve the app, pinned deployment, profile and account selection before invoking authored code.
+ *
+ * These reads deliberately run outside a transaction. A transaction costs two extra round trips and
+ * pins a pooled server connection (a Hyperdrive origin connection in Cloud) for as long as the
+ * caller takes between statements. On Postgres at READ COMMITTED it gave no cross-statement
+ * snapshot anyway. On PGlite it was atomic with respect to writers, because a transaction reserves
+ * the only connection; that atomicity is dropped on purpose. A write that lands between two reads
+ * cannot widen access: every cross-read disagreement fails closed (AppNotDeployed,
+ * DeploymentNotFound, ProfileConflict, AccountNotFound, AccountSelectionInvalid or
+ * AccountRequired), and account credentials are resolved from the returned selection afterwards.
+ */
 export function snapshot(
   db: Query,
   input: {
@@ -67,81 +79,79 @@ export function snapshot(
   savedProfileRevision?: number,
   cleanup = false,
 ) {
-  return transaction(db, (tx) =>
-    Effect.gen(function* () {
-      const row = yield* query(() =>
-        tx.findFirst("apps", {
-          join: (b) => b.deployment(),
-          where: (b) => b("id", "=", input.app),
+  return Effect.gen(function* () {
+    const row = yield* query(() =>
+      db.findFirst("apps", {
+        join: (b) => b.deployment(),
+        where: (b) => b("id", "=", input.app),
+      }),
+    );
+    if (row === null) return yield* new AppNotFound({ app: input.app });
+    const app = yield* Schema.decodeUnknownEffect(StoredApp)(row).pipe(
+      Effect.mapError(() => new StorageError()),
+    );
+    const deploymentId = input.deployment ?? app.activeDeployment;
+    if (deploymentId === null) return yield* new AppNotDeployed({ app: app.id });
+    // Historical invocations retain their pinned deployment and its lineage check.
+    const deployment =
+      deploymentId !== app.activeDeployment
+        ? yield* storedDeployment(db, app, deploymentId)
+        : row.deployment === null
+          ? yield* new DeploymentNotFound({ app: app.id, deployment: deploymentId })
+          : yield* Schema.decodeUnknownEffect(StoredDeployment)(row.deployment).pipe(
+              Effect.mapError(() => new StorageError()),
+            );
+    const profile =
+      input.profile === undefined
+        ? undefined
+        : yield* storedProfile(db, {
+            app: app.id,
+            profile: input.profile,
+            owner: app.owner,
+          });
+    if (profile !== undefined) {
+      if (
+        profile.status === "removed" ||
+        ((!profile.enabled || profile.status === "removing") && !cleanup)
+      )
+        return yield* new ProfileConflict({
+          profile: profile.id,
+          reason: "inactive",
+        });
+      if (
+        input.expectedProfileRevision !== undefined &&
+        profile.revision !== input.expectedProfileRevision
+      )
+        return yield* new ProfileConflict({
+          profile: profile.id,
+          reason: "revision",
+        });
+    }
+    const bindings = profile === undefined ? {} : (savedAccounts ?? profile.accounts);
+    const validated = yield* validateSelection(db, app.id, deployment.requirements, bindings);
+    const selections = yield* Effect.forEach(
+      Object.keys(deployment.requirements.accounts),
+      (slot) =>
+        Effect.gen(function* () {
+          const selected = validated.get(slot);
+          if (selected === undefined)
+            return yield* Effect.fail(
+              new AccountRequired({ app: app.id, deployment: deployment.id, slot }),
+            );
+          return selected;
         }),
-      );
-      if (row === null) return yield* new AppNotFound({ app: input.app });
-      const app = yield* Schema.decodeUnknownEffect(StoredApp)(row).pipe(
-        Effect.mapError(() => new StorageError()),
-      );
-      const deploymentId = input.deployment ?? app.activeDeployment;
-      if (deploymentId === null) return yield* new AppNotDeployed({ app: app.id });
-      // Historical invocations retain their pinned deployment and its lineage check.
-      const deployment =
-        deploymentId !== app.activeDeployment
-          ? yield* storedDeployment(tx, app, deploymentId)
-          : row.deployment === null
-            ? yield* new DeploymentNotFound({ app: app.id, deployment: deploymentId })
-            : yield* Schema.decodeUnknownEffect(StoredDeployment)(row.deployment).pipe(
-                Effect.mapError(() => new StorageError()),
-              );
-      const profile =
-        input.profile === undefined
+    );
+    return {
+      app,
+      deployment,
+      selections,
+      profile:
+        profile === undefined
           ? undefined
-          : yield* storedProfile(tx, {
-              app: app.id,
-              profile: input.profile,
-              owner: app.owner,
-            });
-      if (profile !== undefined) {
-        if (
-          profile.status === "removed" ||
-          ((!profile.enabled || profile.status === "removing") && !cleanup)
-        )
-          return yield* new ProfileConflict({
-            profile: profile.id,
-            reason: "inactive",
-          });
-        if (
-          input.expectedProfileRevision !== undefined &&
-          profile.revision !== input.expectedProfileRevision
-        )
-          return yield* new ProfileConflict({
-            profile: profile.id,
-            reason: "revision",
-          });
-      }
-      const bindings = profile === undefined ? {} : (savedAccounts ?? profile.accounts);
-      const validated = yield* validateSelection(tx, app.id, deployment.requirements, bindings);
-      const selections = yield* Effect.forEach(
-        Object.keys(deployment.requirements.accounts),
-        (slot) =>
-          Effect.gen(function* () {
-            const selected = validated.get(slot);
-            if (selected === undefined)
-              return yield* Effect.fail(
-                new AccountRequired({ app: app.id, deployment: deployment.id, slot }),
-              );
-            return selected;
-          }),
-      );
-      return {
-        app,
-        deployment,
-        selections,
-        profile:
-          profile === undefined
-            ? undefined
-            : { ...profile, revision: savedProfileRevision ?? profile.revision },
-        accounts: bindings,
-      };
-    }),
-  );
+          : { ...profile, revision: savedProfileRevision ?? profile.revision },
+      accounts: bindings,
+    };
+  });
 }
 
 /** Resolve current credentials without holding a database transaction open. */
@@ -154,9 +164,19 @@ export function resolve(
     if (state.profile !== undefined && lifecycle?.profileResolving)
       yield* lifecycle.profileResolving(state.profile);
     const selections = new Map<string, ResolvedAccounts[string]>();
+    // An account selected for several slots is resolved once per invocation. A token renewed
+    // for one slot is the token every slot uses, even when it already falls inside the
+    // refresh-ahead window, so one invocation never renews the same grant twice.
+    const credentials = new Map<string, Effect.Success<ReturnType<typeof resolveAccount>>>();
     for (const { slot, required, accounts } of state.selections) {
       const resolved = yield* Effect.forEach(accounts, (account) =>
-        resolveAccount(account, required.definition).pipe(
+        Effect.gen(function* () {
+          const known = credentials.get(account.id);
+          if (known !== undefined) return known;
+          const fields = yield* resolveAccount(account, required.definition);
+          credentials.set(account.id, fields);
+          return fields;
+        }).pipe(
           Effect.map((fields) => ({
             id: account.id,
             provider: required.definition,
@@ -208,7 +228,7 @@ function invocation(state: InvocationSnapshot, tool: ToolName, input: Json) {
   }).pipe(Effect.mapError(() => new StorageError()));
 }
 
-/** Keep a skill loader's safe fields; every other evaluation failure stays generic. */
+/** Keep a skill loader's or MCP server's safe fields; every other evaluation failure stays generic. */
 export const evaluationFailure = (
   identity: { app: AppId; deployment: DeploymentId },
   error: unknown,
@@ -223,6 +243,15 @@ export const evaluationFailure = (
           skills: {
             reason: error.reason,
             ...(error.message ? { message: error.message } : {}),
+            ...(error.status === undefined ? {} : { status: error.status }),
+          },
+        }
+      : {}),
+    ...(Schema.is(McpError)(error)
+      ? {
+          mcp: {
+            phase: error.phase,
+            reason: error.reason,
             ...(error.status === undefined ? {} : { status: error.status }),
           },
         }
@@ -272,6 +301,7 @@ const runtimeFailure = (
       HostEvaluationFailed: () =>
         new AppEvaluationFailed({ ...identity, reason: "App evaluation failed" }),
       SkillLoadFailed: (error) => evaluationFailure(identity, error),
+      McpError: (error) => evaluationFailure(identity, error),
       RuntimeBuildUnavailable: () =>
         new AppEvaluationFailed({ ...identity, reason: "App evaluation failed" }),
       RuntimeProtocolFailed: () =>
@@ -307,6 +337,8 @@ export const makeTools = (
       options: Parameters<typeof runtime.index>[0],
       /** Earlier builds reject index and filtered inspection; they only describe every tool. */
       toolIndex: boolean,
+      /** Earlier builds reject scheduled inspection; they only describe every tool. */
+      scheduledTools: boolean,
     ) => Effect.Effect<A, Effect.Error<ReturnType<typeof runtime.index>>, R>,
   ) =>
     Effect.gen(function* () {
@@ -327,6 +359,7 @@ export const makeTools = (
           ...(workflows === undefined ? {} : { workflowControls: workflows(state) }),
         },
         state.deployment.requirements.capabilities?.toolIndex === true,
+        state.deployment.requirements.capabilities?.scheduledTools === true,
       ).pipe(
         Effect.mapError((error) =>
           Schema.is(ProviderError)(error)
@@ -371,6 +404,22 @@ export const makeTools = (
             : {}),
         };
       }).pipe(Effect.withSpan("sdk.tools.list")),
+    /**
+     * Describe the declared operations that have schedules. Current builds skip dynamic
+     * tool discovery, which can compile a large catalog in the shared app runtime.
+     */
+    scheduled: (input: Parameters<Executor["tools"]["list"]>[0]) =>
+      Effect.gen(function* () {
+        const { value: tools } = yield* evaluate(input, (options, _toolIndex, scheduled) =>
+          runtime.inspect(scheduled ? { ...options, scheduled: true } : options),
+        );
+        return tools.flatMap((tool) =>
+          (tool.schedules ?? []).map((schedule) => ({
+            ...schedule,
+            tool: ToolName.make(tool.name),
+          })),
+        );
+      }).pipe(Effect.withSpan("sdk.tools.scheduled")),
     index: (input: Parameters<Executor["tools"]["index"]>[0]) =>
       Effect.gen(function* () {
         const {

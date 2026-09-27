@@ -2,16 +2,32 @@ import { AtomRegistry } from "effect/unstable/reactivity";
 import { RegistryContext } from "@effect/atom-react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { Effect, Exit, Option, Redacted, Schema, Cause } from "effect";
-import { OAuthCompletionFailed } from "@executor-js/sdk";
+import {
+  AccountConnectionClosed,
+  AccountConnectionTargetChanged,
+  OAuthCompletionFailed,
+  oauthCompletionRecovery,
+  type OAuthCompletionRecovery,
+} from "@executor-js/sdk";
+import { UserFacingError } from "@executor-js/utils/user-facing-error";
 import { useContext, useEffect, useRef, useState } from "react";
 import { Button } from "@executor-js/ui/components/button";
+import { CopyButton } from "@executor-js/ui/dashboard/code";
 import { ConnectionStatusPage } from "../components/connection-status.tsx";
 import { appError, completeOAuthAtom, PendingOAuth } from "../../contracts/apps.ts";
+
+/** The SDK decides recovery for every completion reason; `setup` means the connection itself ended. */
+type Recovery = Exclude<OAuthCompletionRecovery, "cancelled"> | "setup";
 
 type CallbackState =
   | { readonly status: "connecting" }
   | { readonly status: "cancelled"; readonly message: string }
-  | { readonly status: "failed"; readonly message: string; readonly recovery: "retry" | "client" };
+  | {
+      readonly status: "failed";
+      readonly message: string;
+      readonly recovery: Recovery;
+      readonly fixPrompt?: string | undefined;
+    };
 
 /** Complete provider OAuth in the same browser session that started it. */
 export function OAuthCallbackPage() {
@@ -35,16 +51,8 @@ export function OAuthCallbackPage() {
         status: "failed",
         message:
           "This sign-in has expired or was started in another tab. Open the app and connect again.",
-        recovery: "retry",
+        recovery: "setup",
       });
-      return;
-    }
-    if (new URLSearchParams(callbackSearch).get("error") === "access_denied") {
-      setState({
-        status: "cancelled",
-        message: "No account was connected. You can return to the app and try again.",
-      });
-      sessionStorage.removeItem("executor:hosted:oauth");
       return;
     }
     const callback = new URL(pending.value.redirectUri);
@@ -57,14 +65,39 @@ export function OAuthCallbackPage() {
         AtomRegistry.getResult(registry, mutation, { suspendOnWaiting: true }),
       );
       if (Exit.isFailure(result)) {
-        const clientRejected = Option.exists(
-          Cause.findErrorOption(result.cause),
-          (error) => Schema.is(OAuthCompletionFailed)(error) && error.reason === "invalid_client",
-        );
+        const error = Cause.findErrorOption(result.cause);
+        const completion = Option.filter(error, Schema.is(OAuthCompletionFailed));
+        const recovery = Option.match(completion, {
+          onSome: (failure) => oauthCompletionRecovery[failure.reason],
+          onNone: () =>
+            Option.exists(
+              error,
+              (value) =>
+                Schema.is(AccountConnectionClosed)(value) ||
+                Schema.is(AccountConnectionTargetChanged)(value),
+            )
+              ? ("setup" as const)
+              : ("restart" as const),
+        });
+        if (recovery === "cancelled") {
+          sessionStorage.removeItem("executor:hosted:oauth");
+          setState({
+            status: "cancelled",
+            message: "No account was connected. You can return to the app and try again.",
+          });
+          return;
+        }
         setState({
           status: "failed",
           message: appError(result.cause),
-          recovery: clientRejected ? "client" : "retry",
+          recovery,
+          fixPrompt: Option.match(error, {
+            onSome: (value) =>
+              recovery === "configuration" && UserFacingError.is(value) && value.agentFixable
+                ? `While connecting an account in Executor.\n\n${value.fixPrompt}`
+                : undefined,
+            onNone: () => undefined,
+          }),
         });
         return;
       }
@@ -98,6 +131,7 @@ export function OAuthCallbackPage() {
         <OAuthRecoveryActions
           pending={pending}
           recovery={state.status === "cancelled" ? "cancelled" : state.recovery}
+          fixPrompt={state.status === "failed" ? state.fixPrompt : undefined}
         />
       )}
     </ConnectionStatusPage>
@@ -108,9 +142,11 @@ export function OAuthCallbackPage() {
 function OAuthRecoveryActions({
   pending,
   recovery,
+  fixPrompt,
 }: {
   readonly pending: Option.Option<typeof PendingOAuth.Type>;
-  readonly recovery: "retry" | "client" | "cancelled";
+  readonly recovery: Recovery | "cancelled";
+  readonly fixPrompt?: string | undefined;
 }) {
   if (Option.isNone(pending))
     return (
@@ -119,10 +155,33 @@ function OAuthRecoveryActions({
       </Button>
     );
   const context = pending.value;
-  const changeClient = recovery === "client" || context.manualClient;
+  // Entered clients are saved only after a successful sign-in, so a retry reopens their fields.
+  const retry =
+    recovery === "restart" ||
+    recovery === "client" ||
+    (recovery === "cancelled" && context.app === null)
+      ? {
+          label: recovery === "client" ? "Update client details" : "Try again",
+          search:
+            recovery === "client" || (recovery !== "cancelled" && context.manualClient)
+              ? { client: "change" as const }
+              : {},
+        }
+      : undefined;
+  const primary = retry === undefined && fixPrompt === undefined;
   return (
     <>
-      {recovery !== "cancelled" && (
+      {fixPrompt !== undefined && (
+        <CopyButton
+          code={fixPrompt}
+          label="Copy fix prompt"
+          text="Copy fix prompt"
+          variant="default"
+          size="default"
+          inline
+        />
+      )}
+      {retry !== undefined && (
         <Button asChild>
           <Link
             to="/org/$organizationSlug/connections/$connectionId"
@@ -130,14 +189,14 @@ function OAuthRecoveryActions({
               organizationSlug: context.organizationSlug,
               connectionId: context.connection,
             }}
-            search={changeClient ? { client: "change" } : {}}
+            search={retry.search}
           >
-            {changeClient ? "Update client details" : "Try again"}
+            {retry.label}
           </Link>
         </Button>
       )}
       {context.app !== null ? (
-        <Button variant={recovery === "cancelled" ? "default" : "outline"} asChild>
+        <Button variant={primary ? "default" : "outline"} asChild>
           <Link
             to="/org/$organizationSlug/apps/$appId"
             params={{ organizationSlug: context.organizationSlug, appId: context.app }}
@@ -146,16 +205,13 @@ function OAuthRecoveryActions({
             Back to app
           </Link>
         </Button>
-      ) : recovery === "cancelled" ? (
-        <Button asChild>
+      ) : retry === undefined ? (
+        <Button asChild variant={primary ? "default" : "outline"}>
           <Link
-            to="/org/$organizationSlug/connections/$connectionId"
-            params={{
-              organizationSlug: context.organizationSlug,
-              connectionId: context.connection,
-            }}
+            to="/org/$organizationSlug/accounts"
+            params={{ organizationSlug: context.organizationSlug }}
           >
-            Try again
+            Open Accounts
           </Link>
         </Button>
       ) : null}

@@ -39,6 +39,7 @@ export interface ResolvedAppRuntime {
     readonly build: BuildId;
     readonly accounts: ResolvedAccountsInput;
     readonly tools?: readonly string[];
+    readonly scheduled?: true;
   }) => Promise<readonly HostedTool[]>;
   readonly index: (input: {
     readonly app: string;
@@ -109,6 +110,7 @@ export const createAppRuntime = (options: {
       Effect.runPromise(
         context(accounts).pipe(
           Effect.flatMap((context) => runtime.skills({ ...input, ...context })),
+          Effect.map((catalog) => catalog.skills),
         ),
       ),
     inspect: ({ accounts, ...input }) =>

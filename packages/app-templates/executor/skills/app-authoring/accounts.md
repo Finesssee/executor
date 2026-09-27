@@ -45,6 +45,66 @@ const listProjects = query(
 export default defineApp(requirements, { queries: { listProjects } });
 ```
 
+## OAuth sign-in
+
+Prefer discovery. When the service publishes OAuth authorization server or OpenID
+metadata, point `discover` at its issuer or MCP URL. Executor then reads the real
+issuer, endpoints and supported client authentication, and checks the service's
+responses against them:
+
+```ts
+const searchConsole = defineProvider({
+  name: "Google Search Console",
+  auth: {
+    oauth: oauth2({
+      discover: "https://accounts.google.com",
+      scopes: ["https://www.googleapis.com/auth/webmasters"],
+      // Google issues refresh tokens only when asked for offline access.
+      authorizationParams: { access_type: "offline", prompt: "consent" },
+    }),
+  },
+});
+```
+
+Check for metadata at `<issuer>/.well-known/oauth-authorization-server` or
+`<issuer>/.well-known/openid-configuration`. The issuer is often the host of the
+sign-in page, not the token URL: Google signs in at `accounts.google.com` and
+issues tokens from `oauth2.googleapis.com`. List the scopes the app needs;
+discovery only fills them in when the service advertises scopes for the resource.
+
+Discovery requires the metadata's `issuer` to equal the URL it was fetched from.
+Multi-tenant endpoints that publish a template instead, such as Microsoft's
+`common` endpoint (`https://login.microsoftonline.com/{tenantid}/v2.0`), cannot
+pass that check: use a tenant-specific issuer URL, or declare the endpoints
+without `issuer`.
+
+`authorizationParams` adds service-defined parameters to the sign-in request,
+from the service's docs. Use it for settings such as offline access. It cannot
+replace protocol parameters such as `state`, `scope` or `redirect_uri`.
+
+Declare `authorizationUrl`, `tokenUrl` and `scopes` only when the service
+publishes no metadata. Then set `tokenEndpointAuthMethod` to what its docs say
+the token endpoint accepts (`client_secret_basic`, `client_secret_post`, or `none`
+for public PKCE clients), and `issuer` when the docs name one, so Executor can
+check the service's `iss` responses. Without `issuer` those checks are skipped.
+Do not copy endpoints from an OpenAPI `oauth2` scheme without checking the
+service's docs; those schemes carry no issuer or client authentication.
+
+When the service documents an RFC 7009 token revocation endpoint, also declare
+`revocationUrl`. Executor calls it when a user deletes the account, so the
+provider stops honoring the saved token. Revocation is best effort and never
+blocks the deletion. Discovered methods use the server's advertised
+`revocation_endpoint` and do not accept `revocationUrl`.
+
+Executor renews tokens before they expire. An `expires_in` of zero is treated
+like an omitted one: the token is used until the service rejects it. A tool call
+fails with `OAuthReconnectRequired` only when the token endpoint refuses the
+renewal, such as with `invalid_grant`, or a renewed ID token names a different
+user; reconnect that same account. During a
+service outage, or when its response cannot be used, the call fails with the
+retryable `OAuthRenewalFailed` and the saved sign-in is kept, so retry later
+instead of reconnecting or changing the provider.
+
 Deploy the source, create a profile, then request a connection for its account requirement.
 The management examples below use the **local** API. For hosted calls, use
 `profiles_create` and `accounts_connect` with `path.organization`, as shown in

@@ -52,6 +52,12 @@ are banned: do not add `*.test.*`, `*.spec.*`, type tests, `test/` or
 and do not import application implementations into tests. `bun run check` fails
 on any test outside `e2e/`.
 
+Tests are not sacred. Delete a scenario when it no longer proves behavior a user
+or public API caller depends on, or when other scenarios already cover it. Say
+what it covered and why that coverage is not needed. Deletion is not a fix for
+a flaky scenario that still guards real behavior: find the race in the product
+or the scenario instead.
+
 ## Checks
 
 For application features, fixes, and behavior-preserving refactors, use the
@@ -68,10 +74,25 @@ live in `.oxlintrc.jsonc`, formatter settings in `.oxfmtrc.json`.
 
 ## CI
 
-`.github/workflows/ci.yml` runs on pull requests and manual dispatch.
-Its local checks use no secrets and include the emulated Cloud target. An earlier
-PR run on the same ref is cancelled. The jobs live in `.github/workflows/checks.yml`,
+`.github/workflows/ci.yml` runs on pull requests, pushes to `main` and manual
+dispatch. Its local checks use no secrets and include the emulated Cloud target.
+An earlier PR run on the same ref is cancelled; `main` runs finish so every merge
+has a baseline. The jobs live in `.github/workflows/checks.yml`,
 a `workflow_call` workflow, so another repository can call the same jobs.
+
+A PR run takes about seven minutes. Wait for it once; do not poll post-merge
+suites before handing off. When a job fails in a scenario the change does not
+touch:
+
+- Compare with the latest `main` run: `gh run list -w CI -b main -L 3`.
+- If `main` fails the same scenario, it is not yours. Name it in the handoff.
+- Otherwise read the failure evidence before rerunning. Rerun a failed job at
+  most once. A scenario that fails again, or fails on unrelated PRs, is a flake.
+  Record the scenario, the run link and the error in the handoff and finish the
+  task; fixing it is separate work that Rhys schedules.
+
+A flake is a bug in the product or the scenario, not noise. Never add retries,
+longer deadlines or skips to make a run pass.
 
 `.github/workflows/cloud-tests.yml` runs deployed tests only after pushes to `main`.
 It finishes the active run and coalesces pending pushes. The functional job runs

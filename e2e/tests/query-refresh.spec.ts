@@ -50,8 +50,19 @@ layer(HostedLive, { excludeTestServices: true })("Dashboard refresh", (it) => {
           });
         const paths = ["/api/auth/organization/list-members"];
         const failed = yield* holdQuery(paths, "fail");
+        // The same focus refresh re-reads organization access. Its unchanged answer must not
+        // restart the held member read and hide that read's failure.
+        const accessPath = `/api/organizations/${actors.organization.id}/access`;
+        const access = yield* browser.use("Watch the organization access refresh", (page) =>
+          Promise.resolve({
+            read: page.waitForResponse(
+              (response) => new URL(response.url()).pathname === accessPath && response.ok(),
+            ),
+          }),
+        );
         yield* refreshVisiblePage;
         yield* failed.requested;
+        yield* browser.use("Organization access is re-read", () => access.read);
         yield* checkContent("Waiting member refresh");
         yield* failed.release;
         yield* browser.use("The member read error is visible", (page) =>

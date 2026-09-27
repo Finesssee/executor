@@ -1,4 +1,5 @@
 import type { ResourceLifecycle } from "../contracts/executor.ts";
+import type { BackgroundWork } from "../contracts/declarations.ts";
 /** Trusted OAuth lifecycle. Provider definitions never contain client secrets or saved grants. */
 import { parseDestination, parseEndpoint, httpsOnlyUrlPolicy } from "@executor-js/utils/url-policy";
 import {
@@ -11,6 +12,7 @@ import {
   Redacted,
   Schema,
   SchemaRepresentation,
+  Struct,
 } from "effect";
 import { StartConnectionOAuth, CompleteConnectionOAuth } from "../contracts/account-connection.ts";
 import {
@@ -25,12 +27,14 @@ import {
   type CheckOAuthSetup,
   type OAuthClientSetup,
   OAuthCompletionFailed,
+  type OAuthCompletionReason,
   OAuthAttempt,
   OAuthAttemptId,
   OAuthClientId,
   OAuthGrant,
   OAuthReconnectRequired,
   OAuthRegistration,
+  OAuthRenewalFailed,
   OAuthConfidentialRegistration,
   OAuthSetupFailed,
   type OAuthFailureCause,
@@ -52,7 +56,12 @@ import {
 } from "../contracts/shared.ts";
 import type { Credentials, StoredAccount } from "../contracts/storage.ts";
 import { query, transaction, type Query } from "./database.ts";
-import { makeOAuthProtocol, type OAuthProtocolFailed } from "./oauth-protocol.ts";
+import {
+  idTokenSubject,
+  isOAuthErrorResponse,
+  makeOAuthProtocol,
+  type OAuthProtocolFailed,
+} from "./oauth-protocol.ts";
 import { ownedAccount } from "./accounts.ts";
 
 const decode = <A>(schema: Schema.Decoder<A>, value: unknown) =>
@@ -93,8 +102,37 @@ const causeOf = (
 });
 
 /**
+ * RFC 6749 §5.1 gives a token's lifetime in seconds from issue. oauth4webapi rejects negative
+ * values. A lifetime of zero states no usable lifetime, so it is treated like an omitted one
+ * rather than as a token that is already expired, which would renew on every use or, without
+ * a refresh token, require reconnection immediately.
+ */
+const expiry = (issuedAt: number, expiresIn: number | undefined) =>
+  expiresIn === undefined || expiresIn <= 0 ? {} : { expiresAt: issuedAt + expiresIn * 1000 };
+
+/** Why a saved grant cannot supply credentials. Recorded on the resolve span. */
+type ReconnectReason =
+  | "grant_missing"
+  | "grant_unusable"
+  | "renewal_interrupted"
+  | "not_renewable"
+  | "renewal_refused"
+  | "identity_changed";
+
+/** Span attributes for a safe failure cause, matching the protocol spans' attribute names. */
+const causeAttributes = (cause: OAuthFailureCause) => ({
+  "oauth.error.stage": cause.stage,
+  ...(cause.status === undefined ? {} : { "http.response.status_code": cause.status }),
+  ...(cause.providerError === undefined
+    ? {}
+    : { "oauth.error.provider_code": cause.providerError }),
+  ...(cause.field === undefined ? {} : { "oauth.error.field": cause.field }),
+});
+
+/**
  * Classify a failed request by who must act. A 2xx response that failed validation is an
- * Executor compatibility problem; a 3xx or 4xx is the service refusing the request.
+ * Executor compatibility problem; a 3xx or 4xx, or an RFC 6749 error body with any status,
+ * is the service refusing the request.
  */
 const outcome = (error: OAuthProtocolFailed) =>
   error.reason === "destination_blocked"
@@ -103,11 +141,37 @@ const outcome = (error: OAuthProtocolFailed) =>
       ? error.reason === "request"
         ? "unavailable"
         : "unanswered"
-      : error.status === 429 || error.status >= 500
+      : error.status === 429 ||
+          error.status >= 500 ||
+          error.providerError === "server_error" ||
+          error.providerError === "temporarily_unavailable"
         ? "unavailable"
-        : error.status >= 300
+        : error.status >= 300 || error.code === "OAUTH_RESPONSE_BODY_ERROR"
           ? "rejected"
           : "incompatible";
+
+/**
+ * Classify a failed renewal. Per RFC 6749 §5.2 only an OAuth error response from the token
+ * endpoint, at any status, says the grant or client can no longer be used, and `server_error`
+ * and `temporarily_unavailable` say the opposite. An outage, timeout, 429 or 5xx leaves the
+ * grant as it was. Any other response Executor cannot use, including a malformed 2xx or a 4xx
+ * without an error body, says nothing about the grant, so the grant is kept. Two failures do
+ * end it: a token endpoint the host policy now refuses cannot renew this saved grant, and a
+ * refreshed ID token for a different end user (OIDC Core §12.2) means the grant no longer
+ * belongs to this account's identity. A new sign-in settles both.
+ */
+const renewalOutcome = (error: OAuthProtocolFailed): "reconnect" | OAuthRenewalFailed["reason"] =>
+  error.reason === "subject_changed"
+    ? "reconnect"
+    : Match.value(outcome(error)).pipe(
+        Match.when("blocked", () => "reconnect" as const),
+        Match.when("unavailable", () => "service_unavailable" as const),
+        Match.when("rejected", () =>
+          isOAuthErrorResponse(error) ? ("reconnect" as const) : ("incompatible_response" as const),
+        ),
+        Match.whenOr("incompatible", "unanswered", () => "incompatible_response" as const),
+        Match.exhaustive,
+      );
 
 const registrationFailed = (error: OAuthProtocolFailed, callbackUrl: typeof HttpUrl.Type) => {
   const cause = causeOf("register", error);
@@ -118,11 +182,13 @@ const registrationFailed = (error: OAuthProtocolFailed, callbackUrl: typeof Http
       Match.when("blocked", () => "discovery_blocked" as const),
       Match.when("unavailable", () => "service_unavailable" as const),
       Match.when("rejected", () =>
-        error.providerError === "invalid_redirect_uri" ||
-        error.status === 401 ||
-        error.status === 403
+        error.providerError === "invalid_redirect_uri"
           ? ("client_not_approved" as const)
-          : ("registration_rejected" as const),
+          : // RFC 7591 section 3: the endpoint requires an initial access token, which Executor
+            // never holds. The service only accepts clients registered by hand.
+            error.status === 401 || error.status === 403
+            ? ("client_registration_required" as const)
+            : ("registration_rejected" as const),
       ),
       // Checks after a successful response, such as a changed auth method, carry no status.
       Match.whenOr("incompatible", "unanswered", () => "incompatible_response" as const),
@@ -135,8 +201,8 @@ const clientCredentialsFailed = (error: OAuthProtocolFailed) =>
   new OAuthSetupFailed({
     cause: causeOf("clientCredentials", error),
     reason:
-      error.reason === "invalid_client"
-        ? "invalid_client"
+      error.reason === "invalid_client" || error.reason === "unsupported"
+        ? error.reason
         : Match.value(outcome(error)).pipe(
             Match.when("unavailable", () => "service_unavailable" as const),
             Match.when("incompatible", () => "incompatible_response" as const),
@@ -145,21 +211,59 @@ const clientCredentialsFailed = (error: OAuthProtocolFailed) =>
           ),
   });
 
+/** A failed token exchange. Callback validation runs first, so every failure here reached the token endpoint or failed before sending. */
 const exchangeFailed = (error: OAuthProtocolFailed) =>
   new OAuthCompletionFailed({
     cause: causeOf("exchange", error),
     reason:
-      error.reason === "invalid_client"
-        ? "invalid_client"
+      error.reason === "invalid_client" || error.reason === "unsupported"
+        ? error.reason
         : error.reason === "invalid_grant"
-          ? "sign_in_expired"
+          ? "authorization_code_rejected"
           : Match.value(outcome(error)).pipe(
+              Match.when("blocked", () => "destination_blocked" as const),
               Match.when("unavailable", () => "service_unavailable" as const),
-              Match.when("incompatible", () => "incompatible_response" as const),
-              // Callback validation (state, issuer) fails before any token request is sent.
-              Match.when("unanswered", () => "invalid_callback" as const),
-              Match.whenOr("blocked", "rejected", () => "exchange_failed" as const),
+              Match.when("rejected", () => "exchange_failed" as const),
+              // A 2xx that failed validation, or a request the library refused to build.
+              Match.whenOr("incompatible", "unanswered", () => "incompatible_response" as const),
               Match.exhaustive,
+            ),
+  });
+
+/** A client with a secret uses RFC 7591's client_secret_basic default unless the server only accepts the body form. */
+const secretMethod = (supported: readonly string[] | undefined) =>
+  supported === undefined ||
+  supported.includes("client_secret_basic") ||
+  !supported.includes("client_secret_post")
+    ? ("client_secret_basic" as const)
+    : ("client_secret_post" as const);
+
+/**
+ * A failed authorization response: its RFC 9207 issuer, then an RFC 6749 §4.1.2.1 error code.
+ * Codes outside the recorded vocabulary are still authorization errors, never a cancellation.
+ */
+const callbackFailed = (error: OAuthProtocolFailed) =>
+  new OAuthCompletionFailed({
+    cause: causeOf("authorize", error),
+    reason:
+      error.field === "issuer"
+        ? "issuer_mismatch"
+        : error.code !== "OAUTH_AUTHORIZATION_RESPONSE_ERROR"
+          ? "callback_malformed"
+          : Match.value(error.providerError).pipe(
+              Match.when("access_denied", () => "denied" as const),
+              Match.whenOr(
+                "invalid_client",
+                "unauthorized_client",
+                () => "invalid_client" as const,
+              ),
+              Match.when("invalid_scope", () => "invalid_scope" as const),
+              Match.whenOr(
+                "server_error",
+                "temporarily_unavailable",
+                () => "service_unavailable" as const,
+              ),
+              Match.orElse(() => "authorization_rejected" as const),
             ),
   });
 
@@ -170,6 +274,7 @@ export const makeOAuth = (
   crypto: Crypto.Crypto,
   options?: OAuthOptions,
   lifecycle?: ResourceLifecycle,
+  background?: BackgroundWork,
 ) => {
   const hash = (value: string) =>
     crypto.digest("SHA-256", new TextEncoder().encode(value)).pipe(
@@ -228,10 +333,12 @@ export const makeOAuth = (
                 Match.when("metadata_missing", () => "discovery_missing" as const),
                 Match.when("destination_blocked", () => "discovery_blocked" as const),
                 Match.when("resource_mismatch", () => "resource_mismatch" as const),
+                Match.when("unsupported", () => "unsupported" as const),
                 Match.whenOr(
                   "invalid_response",
                   "invalid_client",
                   "invalid_grant",
+                  "subject_changed",
                   () => "discovery_invalid" as const,
                 ),
                 Match.exhaustive,
@@ -239,6 +346,8 @@ export const makeOAuth = (
             }),
         ),
       );
+      // The optional revocation endpoint is not required to connect; the transport still
+      // enforces this policy when revocation calls it.
       for (const address of [
         discovered.server.issuer,
         discovered.server.authorization_endpoint,
@@ -321,7 +430,9 @@ export const makeOAuth = (
               mode,
               scopes: discovered.scopes,
               grant: "authorization_code",
-              tokenEndpointAuthMethod: discovered.tokenEndpointAuthMethod,
+              ...(discovered.tokenEndpointAuthMethod === undefined
+                ? {}
+                : { tokenEndpointAuthMethod: discovered.tokenEndpointAuthMethod }),
             };
       }),
       Effect.withSpan("oauth.setup"),
@@ -354,7 +465,11 @@ export const makeOAuth = (
           return yield* new OAuthSetupFailed({ reason: "invalid_client" });
         client = yield* Schema.decodeUnknownEffect(OAuthRegistration)({
           client_id: input.client.clientId,
-          token_endpoint_auth_method: discovered.tokenEndpointAuthMethod,
+          token_endpoint_auth_method:
+            discovered.tokenEndpointAuthMethod ??
+            (input.client.clientSecret === undefined
+              ? "none"
+              : secretMethod(discovered.server.token_endpoint_auth_methods_supported)),
           ...(input.client.clientSecret === undefined
             ? {}
             : { client_secret: Redacted.value(input.client.clientSecret) }),
@@ -416,9 +531,7 @@ export const makeOAuth = (
           client: confidential,
           fields,
           response: method.response,
-          ...(tokens.expires_in === undefined
-            ? {}
-            : { expiresAt: completedAt + tokens.expires_in * 1000 }),
+          ...expiry(completedAt, tokens.expires_in),
         });
         const encryptedCredentials = yield* encrypt(account.id, fields);
         const encryptedGrant = yield* encrypt(account.id, grant);
@@ -555,36 +668,42 @@ export const makeOAuth = (
     Effect.gen(function* () {
       const connectionState = yield* readConnection(db, input);
       if (connectionState.state.status === "completed") return connectionState.state.account;
-      const invalid = () => new OAuthCompletionFailed({ reason: "invalid_callback" });
-      if (protocol === undefined) return yield* invalid();
+      const failed = (reason: OAuthCompletionReason) => new OAuthCompletionFailed({ reason });
+      if (protocol === undefined) return yield* failed("oauth_unavailable");
       const callback = yield* Effect.try({
         try: () => new URL(Redacted.value(input.callbackUrl)),
-        catch: invalid,
+        catch: () => failed("callback_malformed"),
       });
       const states = callback.searchParams.getAll("state");
       const state = states[0];
-      if (state === undefined || state.length < 32 || states.length !== 1 || callback.hash !== "")
-        return yield* invalid();
+      if (
+        state === undefined ||
+        state.length < 32 ||
+        states.length !== 1 ||
+        callback.href.includes("#") ||
+        callback.username !== "" ||
+        callback.password !== ""
+      )
+        return yield* failed("callback_malformed");
       const id = OAuthAttemptId.make(`oauth_${yield* hash(state)}`);
       const row = yield* query(() =>
         db.findFirst("oauthAttempts", { where: (b) => b("id", "=", id) }),
       );
-      if (row === null) return yield* invalid();
+      if (row === null) return yield* failed("sign_in_not_found");
+      // Claimed and completed attempts are never reopened, including after a failed completion.
+      if (row.status !== "pending") return yield* failed("sign_in_used");
       const now = yield* Clock.currentTimeMillis;
-      if (row.status !== "pending" || row.expiresAt.getTime() <= now)
-        return yield* new OAuthCompletionFailed({ reason: "sign_in_expired" });
+      if (row.expiresAt.getTime() <= now) return yield* failed("sign_in_expired");
       const attempt = yield* decrypt(id, row.encrypted, OAuthAttempt);
       yield* Effect.annotateCurrentSpan("oauth.provider.id", attempt.provider);
-      if (attempt.connection !== input.connection) return yield* invalid();
+      // This browser, or this connection, has since started a newer sign-in.
+      if (attempt.connection !== input.connection) return yield* failed("sign_in_replaced");
       const connection = yield* openConnection(db, input);
-      if (connection.oauthAttempt !== id) return yield* invalid();
+      if (connection.oauthAttempt !== id) return yield* failed("sign_in_replaced");
       const redirect = new URL(attempt.redirectUri);
       if (
         callback.origin !== redirect.origin ||
         callback.pathname !== redirect.pathname ||
-        callback.username !== "" ||
-        callback.password !== "" ||
-        callback.href.includes("#") ||
         [...redirect.searchParams.keys()].some((key) => {
           const expected = redirect.searchParams.getAll(key);
           const actual = callback.searchParams.getAll(key);
@@ -594,7 +713,7 @@ export const makeOAuth = (
           );
         })
       )
-        return yield* invalid();
+        return yield* failed("redirect_mismatch");
       const claim = `claim_${yield* nextId}`;
       // Conditional UPDATE is atomic even on adapters without row locks or update counts.
       yield* query(() =>
@@ -606,19 +725,13 @@ export const makeOAuth = (
       const claimed = yield* query(() =>
         db.findFirst("oauthAttempts", { where: (b) => b("id", "=", id) }),
       );
-      if (claimed?.status !== claim)
-        return yield* new OAuthCompletionFailed({ reason: "sign_in_expired" });
-      if (callback.searchParams.has("error"))
-        return yield* new OAuthCompletionFailed({
-          reason: ["invalid_client", "unauthorized_client"].includes(
-            callback.searchParams.get("error") ?? "",
-          )
-            ? "invalid_client"
-            : "denied",
-        });
+      if (claimed?.status !== claim) return yield* failed("sign_in_used");
       if (attempt.reconnect) yield* reconnectTarget(db, attempt);
+      const parameters = yield* protocol
+        .callback(attempt, callback)
+        .pipe(Effect.mapError(callbackFailed));
       const tokens = yield* protocol
-        .exchange(attempt, callback)
+        .exchange(attempt, parameters)
         .pipe(Effect.mapError(exchangeFailed));
       const fields = yield* project(attempt.response, tokens).pipe(
         Effect.mapError(
@@ -630,16 +743,17 @@ export const makeOAuth = (
         ),
       );
       const completedAt = yield* Clock.currentTimeMillis;
+      const subject = idTokenSubject(tokens);
       const grant = yield* decode(OAuthGrant, {
         server: attempt.server,
         client: attempt.client,
         response: attempt.response,
         ...(attempt.resource === undefined ? {} : { resource: attempt.resource }),
+        ...(attempt.bearerResource === undefined ? {} : { bearerResource: true }),
+        ...(subject === undefined ? {} : { idTokenSubject: subject }),
         fields,
         ...(tokens.refresh_token === undefined ? {} : { refreshToken: tokens.refresh_token }),
-        ...(tokens.expires_in === undefined
-          ? {}
-          : { expiresAt: completedAt + tokens.expires_in * 1000 }),
+        ...expiry(completedAt, tokens.expires_in),
       });
       const account = yield* decode(Account, {
         id: attempt.account,
@@ -663,7 +777,8 @@ export const makeOAuth = (
         Effect.gen(function* () {
           yield* lockConnection(tx, input, crypto);
           const current = yield* openConnection(tx, input);
-          if (current.oauthAttempt !== id) return yield* invalid();
+          // A newer sign-in started while the token exchange was running.
+          if (current.oauthAttempt !== id) return yield* failed("sign_in_replaced");
           // Read again after the remote exchange: deletion must win, and a concurrent rename must survive.
           const saved = attempt.reconnect ? yield* reconnectTarget(tx, attempt) : account;
           if (attempt.reconnect) {
@@ -712,18 +827,39 @@ export const makeOAuth = (
 
   const resolveCredentials = (account: StoredAccount, provider: ProviderDefinition) =>
     Effect.gen(function* () {
+      yield* Effect.annotateCurrentSpan("oauth.provider.id", account.provider);
       if (provider.auth[account.method]?.type === "secrets")
         return yield* credentials.decrypt(account.id, account.encryptedCredentials);
-      const reconnect = () => new OAuthReconnectRequired({ account: account.id });
+      /** Record why the grant cannot be used on this span; only fixed vocabularies and codes. */
+      const reconnect = (reason: ReconnectReason, cause?: OAuthFailureCause) =>
+        Effect.annotateCurrentSpan({
+          "oauth.reconnect.reason": reason,
+          ...(cause === undefined ? {} : causeAttributes(cause)),
+        }).pipe(
+          Effect.andThen(
+            Effect.fail(
+              new OAuthReconnectRequired({
+                account: account.id,
+                ...(cause === undefined ? {} : { cause }),
+              }),
+            ),
+          ),
+        );
+      // Set once this call has waited for another renewal of the grant. The token it then reads
+      // is that renewal's result, and is used until it expires rather than renewed ahead again.
+      let awaited = false;
       while (true) {
         const row = yield* query(() =>
           db.findFirst("oauthGrants", { where: (b) => b("id", "=", account.id) }),
         );
-        if (row === null || row.status === "reconnect") return yield* reconnect();
+        if (row === null) return yield* reconnect("grant_missing");
+        if (row.status === "reconnect") return yield* reconnect("grant_unusable");
         const now = yield* Clock.currentTimeMillis;
         if (!row.status.startsWith("ready_")) {
           // A crashed process may have consumed a rotating token. Do not replay an uncertain refresh.
-          if (now - row.updatedAt.getTime() > 60_000) return yield* reconnect();
+          if (now - row.updatedAt.getTime() > 60_000)
+            return yield* reconnect("renewal_interrupted");
+          awaited = true;
           yield* Effect.sleep("100 millis");
           continue;
         }
@@ -731,18 +867,19 @@ export const makeOAuth = (
         const renewable = grant.grant === "client_credentials" || grant.refreshToken !== undefined;
         if (
           grant.expiresAt === undefined ||
-          grant.expiresAt > now + 30_000 ||
+          grant.expiresAt > now + (awaited ? 0 : 30_000) ||
           (!renewable && grant.expiresAt > now)
         )
           return Redacted.make(grant.fields);
-        if (protocol === undefined) return yield* reconnect();
+        if (protocol === undefined) return yield* reconnect("not_renewable");
+        const stage = grant.grant === "client_credentials" ? "clientCredentials" : "refresh";
         const renewal =
           grant.grant === "client_credentials"
             ? protocol.clientCredentials(grant)
             : grant.refreshToken === undefined
               ? undefined
               : protocol.refresh({ ...grant, refreshToken: grant.refreshToken });
-        if (renewal === undefined) return yield* reconnect();
+        if (renewal === undefined) return yield* reconnect("not_renewable");
         const claim = `refresh_${yield* nextId}`;
         yield* query(() =>
           db.updateMany("oauthGrants", {
@@ -753,17 +890,37 @@ export const makeOAuth = (
         const claimed = yield* query(() =>
           db.findFirst("oauthGrants", { where: (b) => b("id", "=", account.id) }),
         );
-        if (claimed?.status !== claim) continue;
+        if (claimed?.status !== claim) {
+          awaited = true;
+          continue;
+        }
         const result = yield* renewal.pipe(
+          Effect.annotateSpans("oauth.provider.id", account.provider),
+          Effect.mapError((error) => ({
+            outcome: renewalOutcome(error),
+            cause: causeOf(stage, error),
+            identityChanged: error.reason === "subject_changed",
+          })),
           Effect.flatMap((tokens) =>
             project(grant.response, { ...grant.fields, ...tokens }).pipe(
+              // The service issued tokens, but not in the shape the provider declares.
+              Effect.mapError(() => ({
+                outcome: "incompatible_response" as const,
+                cause: { stage } satisfies OAuthFailureCause,
+                identityChanged: false,
+              })),
               Effect.map((fields) => ({ tokens, fields })),
             ),
           ),
           Effect.result,
         );
         if (result._tag === "Failure") {
-          const failed = yield* transaction(db, (tx) =>
+          const { outcome, cause, identityChanged } = result.failure;
+          yield* Effect.annotateCurrentSpan("oauth.renewal.outcome", outcome);
+          const released = `ready_${yield* nextId}`;
+          // Only the process holding the claim may settle it. Otherwise another process has
+          // already settled this revision, and the loop reads its result.
+          const settled = yield* transaction(db, (tx) =>
             Effect.gen(function* () {
               const current = yield* query(() =>
                 tx.findFirst("oauthGrants", { where: (b) => b("id", "=", account.id) }),
@@ -772,27 +929,35 @@ export const makeOAuth = (
               yield* query(() =>
                 tx.updateMany("oauthGrants", {
                   where: (b) => b.and(b("id", "=", account.id), b("status", "=", claim)),
-                  set: { status: "reconnect" },
+                  // Anything but a refusal releases the claim with the grant and its refresh
+                  // token unchanged, so a later call can renew it.
+                  set:
+                    outcome === "reconnect"
+                      ? { status: "reconnect" }
+                      : { status: released, updatedAt: row.updatedAt },
                 }),
               );
               return true;
             }),
           );
-          if (failed) return yield* reconnect();
-          continue;
+          if (!settled) continue;
+          if (outcome === "reconnect")
+            return yield* reconnect(
+              identityChanged ? "identity_changed" : "renewal_refused",
+              cause,
+            );
+          return yield* new OAuthRenewalFailed({ account: account.id, reason: outcome, cause });
         }
         const { fields, tokens } = result.success;
         const updatedAt = new Date(yield* Clock.currentTimeMillis);
+        // The renewed token's lifetime replaces the previous one, including when it states none.
         const updated = yield* decode(OAuthGrant, {
-          ...grant,
+          ...Struct.omit(grant, ["expiresAt"]),
           fields,
           ...(grant.grant === "client_credentials"
             ? {}
             : { refreshToken: tokens.refresh_token ?? grant.refreshToken }),
-          expiresAt:
-            tokens.expires_in === undefined
-              ? undefined
-              : updatedAt.getTime() + tokens.expires_in * 1000,
+          ...expiry(updatedAt.getTime(), tokens.expires_in),
         });
         const encrypted = yield* encrypt(account.id, updated);
         const encryptedCredentials = yield* encrypt(account.id, fields);
@@ -822,9 +987,40 @@ export const makeOAuth = (
           }),
         );
         if (!committed) continue;
+        yield* Effect.annotateCurrentSpan("oauth.renewal.outcome", "renewed");
         return Redacted.make(fields);
       }
     }).pipe(Effect.withSpan("oauth.resolve"));
+
+  /**
+   * Fail as `resolve` would when the stored grant can no longer release credentials, without
+   * renewing it or releasing anything. A grant that renewal would replace still passes; its
+   * outcome is known only once a live resolve renews it.
+   */
+  const usable = (account: StoredAccount, provider: ProviderDefinition) =>
+    Effect.gen(function* () {
+      yield* Effect.annotateCurrentSpan("oauth.provider.id", account.provider);
+      if (provider.auth[account.method]?.type === "secrets") return;
+      const reconnect = new OAuthReconnectRequired({ account: account.id });
+      const row = yield* query(() =>
+        db.findFirst("oauthGrants", { where: (b) => b("id", "=", account.id) }),
+      );
+      if (row === null || row.status === "reconnect") return yield* reconnect;
+      const now = yield* Clock.currentTimeMillis;
+      if (!row.status.startsWith("ready_")) {
+        if (now - row.updatedAt.getTime() > 60_000) return yield* reconnect;
+        return;
+      }
+      const grant = yield* decrypt(account.id, row.encrypted, OAuthGrant);
+      const renewable = grant.grant === "client_credentials" || grant.refreshToken !== undefined;
+      if (
+        grant.expiresAt === undefined ||
+        grant.expiresAt > now + 30_000 ||
+        (!renewable && grant.expiresAt > now)
+      )
+        return;
+      if (protocol === undefined || !renewable) return yield* reconnect;
+    }).pipe(Effect.withSpan("oauth.usable"));
 
   const resolve = (account: StoredAccount, provider: ProviderDefinition) =>
     Effect.gen(function* () {
@@ -834,5 +1030,57 @@ export const makeOAuth = (
       if (lifecycle) yield* lifecycle.accountResolving(account);
       return fields;
     });
-  return { connections: { oauthSetup, startOAuth, completeOAuth }, resolve };
+  /**
+   * Best-effort RFC 7009 revocation of a grant whose account was already deleted. The refresh
+   * token is revoked when present, since that also ends its access tokens at most services;
+   * otherwise the access token. Nothing here can fail or undo the deletion. The outcome and
+   * safe protocol evidence are recorded on the span; token values never are.
+   */
+  const revokeGrant = (removed: {
+    readonly account: AccountId;
+    readonly provider: string;
+    readonly encrypted: Uint8Array;
+  }) =>
+    Effect.gen(function* () {
+      yield* Effect.annotateCurrentSpan("oauth.provider.id", removed.provider);
+      if (protocol === undefined) return "unsupported" as const;
+      const grant = yield* decrypt(removed.account, removed.encrypted, OAuthGrant);
+      if (grant.server.revocation_endpoint === undefined) return "unsupported" as const;
+      const accessToken = grant.fields["access_token"];
+      const token =
+        grant.grant !== "client_credentials" && grant.refreshToken !== undefined
+          ? { token: grant.refreshToken, tokenTypeHint: "refresh_token" as const }
+          : typeof accessToken === "string" && accessToken !== ""
+            ? { token: accessToken, tokenTypeHint: "access_token" as const }
+            : undefined;
+      if (token === undefined) return "no_token" as const;
+      yield* Effect.annotateCurrentSpan("oauth.revocation.token_type_hint", token.tokenTypeHint);
+      yield* protocol.revoke({ server: grant.server, client: grant.client, ...token });
+      return "revoked" as const;
+    }).pipe(
+      Effect.catch(() => Effect.succeed("failed" as const)),
+      Effect.catchDefect(() => Effect.succeed("failed" as const)),
+      Effect.tap((outcome) => Effect.annotateCurrentSpan("oauth.revocation.outcome", outcome)),
+      Effect.asVoid,
+      Effect.withSpan("oauth.revokeGrant"),
+    );
+
+  /**
+   * Revoke after the deletion commits, beside the response when the host accepts background
+   * work (the same hand-off stale declarations use); otherwise inline, bounded by the protocol's
+   * request timeout.
+   */
+  const revokeRemoved = (removed: Parameters<typeof revokeGrant>[0]) =>
+    background === undefined
+      ? revokeGrant(removed)
+      : background(revokeGrant(removed)).pipe(
+          Effect.flatMap((accepted) => (accepted ? Effect.void : revokeGrant(removed))),
+        );
+
+  return {
+    connections: { oauthSetup, startOAuth, completeOAuth },
+    resolve,
+    usable,
+    revokeRemoved,
+  };
 };
