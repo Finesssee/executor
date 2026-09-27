@@ -38,13 +38,15 @@ const WRITE_CONFLICT_BACKOFF_CAP_MS = 800;
 const MAX_KEK_NOT_READY_ATTEMPTS = 20;
 const KEK_NOT_READY_BACKOFF_MS = 1000;
 
-// The vault `context` is the KEK-matching dimension — WorkOS provisions one KEK
-// per distinct context, so it doubles as a cryptographic partition. Object
-// names alone already isolate partitions (see `secretObjectName`); the context
-// makes that isolation cryptographic so a partition's objects can only be
-// decrypted under its own KEK. Each value stays colon-free by construction
-// (tenant/subject ids contain no `:`), sidestepping the "KEK was created but is
-// not yet ready" hang we previously hit when a context value contained `:`.
+// The vault `context` selects the KEK: WorkOS provisions one KEK per distinct
+// context, and an environment holds a fixed number of them (2,000 in
+// production). A per-tenant or per-user context therefore uses up one KEK for
+// every new tenant or user, and once the limit is reached every first write
+// for a new partition fails with 422 "Maximum unique keys reached". All new
+// objects share one context. Partitions stay isolated by object name (see
+// `secretObjectName`). Objects created earlier keep the KEK they were created
+// under: updates carry no context and reads are by name.
+const VAULT_CONTEXT: Record<string, string> = { app: "executor" };
 
 // ---------------------------------------------------------------------------
 // Metadata storage — values live in WorkOS Vault; regular plugin storage
@@ -224,20 +226,6 @@ const secretObjectName = (
     return `${head}/secrets/h~${yield* sha256Base64Url(id)}`;
   });
 
-/** KEK-matching context for a credential. Logical ids get a per-tenant (and
- *  per-user) context so WorkOS provisions an isolated KEK per partition; legacy
- *  ids keep the original shared context so existing objects stay decryptable. */
-const vaultContextFor = (id: string, binding: OwnerBinding): Record<string, string> => {
-  const owner = embeddedItemOwner(id);
-  if (owner === null) return { app: "executor" };
-  const context: Record<string, string> = {
-    app: "executor",
-    organization_id: String(binding.tenant),
-  };
-  if (owner === "user") context.user_id = String(binding.subject ?? "");
-  return context;
-};
-
 const loadSecretObject = (
   client: WorkOSVaultClient,
   name: string,
@@ -382,8 +370,8 @@ const deleteSecretValue = (
 // names/purpose/createdAt.
 //
 // The provider sees an opaque `ProviderItemId` plus the request's `owner`
-// binding (tenant + subject). It derives the vault object name and KEK context
-// from both, so a credential's object is scoped to its partition. The
+// binding (tenant + subject). It derives the vault object name from both, so a
+// credential's object is scoped to its partition. The
 // connection row that references the id owns the (tenant, owner, subject)
 // partition. `delete` returns void; absence is not an error.
 // ---------------------------------------------------------------------------
@@ -392,7 +380,7 @@ export interface WorkOSVaultCredentialProviderOptions {
   readonly client: WorkOSVaultClient;
   readonly store: WorkosVaultStore;
   /** The request's owner binding (tenant + subject). Scopes the vault object
-   *  name and KEK context so credentials cannot collide across partitions. */
+   *  name so credentials cannot collide across partitions. */
   readonly owner: OwnerBinding;
   readonly objectPrefix?: string;
 }
@@ -431,12 +419,7 @@ export const makeWorkOSVaultCredentialProvider = (
     set: (id: ProviderItemId, value: string) =>
       Effect.gen(function* () {
         const existing = yield* store.get(id);
-        yield* upsertSecretValue(
-          client,
-          yield* nameFor(id),
-          value,
-          vaultContextFor(id, owner),
-        ).pipe(
+        yield* upsertSecretValue(client, yield* nameFor(id), value, VAULT_CONTEXT).pipe(
           Effect.mapError(
             (error: WorkOSVaultClientError) =>
               new StorageError({
