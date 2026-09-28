@@ -216,13 +216,13 @@ describe("UrlRedactingSpanProcessor", () => {
       span.setStatus({ code: SpanStatusCode.ERROR, message });
     });
 
-    // Non-vacuous: the exception event exists and kept its scrubbed URL.
+    // The exception event and classification survive without raw error text.
     const events = JSON.stringify(exported?.events);
     expect(events).toContain("exception");
-    expect(events).toContain("https://api.test/graphql");
+    expect(events).toContain("[REDACTED]");
     expect(events).not.toContain("synthetic-userinfo-secret");
     expect(events).not.toContain("synthetic-key-secret");
-    expect(exported?.status.message).toBe("Transport: fetch failed (GET https://api.test/graphql)");
+    expect(exported?.status.message).toBe("[REDACTED]");
   });
 });
 
