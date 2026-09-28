@@ -1077,7 +1077,7 @@ export abstract class McpAgentSessionDOBase<
           try: () => candidate.dispose("cap"),
           catch: (cause: unknown) => cause,
         }).pipe(
-          Effect.catch((cause: unknown) =>
+          Effect.catch(() =>
             Effect.sync(() => {
               console.warn(
                 JSON.stringify({
@@ -1085,7 +1085,7 @@ export abstract class McpAgentSessionDOBase<
                   sessionId: candidate.sessionId,
                 }),
               );
-              console.error("[mcp-session] cap eviction request failed:", cause);
+              console.error("[mcp-session] cap eviction request failed");
             }),
           ),
         ),
@@ -1143,7 +1143,6 @@ export abstract class McpAgentSessionDOBase<
           sessionId: self.sessionIdForTelemetry(),
           resetKind: input.failure.kind,
           disposition: input.failure.disposition,
-          cause: Cause.pretty(input.cause),
         }),
       );
       yield* Effect.annotateCurrentSpan({
@@ -1196,16 +1195,12 @@ export abstract class McpAgentSessionDOBase<
   }): Effect.Effect<void> {
     const self = this;
     return Effect.gen(function* () {
-      const first = Cause.prettyErrors(input.cause)[0];
       console.error(
         JSON.stringify({
           event: "mcp_execution_owner_directory_error",
           operation: input.operation,
           executionId: input.executionId,
           sessionId: self.sessionIdForTelemetry(),
-          exceptionType: first?.name ?? "Error",
-          exceptionMessage: first?.message ?? "unknown",
-          cause: Cause.pretty(input.cause),
         }),
       );
       yield* Effect.annotateCurrentSpan({
@@ -1222,16 +1217,12 @@ export abstract class McpAgentSessionDOBase<
   }): Effect.Effect<void> {
     const self = this;
     return Effect.gen(function* () {
-      const first = Cause.prettyErrors(input.cause)[0];
       console.error(
         JSON.stringify({
           event: "mcp_model_resume_forward_error",
           executionId: input.executionId,
           sessionId: self.sessionIdForTelemetry(),
           ownerSessionId: input.owner.sessionId,
-          exceptionType: first?.name ?? "Error",
-          exceptionMessage: first?.message ?? "unknown",
-          cause: Cause.pretty(input.cause),
         }),
       );
       yield* Effect.annotateCurrentSpan({
@@ -1535,7 +1526,7 @@ export abstract class McpAgentSessionDOBase<
           if (failure) {
             yield* self.recordDurableObjectReset({ operation: "init", failure, cause });
           } else {
-            console.error("[mcp-session] init failed:", Cause.pretty(cause));
+            console.error("[mcp-session] init failed");
             yield* self.captureCauseEffect(cause);
           }
           yield* self.recordCauseOnSpan(cause);
@@ -2070,10 +2061,7 @@ export abstract class McpAgentSessionDOBase<
       Effect.tapCause((cause) =>
         Effect.gen(function* () {
           yield* Effect.sync(() => {
-            console.error(
-              "[mcp-session] pending approval lease start failed:",
-              Cause.pretty(cause),
-            );
+            console.error("[mcp-session] pending approval lease start failed");
           });
           yield* self.captureCauseEffect(cause);
         }),
@@ -2097,10 +2085,7 @@ export abstract class McpAgentSessionDOBase<
           Effect.tapCause((cause) =>
             Effect.gen(function* () {
               yield* Effect.sync(() => {
-                console.error(
-                  "[mcp-session] pending approval lease expiration failed:",
-                  Cause.pretty(cause),
-                );
+                console.error("[mcp-session] pending approval lease expiration failed");
               });
               yield* self.captureCauseEffect(cause);
             }),

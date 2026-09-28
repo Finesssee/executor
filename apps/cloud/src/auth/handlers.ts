@@ -507,7 +507,7 @@ export const CloudSessionAuthHandlers = HttpApiBuilder.group(
               Effect.gen(function* () {
                 yield* Effect.logWarning(
                   "createOrganization: could not provision the Autumn customer",
-                  { organizationId: org.id, error },
+                  { organizationId: org.id },
                 );
                 yield* captureCauseEffect(error);
               }),
@@ -629,10 +629,10 @@ export const CloudSessionAuthHandlers = HttpApiBuilder.group(
                     { organizationId },
                   ),
               ),
-              Effect.tapError((error) =>
+              Effect.tapError(() =>
                 Effect.logError(
                   "deleteOrganization: org marked deleted but the Autumn customer could not be deleted; retry the deletion",
-                  { organizationId, error },
+                  { organizationId },
                 ),
               ),
               Effect.mapError(() => new OrganizationDeletionIncomplete({ step: "billing" })),
@@ -672,10 +672,10 @@ export const CloudSessionAuthHandlers = HttpApiBuilder.group(
               s.deleteOrganizationCascade(organizationId, deletedAt),
             )
             .pipe(
-              Effect.tapError((error) =>
+              Effect.tapError(() =>
                 Effect.logError(
                   "deleteOrganization: org marked deleted, removed from WorkOS and Autumn, but local purge failed, tenant data and secrets orphaned; retry the deletion",
-                  { organizationId, error },
+                  { organizationId },
                 ),
               ),
             );
