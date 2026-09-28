@@ -15,7 +15,7 @@ import type { ErrorEvent, Scope } from "@sentry/cloudflare";
 import { Cause, Effect, Layer, Predicate } from "effect";
 import type * as Tracer from "effect/Tracer";
 
-import { minimizeSentryEvent } from "./sentry-privacy";
+import { minimizeDiagnosticTags, minimizeSentryEvent } from "./sentry-privacy";
 
 import { ErrorCapture } from "@executor-js/api";
 import { classifyDurableObjectError } from "@executor-js/cloudflare/mcp/durable-object-errors";
@@ -265,11 +265,12 @@ export const sentryPayloadForCause = (
 // operation and no reason in it at all. Tags survive, group, and are
 // searchable. Values are failure modes and operation names; never a query, a
 // value, or anything customer-derived.
-const CLASSIFICATION_TAG_FIELDS = ["operation", "reason", "status"] as const;
+const CLASSIFICATION_TAG_FIELDS = ["operation", "reason", "status", "code"] as const;
 
 /** The errors those fields are read from. An allowlist, because the fields are
  *  only known to be safe on the errors this app defines. */
 const CLASSIFIED_ERROR_TAGS = [
+  "StorageError",
   "UserStoreError",
   "WorkOSError",
   "McpSessionMetaUnavailableError",
@@ -314,7 +315,7 @@ const classificationTagsOf = (input: unknown): Readonly<Record<string, string>> 
       }
     }
   }
-  return tags;
+  return minimizeDiagnosticTags(tags);
 };
 
 export const captureCause = (
@@ -356,8 +357,15 @@ export const ErrorCaptureLive: Layer.Layer<ErrorCapture> = Layer.succeed(
   ErrorCapture.of({
     captureException: (cause) =>
       Effect.gen(function* () {
-        console.error("[api] unhandled cause", classificationTagsOf(cause));
-        return (yield* captureCauseEffect(cause)) ?? "";
+        const eventId = (yield* captureCauseEffect(cause)) ?? "";
+        console.error(
+          JSON.stringify({
+            event: "api_unhandled_cause",
+            sentry_event_id: eventId,
+            tags: classificationTagsOf(cause),
+          }),
+        );
+        return eventId;
       }),
   }),
 );

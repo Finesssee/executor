@@ -14,6 +14,10 @@ const ERROR_TYPES = new Set([
   "McpSessionMetaUnavailableError",
   "GateCheckTimeoutError",
   "AutumnError",
+  "StorageError",
+  "ResponseError",
+  "RequestError",
+  "FrontendHandledError",
 ]);
 
 const OPERATIONS = new Set([
@@ -25,6 +29,10 @@ const OPERATIONS = new Set([
   "markOrganizationDeleted",
   "deleteOrganizationCascade",
 ]);
+// Only built-in model/method vocabulary can be reported; plugin-supplied names
+// and arbitrary operation strings never become diagnostic labels.
+const STORAGE_OPERATION =
+  /^(?:connection|integration|tool|policy|credential|plugin_storage|execution|oauth_client)\.(?:create|update|delete|findFirst|findMany|count|upsert)$/;
 const REASONS = new Set(["connect_timeout", "connection_closed", "query", "unknown", "upstream"]);
 
 // A field name alone does not make its contents safe. Accept only the values
@@ -35,7 +43,11 @@ const safeTag = (key: string, value: unknown): boolean => {
   return Match.value(key).pipe(
     Match.when("otel_trace_id", () => /^[0-9a-f]{32}$/.test(text)),
     Match.when("otel_span_id", () => /^[0-9a-f]{16}$/.test(text)),
-    Match.when("operation", () => OPERATIONS.has(text)),
+    Match.when("operation", () => OPERATIONS.has(text) || STORAGE_OPERATION.test(text)),
+    Match.when("code", () => /^[0-9A-Z]{5}$/.test(text)),
+    Match.when("executor.ui.surface", () => text === "api_client"),
+    Match.when("executor.ui.action", () => text === "decode_or_transport"),
+    Match.when("executor.ui.severity", () => text === "error" || text === "warning"),
     Match.when("reason", () => REASONS.has(text)),
     Match.when("status", () => /^[1-5][0-9]{2}$/.test(text)),
     Match.when("mcp.do.cause_owner", () => text === "durable_object"),
@@ -43,6 +55,16 @@ const safeTag = (key: string, value: unknown): boolean => {
     Option.getOrElse(() => false),
   );
 };
+
+/** Project known diagnostic values before they reach logs or a reporter. */
+export const minimizeDiagnosticTags = (
+  tags: Readonly<Record<string, unknown>>,
+): Record<string, string> =>
+  Object.fromEntries(
+    Object.entries(tags)
+      .filter(([key, value]) => safeTag(key, value))
+      .map(([key, value]) => [key, String(value)]),
+  );
 
 const identifier = (value: string | undefined): string | undefined =>
   value !== undefined && /^[\w.$<>:/@ -]{1,160}$/.test(value) ? value : undefined;
@@ -54,38 +76,47 @@ const sourceFile = (value: string | undefined): string | undefined => {
 };
 
 /** Keep error classification, source positions and correlation; omit all raw payloads. */
-export const minimizeSentryEvent = (event: ErrorEvent): ErrorEvent => ({
-  type: undefined,
-  event_id: event.event_id,
-  timestamp: event.timestamp,
-  platform: event.platform,
-  level: event.level,
-  release: event.release,
-  environment: event.environment,
-  tags: Object.fromEntries(
-    Object.entries(event.tags ?? {}).filter(([key, value]) => safeTag(key, value)),
-  ),
-  exception: {
-    values: event.exception?.values?.map((exception) => ({
-      type:
-        exception.type !== undefined && ERROR_TYPES.has(exception.type) ? exception.type : "Error",
-      value: "Details omitted to protect request data",
-      mechanism: exception.mechanism
-        ? {
-            type: identifier(exception.mechanism.type) ?? "generic",
-            handled: exception.mechanism.handled,
-          }
-        : undefined,
-      stacktrace: {
-        frames: exception.stacktrace?.frames?.map((frame) => ({
-          filename: sourceFile(frame.filename),
-          function: identifier(frame.function),
-          module: identifier(frame.module),
-          lineno: frame.lineno,
-          colno: frame.colno,
-          in_app: frame.in_app,
-        })),
-      },
-    })),
-  },
-});
+export const minimizeSentryEvent = (event: ErrorEvent): ErrorEvent => {
+  const tags = minimizeDiagnosticTags(event.tags ?? {});
+  return {
+    type: undefined,
+    event_id: event.event_id,
+    timestamp: event.timestamp,
+    platform: event.platform,
+    level: event.level,
+    release: event.release,
+    environment: event.environment,
+    tags,
+    exception: {
+      values: event.exception?.values?.map((exception) => ({
+        type:
+          exception.type !== undefined && ERROR_TYPES.has(exception.type)
+            ? exception.type
+            : "Error",
+        value:
+          exception.type === "StorageError" && tags.operation
+            ? `${tags.operation} failed${tags.code ? ` (${tags.code})` : ""}`
+            : tags["executor.ui.surface"] === "api_client"
+              ? "API request failed (decode_or_transport)"
+              : "Details omitted to protect request data",
+        mechanism: exception.mechanism
+          ? {
+              type: identifier(exception.mechanism.type) ?? "generic",
+              handled: exception.mechanism.handled,
+              synthetic: exception.mechanism.synthetic,
+            }
+          : undefined,
+        stacktrace: {
+          frames: exception.stacktrace?.frames?.map((frame) => ({
+            filename: sourceFile(frame.filename),
+            function: identifier(frame.function),
+            module: identifier(frame.module),
+            lineno: frame.lineno,
+            colno: frame.colno,
+            in_app: frame.in_app,
+          })),
+        },
+      })),
+    },
+  };
+};
