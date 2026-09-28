@@ -423,6 +423,9 @@ describe("Sentry privacy boundary", () => {
         otel_trace_id: secret,
         otel_span_id: secret,
         "mcp.do.cause_owner": secret,
+        code: secret,
+        "executor.ui.surface": secret,
+        "executor.ui.action": secret,
       },
       exception: { values: [{ type: secret, value: secret }] },
     });
@@ -440,10 +443,25 @@ describe("Sentry privacy boundary", () => {
     expect(sent?.tags).toEqual({
       operation: "getOrganization",
       reason: "connect_timeout",
-      status: 503,
+      status: "503",
     });
     expect(options.enableLogs).toBe(false);
     expect(options.sendDefaultPii).toBe(false);
+  });
+
+  it("retains storage classifications without SQL or raw causes", () => {
+    const sent = beforeSendCloudEvent({
+      type: undefined,
+      tags: { operation: "connection.create", code: "22021" },
+      exception: { values: [{ type: "StorageError", value: "private SQL and bound values" }] },
+      extra: { cause: "private SQL and bound values" },
+    });
+    expect(sent?.tags).toEqual({ operation: "connection.create", code: "22021" });
+    expect(sent?.exception?.values?.[0]).toMatchObject({
+      type: "StorageError",
+      value: "connection.create failed (22021)",
+    });
+    expect(JSON.stringify(sent)).not.toContain("private SQL");
   });
 
   it("strips secrets from auto-captured errors while retaining diagnostic locations", () => {
