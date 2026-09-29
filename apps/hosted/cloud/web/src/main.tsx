@@ -1,28 +1,27 @@
-import { cloudEntryInitialValues } from "./implementation/entry.ts";
 import { reactErrorHandlers } from "./implementation/error-reporting.tsx";
 import { startAnalytics, capturePageview, pauseReplay } from "./implementation/analytics.tsx";
 import { Effect } from "effect";
 import { PageTelemetry } from "@executor-js/hosted-web/contracts/telemetry";
 import { BrowserTelemetry } from "@executor-js/telemetry/browser";
-import { RegistryProvider } from "@effect/atom-react";
 import { RouterProvider } from "@tanstack/react-router";
-import { createRoot } from "react-dom/client";
-import { createDashboardRouter } from "./implementation/router.ts";
-import "@executor-js/hosted-web/styles";
-import { UIObservation } from "./implementation/ui-observation.tsx";
-
-const root = document.getElementById("root");
-if (root === null) throw new Error("Dashboard root is missing");
-
-const initialValues = cloudEntryInitialValues();
+import { hydrateStart } from "@tanstack/react-start/client";
+import { hydrateRoot } from "react-dom/client";
 
 // This public page carries an unsubscribe capability in its fragment. No identity
 // lookup, analytics or browser error reporting should receive that URL.
 const publicEmailPage = window.location.pathname.startsWith("/email/unsubscribe");
 if (!publicEmailPage) {
   startAnalytics();
+  // Start page-owned listeners independently of component query lifetimes.
+  void PageTelemetry.runPromise(
+    Effect.flatMap(BrowserTelemetry, (telemetry) =>
+      telemetry.navigation({ type: "start", path: window.location.pathname }),
+    ),
+  ).catch((error) => console.error(error));
 }
-const router = createDashboardRouter();
+// A truncated or altered document cannot hydrate; client.tsx reports this as a startup failure.
+if (Reflect.get(window, "$_TSR") === undefined) throw new Error("Dashboard document is incomplete");
+const router = await hydrateStart();
 if (!publicEmailPage) {
   router.subscribe("onBeforeNavigate", ({ toLocation }) => {
     pauseReplay();
@@ -38,21 +37,9 @@ if (!publicEmailPage) {
       Effect.flatMap(BrowserTelemetry, (telemetry) => telemetry.navigation({ type: "end" })),
     );
   });
-  // Start page-owned listeners independently of component query lifetimes.
-  void PageTelemetry.runPromise(
-    Effect.flatMap(BrowserTelemetry, (telemetry) =>
-      telemetry.navigation({ type: "start", path: window.location.pathname }),
-    ),
-  ).catch((error) => console.error(error));
 }
 if (import.meta.hot)
   import.meta.hot.dispose(() => {
     void PageTelemetry.dispose().catch((error) => console.error(error));
   });
-createRoot(root, reactErrorHandlers).render(
-  <RegistryProvider initialValues={initialValues}>
-    <UIObservation>
-      <RouterProvider router={router} />
-    </UIObservation>
-  </RegistryProvider>,
-);
+hydrateRoot(document, <RouterProvider router={router} />, reactErrorHandlers);

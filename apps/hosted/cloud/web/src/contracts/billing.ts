@@ -1,3 +1,5 @@
+import { hydrated } from "@executor-js/ui/contracts/http";
+import { refreshOnFocus } from "@executor-js/ui/contracts/refresh";
 import { observeBrowserTransport, observeBrowserResponse } from "@executor-js/telemetry/browser";
 import { organizationHttpClient } from "@executor-js/hosted-web/contracts/organization-reference";
 import { DashboardRuntime } from "@executor-js/hosted-web/contracts/telemetry";
@@ -15,8 +17,8 @@ export class CloudClient extends AtomHttpApi.Service<CloudClient>()("CloudClient
 }) {}
 /** Poll while the page is mounted so asynchronous checkout settlement becomes visible. */
 export const billingAtom = Atom.family((organization: OrganizationReference) =>
-  CloudClient.query("billing", "overview", { params: { organization } }).pipe(
-    Atom.refreshOnWindowFocus,
+  CloudClient.query("billing", "overview", hydrated({ params: { organization } })).pipe(
+    refreshOnFocus,
     Atom.withRefresh("5 seconds"),
   ),
 );

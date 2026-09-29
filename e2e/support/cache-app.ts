@@ -26,6 +26,14 @@ export default defineApp({ accounts: { service: provider.many() } }, async ctx =
       while(!await cache.read("held-release",boolean())){if(signal.aborted)throw new Error("Cancelled");await new Promise(resolve=>setTimeout(resolve,25));}
       return "old";
     }})),
+    stalled: query({input:object({})},async()=>ctx.cache.get({key:"stalled",schema:string(),freshFor:"1 minute",load:async({cache,signal})=>{
+      await cache.write([{key:"stalled-part",value:true}],"1 minute");
+      while(!await cache.read("stalled-release",boolean())){if(signal.aborted)throw new Error("Cancelled");await new Promise(resolve=>setTimeout(resolve,25));}
+      throw new Error("Stalled loader stopped");
+    }})),
+    stalledStarted: query({input:object({})},async()=>await ctx.cache.read("stalled-part",boolean()) ?? false),
+    stalledRelease: query({input:object({})},async()=>{await ctx.cache.write([{key:"stalled-release",value:true}],"1 minute");return true;}),
+    stalledReader: query({input:object({})},async()=>ctx.cache.get({key:"stalled",schema:string(),freshFor:"1 minute",load:async()=>crypto.randomUUID()})),
     heldStarted: query({input:object({})},async()=>await ctx.cache.read("held-started",boolean()) ?? false),
     heldRelease: query({input:object({})},async()=>{await ctx.cache.write([{key:"held-release",value:true}],"1 minute");return true;}),
     replacement: query({input:object({})},async()=>ctx.cache.get({key:"held",schema:string(),freshFor:"1 minute",load:async()=>"replacement"})),

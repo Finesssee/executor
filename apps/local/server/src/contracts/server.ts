@@ -1,4 +1,5 @@
 /** Local host extension points. Runtime adapters supply behavior, not URL dispatch. */
+import type { HostPipeline } from "@executor-js/dashboard-start/in-process";
 import type { Effect, Layer } from "effect";
 import type { LocalAuth } from "../implementation/auth.ts";
 import type { ServerConfig } from "./config.ts";
@@ -30,7 +31,12 @@ export type LocalHttpHandler = Effect.Effect<
 
 /** Static or development web capabilities; neither adapter chooses product routes. */
 export interface LocalWeb {
-  readonly document: LocalHttpHandler;
+  /** Rendered pages read the product API in-process through the host pipeline. */
+  readonly document: Effect.Effect<
+    HttpServerResponse.HttpServerResponse,
+    never,
+    HttpRouter.Provided | HttpPlatform.HttpPlatform | HostPipeline
+  >;
   readonly favicon: LocalHttpHandler;
   readonly asset: LocalHttpHandler;
   readonly fallback: LocalHttpHandler;

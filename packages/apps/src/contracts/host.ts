@@ -108,6 +108,8 @@ export const ResolvedAccount = Schema.Struct({
   id: AccountId,
   provider: DeclaredProvider,
   method: Schema.NonEmptyString,
+  /** Changes when the account is reconnected or its credentials replaced, not on renewal. */
+  generation: Schema.Int,
   fields: JsonObject,
 });
 /** Parsed host account binding. */

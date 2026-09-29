@@ -24,16 +24,20 @@ export {
   type AppSkillSource as Skill,
   type SkillFile,
   type GitHubSkillsOptions,
+  type SkillCacheOptions,
   type WellKnownSkillsOptions,
 } from "./contracts/skills.ts";
 
-/** Fetch a public GitHub skill collection from one resolved commit. Mutable refs refresh on each call. */
+/**
+ * Fetch a public GitHub skill collection from one resolved commit. Pass `cache: ctx.cache` to reuse
+ * the catalog; without it, mutable refs resolve again on each call.
+ */
 export const githubSkills = (options: GitHubSkillsOptions) =>
   Effect.runPromise(
     githubSkillsEffect(options),
     options.signal === undefined ? {} : { signal: options.signal },
   );
-/** Fetch a published skill index and its text files, with no persistent cache. */
+/** Fetch a published skill index and its text files. Pass `cache: ctx.cache` to reuse the catalog. */
 export const wellKnownSkills = (options: WellKnownSkillsOptions) =>
   Effect.runPromise(
     wellKnownSkillsEffect(options),

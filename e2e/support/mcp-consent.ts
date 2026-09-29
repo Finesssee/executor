@@ -132,6 +132,29 @@ const make = Effect.gen(function* () {
 const Grants = Schema.Array(
   Schema.Struct({ clientId: Schema.String, grant: Schema.Struct({ id: Schema.String }) }),
 );
+/** Pair a fresh browser session as the local operator, as the dashboard's pairing link does. */
+export const pairLocalOperator = Effect.gen(function* () {
+  const api = yield* Api,
+    target = yield* Target;
+  const session = yield* api.session();
+  const pairing = yield* session.send("POST", "/auth/pair", undefined, {
+    authorization: `Bearer ${Redacted.value(target.apiKey)}`,
+  });
+  if (pairing.status !== 200)
+    return yield* new ConsentFailed({ operation: "Cannot create a local pairing link" });
+  const link = yield* body(Schema.Struct({ url: Schema.String }), pairing);
+  const token = new URLSearchParams(new URL(link.url).hash.slice(1)).get("pair");
+  if (!token) return yield* new ConsentFailed({ operation: "Pairing link has no token" });
+  const exchanged = yield* session.send(
+    "POST",
+    "/auth/exchange",
+    { token },
+    { origin: target.metadata.origin },
+  );
+  if (exchanged.status !== 200)
+    return yield* new ConsentFailed({ operation: "Cannot pair the local operator" });
+  return session;
+});
 /** Local consent needs no organization: the dashboard pairing identifies its single operator. */
 const makeLocal = Effect.gen(function* () {
   const api = yield* Api,
@@ -153,19 +176,11 @@ const makeLocal = Effect.gen(function* () {
           return yield* new ConsentFailed({
             operation: "Client did not request a loopback OAuth callback with state",
           });
-        const session = yield* api.session();
-        const pairing = yield* session.send("POST", "/auth/pair", undefined, {
-          authorization: `Bearer ${Redacted.value(target.apiKey)}`,
-        });
-        if (pairing.status !== 200)
-          return yield* new ConsentFailed({ operation: "Cannot create a local pairing link" });
-        const link = yield* body(Schema.Struct({ url: Schema.String }), pairing);
-        const token = new URLSearchParams(new URL(link.url).hash.slice(1)).get("pair");
-        if (!token) return yield* new ConsentFailed({ operation: "Pairing link has no token" });
+        const session = yield* pairLocalOperator.pipe(
+          Effect.provideService(Api, api),
+          Effect.provideService(Target, target),
+        );
         const origin = { origin: target.metadata.origin };
-        const exchanged = yield* session.send("POST", "/auth/exchange", { token }, origin);
-        if (exchanged.status !== 200)
-          return yield* new ConsentFailed({ operation: "Cannot pair the local operator" });
         yield* Effect.addFinalizer(() =>
           Effect.gen(function* () {
             const listed = yield* session.send("GET", "/api/auth/mcp/grants", undefined, origin);

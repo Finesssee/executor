@@ -72,10 +72,17 @@ export function HostedEntryLoading({
 export function DashboardEntryPending({
   children,
   pathname,
-}: { readonly children?: ReactNode; readonly pathname?: string } = {}) {
+  banner,
+}: {
+  readonly children?: ReactNode;
+  readonly pathname?: string;
+  /** The same banner the resolved dashboard shows, so the frame does not move when it arrives. */
+  readonly banner?: ReactNode;
+} = {}) {
   const pendingPage = pathname?.split("/")[3] ?? "apps";
   return (
     <DashboardFrame
+      banner={banner}
       organization={<OrganizationSwitcherSkeleton />}
       navigation={<DashboardNavigation pendingPage={pendingPage} />}
       pendingPage={pendingPage}

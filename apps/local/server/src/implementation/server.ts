@@ -5,6 +5,7 @@ import { startScheduleWorker, defaultScheduleWorkerOptions } from "@executor-js/
 import { localScheduleHandlers } from "./schedules.ts";
 import { localMcpApproval } from "./mcp-approvals.ts";
 import { makeLocalMcpOAuth } from "./mcp-oauth.ts";
+import { localMcpConnectionHandlers } from "./mcp-connections.ts";
 import { hostedExecutorOrigin, remoteRegistry } from "@executor-js/app-registry";
 import { localAppManagement } from "./app-management.ts";
 
@@ -18,6 +19,7 @@ import {
   AppNotFound,
   createExecutor,
   makeDeclarationCache,
+  declarationConfig,
   toEffectRuntime,
   executorHandlers,
   webhookCallback,
@@ -50,6 +52,7 @@ import { LocalAuthApi } from "../contracts/auth.ts";
 import { AccountConnectApi } from "../contracts/account-connections.ts";
 import { browserTelemetry } from "./telemetry.ts";
 import { webFiles } from "./web.ts";
+import { withHostPipeline } from "@executor-js/dashboard-start/in-process";
 import { localManagementDocument } from "../contracts/management.ts";
 import { gitSourceStorage } from "@executor-js/app-source";
 import { nativeRepositories } from "@executor-js/app-source/node";
@@ -94,9 +97,11 @@ export const localApi = (
       const repositories = nativeRepositories(path.join(directory, "repositories"));
       const sources = gitSourceStorage(repositories);
       const server = yield* Scope.Scope;
+      const evaluation = yield* declarationConfig;
       const executor = yield* createExecutor({
         // Stale declarations refresh on the server's own lifetime.
-        declarations: makeDeclarationCache(),
+        declarations: makeDeclarationCache(evaluation.limits),
+        toolListings: evaluation.toolListings,
         background: (work) => Effect.forkIn(work, server).pipe(Effect.as(true)),
         workflows,
         webhookOrigin:
@@ -255,7 +260,7 @@ export const localApi = (
       });
       const publicSkills = yield* readExecutorSkills;
       const productRoutes = Layer.mergeAll(
-        publishedSkillRoutes(publicSkills),
+        publishedSkillRoutes(Effect.succeed(publicSkills)),
         HttpApiBuilder.layer(LocalWebhookSetupApi).pipe(
           Layer.provide(localWebhookSetupHandlers(executor, config, auth)),
         ),
@@ -299,6 +304,7 @@ export const localApi = (
           Layer.provide(dashboardApi.handlers),
           Layer.provide(localScheduleHandlers(executor, config, auth)),
           Layer.provide(localAppBrowserHandlers(executor)),
+          Layer.provide(localMcpConnectionHandlers(executor, oauth)),
           Layer.provide(dashboardApi.access),
         ),
         HttpApiBuilder.layer(LocalAuthApi).pipe(
@@ -346,12 +352,15 @@ export const localApi = (
       return HttpRouter.add(
         "*",
         "*",
-        Effect.gen(function* () {
-          const request = yield* HttpServerRequest.HttpServerRequest;
-          return yield* appFromHost(request.headers.host, config.port) === undefined
-            ? productHandler
-            : appHandler.pipe(requestTiming);
-        }).pipe(recordRequestRejections),
+        // Server-rendered pages read the product API through this same dispatch, in-process.
+        withHostPipeline(
+          Effect.gen(function* () {
+            const request = yield* HttpServerRequest.HttpServerRequest;
+            return yield* appFromHost(request.headers.host, config.port) === undefined
+              ? productHandler
+              : appHandler.pipe(requestTiming);
+          }).pipe(recordRequestRejections),
+        ),
       );
     }),
   );

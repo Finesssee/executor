@@ -2,24 +2,30 @@ import { signInCallback } from "@executor-js/hosted-web/contracts/navigation";
 import { BrowserAtoms } from "@executor-js/hosted-web/contracts/telemetry";
 import { AuthFailed, authRequest, sessionAtom } from "@executor-js/hosted-web/contracts/auth";
 import { createAuthClient } from "better-auth/client";
+import { dashboardAuthClientOptions, hydratedResult } from "@executor-js/ui/contracts/http";
 import { Effect, Schema } from "effect";
 import { invalidate } from "@executor-js/ui/contracts/mutations";
 
 /** Self-host sign-in methods do not expose the shared organization's native client. */
-const authClient = createAuthClient();
+const authClient = createAuthClient({ ...dashboardAuthClientOptions });
 
-/** The server exposes only setup availability and whether the operator enabled SSO. */
+const Configuration = Schema.Struct({ setup: Schema.Boolean, sso: Schema.Boolean });
+
+/**
+ * The server exposes only setup availability and whether the operator enabled SSO. It arrives
+ * with the page, so the sign-in form the server rendered is the one the browser keeps.
+ */
 export const configurationAtom = BrowserAtoms.atom(
   authRequest((options) => authClient.$fetch<unknown>("/self-host/config", options)).pipe(
-    Effect.flatMap(
-      Schema.decodeUnknownEffect(Schema.Struct({ setup: Schema.Boolean, sso: Schema.Boolean })),
-    ),
+    Effect.flatMap(Schema.decodeUnknownEffect(Configuration)),
     Effect.catchTag("SchemaError", () =>
       Effect.fail(
         new AuthFailed({ message: "Unable to load sign-in settings. Reload to try again." }),
       ),
     ),
   ),
+).pipe(
+  hydratedResult({ key: "self-host:configuration", success: Configuration, error: AuthFailed }),
 );
 
 /** Explicit self-host credential flow selected by the user. */

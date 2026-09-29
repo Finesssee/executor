@@ -8,7 +8,7 @@ import {
 import { Effect, Schema } from "effect";
 import { HttpApiBuilder } from "effect/unstable/httpapi";
 import { HttpServerResponse } from "effect/unstable/http";
-import { startOrganizationRemoval } from "../infrastructure/organization-removal-workflow.ts";
+import { OrganizationRemovalStart } from "../infrastructure/organization-removal-workflow.ts";
 import { ExecutorCloudApi } from "../contracts/api.ts";
 
 /** Native membership rows outlive acceptance; never put a removed team back in the switcher. */
@@ -38,6 +38,7 @@ export const organizationRemovalHandlers = HttpApiBuilder.group(
   "organizationRemoval",
   (handlers) =>
     Effect.gen(function* () {
+      const start = yield* OrganizationRemovalStart;
       return handlers
         .handle("preview", () => previewOrganizationRemoval)
         .handle("remove", () =>
@@ -48,7 +49,7 @@ export const organizationRemovalHandlers = HttpApiBuilder.group(
             const { started, instance } = yield* beginOrganizationRemoval;
             // The tombstone is also a durable start record. A provider refusal
             // leaves it pending for dispatch after the response and by cron.
-            yield* startOrganizationRemoval(started.organization, instance).pipe(
+            yield* start(started.organization, instance).pipe(
               Effect.catch(() =>
                 Effect.logWarning("Organization removal start pending", {
                   organization: started.organization,

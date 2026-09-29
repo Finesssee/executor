@@ -42,11 +42,13 @@ const makeScheduleCoordinator = Effect.gen(function* () {
         Effect.gen(function* () {
           const executor = yield* Effect.flatten(HostedExecutor);
           const next = yield* executor.scheduler.nextWake;
-          if (next === null) yield* state.storage.deleteAlarm();
+          // Requested profile setup keeps its wake: deleting it would leave the change to the
+          // cron heartbeat, up to a minute later.
+          if (next === null && !(yield* dispatch.requested)) yield* state.storage.deleteAlarm();
           else
             yield* state.storage.setAlarm(
               Math.max(
-                next.getTime(),
+                next?.getTime() ?? 0,
                 (yield* Clock.currentTimeMillis) + defaultScheduleWorkerOptions.pollMilliseconds,
               ),
             );
@@ -68,7 +70,7 @@ const makeScheduleCoordinator = Effect.gen(function* () {
               }),
             );
             // Alarm callbacks own this work through waitUntil; new wakes can discover other due apps meanwhile.
-            yield* dispatch(
+            yield* dispatch.run(
               executor[ProfileHost].tick(concurrency),
               executor.scheduler.tick({
                 runner: "cloud",
@@ -118,6 +120,8 @@ const makeScheduleCoordinator = Effect.gen(function* () {
               yield* state.storage.deleteAlarm();
               return;
             }
+            // Profile changes wake the coordinator; the request outlives a pass already running.
+            yield* dispatch.request;
             yield* state.storage.setAlarm(
               (yield* Clock.currentTimeMillis) + defaultScheduleWorkerOptions.pollMilliseconds,
             );

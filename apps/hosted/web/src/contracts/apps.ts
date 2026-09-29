@@ -1,3 +1,5 @@
+import { hydrated } from "@executor-js/ui/contracts/http";
+import { refreshOnFocus } from "@executor-js/ui/contracts/refresh";
 import { pollingQuery } from "@executor-js/ui/contracts/polling";
 import { refreshProfiles } from "./profiles.ts";
 import { refreshResourceDirectory } from "./resource-access.ts";
@@ -5,6 +7,9 @@ import { protectedQuery } from "./protected-query.ts";
 /** Organization-specific app queries and mutations use the shared hosted API. */
 import {
   AppId,
+  AppEvaluationFailed,
+  type Tool,
+  type Cursor,
   ProfileId,
   DeploymentId,
   AccountConnectionId,
@@ -56,9 +61,9 @@ class OAuthSetupKey extends Data.Class<{
   readonly method: string;
 }> {}
 const oauthSetupQuery = Atom.family((key: OAuthSetupKey) =>
-  HostedClient.query("accounts", "oauthSetup", { params: key }).pipe(
+  HostedClient.query("accounts", "oauthSetup", hydrated({ params: key })).pipe(
     Atom.setIdleTTL("5 minutes"),
-    Atom.refreshOnWindowFocus,
+    refreshOnFocus,
   ),
 );
 /** Safe client capability hints are shared across forms for the same organization, provider, and method. */
@@ -70,25 +75,33 @@ export const oauthSetupAtom = (key: {
 
 const appQuery = Atom.family(
   (key: { readonly organization: OrganizationReference; readonly app: AppId }) =>
-    HostedClient.query("apps", "get", { params: key }).pipe(
-      Atom.refreshOnWindowFocus,
+    HostedClient.query("apps", "get", hydrated({ params: key })).pipe(
+      refreshOnFocus,
       protectedQuery,
     ),
 );
 const deploymentsQuery = Atom.family((key: AppKey) =>
-  HostedClient.query("apps", "deployments", { params: key }).pipe(Atom.refreshOnWindowFocus),
+  HostedClient.query("apps", "deployments", hydrated({ params: key })).pipe(refreshOnFocus),
 );
 const sourceQuery = Atom.family((key: SourceKey) =>
-  HostedClient.query("apps", "sourceDisplay", {
-    params: { organization: key.organization, app: key.app },
-    query: { deployment: key.deployment },
-  }),
+  HostedClient.query(
+    "apps",
+    "sourceDisplay",
+    hydrated({
+      params: { organization: key.organization, app: key.app },
+      query: { deployment: key.deployment },
+    }),
+  ),
 );
 const sourceFileQuery = Atom.family((key: SourceFileKey) =>
-  HostedClient.query("apps", "sourceDisplayFile", {
-    params: { organization: key.organization, app: key.app, deployment: key.deployment },
-    query: { path: key.path },
-  }).pipe(Atom.setIdleTTL("5 minutes")),
+  HostedClient.query(
+    "apps",
+    "sourceDisplayFile",
+    hydrated({
+      params: { organization: key.organization, app: key.app, deployment: key.deployment },
+      query: { path: key.path },
+    }),
+  ).pipe(Atom.setIdleTTL("5 minutes")),
 );
 /** One page evaluates the current app/account catalog. */
 class ToolKey extends Data.Class<{
@@ -101,21 +114,25 @@ class ToolKey extends Data.Class<{
 }> {}
 /** Browsing reads the schema-free index; one tool's schemas load when it is selected. */
 const toolsQuery = Atom.family((key: ToolKey) =>
-  HostedClient.query("tools", "index", {
-    params: key,
-    query: {
-      deployment: key.deployment,
-      profile: key.profile,
-      expectedProfileRevision: key.expectedProfileRevision,
-    },
-  }).pipe(currentQuery),
+  HostedClient.query(
+    "tools",
+    "index",
+    hydrated({
+      params: key,
+      query: {
+        deployment: key.deployment,
+        profile: key.profile,
+        expectedProfileRevision: key.expectedProfileRevision,
+      },
+    }),
+  ).pipe(currentQuery),
 );
 /** Pending credentials are fetched without reading saved secrets. */
 const connectionQuery = Atom.family(
   (key: {
     readonly organization: OrganizationReference;
     readonly connection: AccountConnectionId;
-  }) => HostedClient.query("accounts", "connection", { params: key }),
+  }) => HostedClient.query("accounts", "connection", hydrated({ params: key })),
 );
 /** Catalog installation, selection, connection and execution actions. */
 const activateApp = Atom.family((key: AppKey) =>
@@ -479,14 +496,18 @@ class ToolDetailKey extends Data.Class<
   ConstructorParameters<typeof ToolKey>[0] & { readonly tool: ToolName }
 > {}
 const toolDetailQueries = Atom.family((key: ToolDetailKey) =>
-  HostedClient.query("tools", "get", {
-    params: { organization: key.organization, app: key.app, tool: key.tool },
-    query: {
-      deployment: key.deployment,
-      profile: key.profile,
-      expectedProfileRevision: key.expectedProfileRevision,
-    },
-  }),
+  HostedClient.query(
+    "tools",
+    "get",
+    hydrated({
+      params: { organization: key.organization, app: key.app, tool: key.tool },
+      query: {
+        deployment: key.deployment,
+        profile: key.profile,
+        expectedProfileRevision: key.expectedProfileRevision,
+      },
+    }),
+  ),
 );
 const toolDetails = Atom.family((key: ToolDetailKey) =>
   HostedClient.runtime
@@ -501,3 +522,44 @@ const toolDetails = Atom.family((key: ToolDetailKey) =>
 /** One tool's schemas for the same catalog identity as the list. */
 export const toolDetailAtom = (key: ConstructorParameters<typeof ToolDetailKey>[0]) =>
   toolDetails(new ToolDetailKey(key));
+
+const connectionToolLists = Atom.family((key: ToolKey) =>
+  HostedClient.runtime
+    .atom(
+      Effect.gen(function* () {
+        const client = yield* HostedClient;
+        const tools: Tool[] = [];
+        const cursors = new Set<Cursor>();
+        let cursor: Cursor | undefined;
+        let deployment = key.deployment;
+        let revision = key.expectedProfileRevision;
+        do {
+          const page = yield* client.tools.list({
+            params: { organization: key.organization, app: key.app },
+            query: { profile: key.profile, expectedProfileRevision: revision, deployment, cursor },
+          });
+          if (
+            (deployment !== undefined && deployment !== page.deployment) ||
+            (revision !== undefined && revision !== page.profileRevision) ||
+            (page.next !== undefined && cursors.has(page.next))
+          ) {
+            return yield* new AppEvaluationFailed({
+              app: key.app,
+              deployment: page.deployment,
+              reason: "The tool catalog changed while loading. Try again.",
+            });
+          }
+          deployment = page.deployment;
+          revision = page.profileRevision;
+          tools.push(...page.items);
+          cursor = page.next;
+          if (cursor !== undefined) cursors.add(cursor);
+        } while (cursor !== undefined);
+        return tools;
+      }),
+    )
+    .pipe(currentQuery),
+);
+/** Load the complete selected catalog on demand so connection search includes every tool. */
+export const connectionToolListAtom = (key: ConstructorParameters<typeof ToolKey>[0]) =>
+  connectionToolLists(new ToolKey(key));

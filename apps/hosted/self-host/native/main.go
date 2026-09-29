@@ -457,6 +457,16 @@ func serve(mode string) error {
 		return errors.New("EXECUTOR_APPS_ALLOW_PRIVATE_FETCH must be true or false")
 	}
 	config = bytes.ReplaceAll(config, []byte("@@APPS_PRIVATE_FETCH@@"), []byte(privateFetch))
+	// The most app Workers workerd keeps loaded; the apps Worker applies its default for null.
+	appWorkers := "null"
+	if value := values["EXECUTOR_APP_WORKERS"]; value != "" {
+		number, err := strconv.Atoi(value)
+		if err != nil || number < 1 {
+			return errors.New("EXECUTOR_APP_WORKERS must be a positive integer")
+		}
+		appWorkers = strconv.Itoa(number)
+	}
+	config = bytes.ReplaceAll(config, []byte("@@APP_WORKERS@@"), []byte(appWorkers))
 	config = bytes.ReplaceAll(config, []byte("@@SELF_ORIGIN@@"), []byte(strconv.Quote(values["BETTER_AUTH_URL"])))
 	config = bytes.ReplaceAll(config, []byte("@@RUNTIME@@"), []byte(strings.Trim(strconv.Quote(runtime), "\"")))
 	service := `"product"`
@@ -531,24 +541,7 @@ func serve(mode string) error {
 		return exportDatabase(filepath.Join(temporary, "export.sock"), os.Args[2])
 	}
 
-	proxy := &httputil.ReverseProxy{
-		Rewrite: func(request *httputil.ProxyRequest) {
-			request.SetURL(&url.URL{Scheme: "http", Host: "product.internal"})
-			request.Out.Host = request.In.Host
-			address, _, err := net.SplitHostPort(request.In.RemoteAddr)
-			if err != nil {
-				address = request.In.RemoteAddr
-			}
-			request.Out.Header.Set("x-executor-client-ip", address)
-		},
-		Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return (&net.Dialer{}).DialContext(ctx, "unix", filepath.Join(temporary, "product.sock"))
-		}},
-		FlushInterval: -1,
-		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, _ error) {
-			http.Error(w, "Executor is starting", http.StatusServiceUnavailable)
-		},
-	}
+	proxy := productProxy(filepath.Join(temporary, "product.sock"), workerdIdleTimeout)
 	publicListener, err := net.Listen("tcp", net.JoinHostPort(setting("HOST", "0.0.0.0"), port))
 	if err != nil {
 		command.Process.Kill()
@@ -579,6 +572,47 @@ func serve(mode string) error {
 		return <-stopped
 	}
 }
+
+// workerd serves HTTP with kj's default HttpServerSettings; its pipelineTimeout
+// closes a keep-alive connection after 5 seconds without a request.
+const workerdIdleTimeout = 5 * time.Second
+
+// The proxy closes pooled connections at half workerd's idle timeout, so it never
+// sends a request on a connection workerd is closing. Go replays only requests
+// that are safe to repeat, so losing that race failed POSTs such as workflow runs.
+
+func productProxy(socket string, upstreamIdleTimeout time.Duration) *httputil.ReverseProxy {
+	return &httputil.ReverseProxy{
+		Rewrite: func(request *httputil.ProxyRequest) {
+			request.SetURL(&url.URL{Scheme: "http", Host: "product.internal"})
+			request.Out.Host = request.In.Host
+			address, _, err := net.SplitHostPort(request.In.RemoteAddr)
+			if err != nil {
+				address = request.In.RemoteAddr
+			}
+			request.Out.Header.Set("x-executor-client-ip", address)
+		},
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return (&net.Dialer{}).DialContext(ctx, "unix", socket)
+			},
+			IdleConnTimeout: upstreamIdleTimeout / 2,
+		},
+		FlushInterval: -1,
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			// Until workerd listens, its socket is missing or refuses connections.
+			if errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ECONNREFUSED) {
+				http.Error(w, "Executor is starting", http.StatusServiceUnavailable)
+				return
+			}
+			if r.Context().Err() == nil {
+				fmt.Fprintln(os.Stderr, "Executor request failed:", r.Method, err)
+			}
+			http.Error(w, "Executor did not complete the request", http.StatusBadGateway)
+		},
+	}
+}
+
 func main() {
 	mode := "serve"
 	if len(os.Args) > 1 {

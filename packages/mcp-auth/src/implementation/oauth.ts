@@ -19,14 +19,23 @@ import {
 } from "better-auth/api";
 import { Cause, Effect, Exit, Option, Schema } from "effect";
 import {
+  ConnectionId,
   Grant,
   GrantId,
   GrantPolicy,
   GrantTarget,
   grantTarget,
+  mcpOAuthResources,
   mcpResource,
   OAuthResourceProvisioningFailed,
 } from "../contracts/grant.ts";
+import {
+  Connection,
+  ConnectionName,
+  ConnectionPolicy,
+  connectionGrantPlaceholder,
+  connectionGrantPolicy,
+} from "../contracts/connection.ts";
 
 export type { OAuthResourceSeedContext } from "@better-auth/oauth-provider";
 
@@ -37,7 +46,20 @@ const Record = Schema.Struct({
   resource: Schema.NonEmptyString,
   policy: Schema.String,
   revoked: Schema.Boolean,
+  connection: Schema.optionalKey(Schema.NullOr(ConnectionId)),
 });
+const ConnectionRecord = Schema.Struct({
+  id: ConnectionId,
+  userId: Schema.NonEmptyString,
+  resource: Schema.NonEmptyString,
+  name: ConnectionName,
+  policy: Schema.String,
+  revoked: Schema.Boolean,
+  createdAt: Schema.Date,
+  updatedAt: Schema.Date,
+});
+/** Server-only connection calls name the verified user and host resource explicitly. */
+const ConnectionOwner = { userId: Schema.NonEmptyString, resource: Schema.NonEmptyString };
 /** Verified credential identity plus the current persisted grant, independent of host ownership. */
 export const GrantAccess = Schema.Struct({
   userId: Schema.String,
@@ -91,9 +113,14 @@ const loopback = (value: string) => {
 /** Hosts select and authorize their own resource (an organization for hosted, an instance for local). */
 export interface GrantOAuthOptions {
   readonly origin: string;
+  /**
+   * Choose and authorize the consent's resource. A scoped connection fixes it as `required`;
+   * the host still checks access and rejects a conflicting explicit choice.
+   */
   readonly selectResource: (
     context: GenericEndpointContext,
     userId: string,
+    required?: string,
   ) => Effect.Effect<string, APIError>;
   readonly checkResource: (
     context: GenericEndpointContext,
@@ -138,6 +165,9 @@ export const grantOAuthPlugins = (settings: GrantOAuthOptions) => {
         ),
     },
     customAccessTokenClaims: ({ referenceId }) => ({ grant_id: referenceId }),
+    // Connections add resources after clients register. Every resource here is an Executor
+    // audience, and grants still bind each token to exactly one of them.
+    enforcePerClientResources: false,
   } satisfies OAuthOptions<Scope[]>;
   const get = (context: GenericEndpointContext, id: GrantId) =>
     authCall(() =>
@@ -149,9 +179,76 @@ export const grantOAuthPlugins = (settings: GrantOAuthOptions) => {
         row.revoked ? Effect.fail(new APIError("UNAUTHORIZED")) : Effect.succeed(row),
       ),
     );
-  const project = (row: typeof Record.Type, target: GrantTarget) =>
-    Schema.decodeUnknownEffect(Schema.fromJsonString(GrantPolicy))(row.policy).pipe(
-      Effect.mapError(() => new APIError("UNAUTHORIZED")),
+  const findConnection = (context: GenericEndpointContext, id: ConnectionId) =>
+    authCall(() =>
+      context.context.adapter.findOne({
+        model: "mcpConnection",
+        where: [{ field: "id", value: id }],
+      }),
+    ).pipe(
+      Effect.flatMap((row) =>
+        row === null
+          ? Effect.succeed(undefined)
+          : parse(ConnectionRecord, row).pipe(
+              Effect.mapError(() => new APIError("SERVICE_UNAVAILABLE")),
+            ),
+      ),
+    );
+  /** Missing, revoked, or someone else's connections are all the same absence. */
+  const ownedConnection = (
+    context: GenericEndpointContext,
+    owner: { readonly userId: string; readonly resource?: string },
+    id: ConnectionId,
+  ) =>
+    findConnection(context, id).pipe(
+      Effect.flatMap((row) =>
+        row === undefined ||
+        row.revoked ||
+        row.userId !== owner.userId ||
+        (owner.resource !== undefined && row.resource !== owner.resource)
+          ? Effect.fail(new APIError("NOT_FOUND"))
+          : Effect.succeed(row),
+      ),
+    );
+  const connectionPolicy = (row: typeof ConnectionRecord.Type) =>
+    parse(Schema.fromJsonString(ConnectionPolicy), row.policy).pipe(
+      Effect.mapError(() => new APIError("SERVICE_UNAVAILABLE")),
+    );
+  const connectionView = (row: typeof ConnectionRecord.Type) =>
+    connectionPolicy(row).pipe(
+      Effect.map((policy) =>
+        Connection.make({
+          id: row.id,
+          name: row.name,
+          policy,
+          createdAt: row.createdAt.toISOString(),
+          updatedAt: row.updatedAt.toISOString(),
+        }),
+      ),
+    );
+  /** A connection grant has no authority of its own; it reads the connection on every use. */
+  const currentPolicy = (
+    context: GenericEndpointContext,
+    row: typeof Record.Type,
+    target: GrantTarget,
+  ) =>
+    Effect.gen(function* () {
+      const connection = row.connection ?? undefined;
+      const requested = target.kind === "mcp" ? target.connection : undefined;
+      if (connection !== requested) return yield* Effect.fail(new APIError("UNAUTHORIZED"));
+      if (connection === undefined)
+        return yield* parse(Schema.fromJsonString(GrantPolicy), row.policy);
+      const current = yield* ownedConnection(
+        context,
+        { userId: row.userId, resource: row.resource },
+        connection,
+      );
+      return connectionGrantPolicy(yield* connectionPolicy(current));
+    }).pipe(
+      Effect.mapError((error) => (error.statusCode === 503 ? error : new APIError("UNAUTHORIZED"))),
+    );
+  const project = (context: GenericEndpointContext, row: typeof Record.Type, target: GrantTarget) =>
+    currentPolicy(context, row, target).pipe(
       Effect.map((policy) =>
         GrantAccess.make({
           userId: row.userId,
@@ -211,7 +308,7 @@ export const grantOAuthPlugins = (settings: GrantOAuthOptions) => {
         return yield* Effect.fail(new APIError("UNAUTHORIZED"));
       const target = yield* targetFor(context, row);
       const audiences = typeof claims.aud === "string" ? [claims.aud] : claims.aud;
-      const audience = target.kind === "api" ? `${origin}/api` : mcpResource(origin, target.mode);
+      const audience = target.kind === "api" ? `${origin}/api` : mcpResource(origin, target);
       if (
         audiences.length !== 1 ||
         audiences[0] !== audience ||
@@ -220,8 +317,7 @@ export const grantOAuthPlugins = (settings: GrantOAuthOptions) => {
       )
         return yield* Effect.fail(new APIError("UNAUTHORIZED"));
       yield* settings.checkResource(context, row.userId, row.resource);
-      const value = yield* project(row, target);
-      return value;
+      return yield* project(context, row, target);
     });
   const revoke = (ctx: GenericEndpointContext, id: GrantId) =>
     Effect.gen(function* () {
@@ -237,6 +333,41 @@ export const grantOAuthPlugins = (settings: GrantOAuthOptions) => {
           ctx.context.adapter.deleteMany({ model, where: [{ field: "referenceId", value: id }] }),
         );
     });
+  /** New grants and tokens for a revoked connection fail; its grants lose their tokens now. */
+  const revokeConnection = (ctx: GenericEndpointContext, row: typeof ConnectionRecord.Type) =>
+    Effect.gen(function* () {
+      yield* authCall(() =>
+        ctx.context.adapter.update({
+          model: "mcpConnection",
+          where: [{ field: "id", value: row.id }],
+          update: { revoked: true, updatedAt: new Date() },
+        }),
+      );
+      yield* authCall(() =>
+        ctx.context.adapter.updateMany({
+          model: "oauthResource",
+          where: [
+            {
+              field: "identifier",
+              operator: "in",
+              value: mcpOAuthResources(origin, row.id).map((item) => item.identifier),
+            },
+          ],
+          update: { disabled: true },
+        }),
+      );
+      const grants = yield* authCall(() =>
+        ctx.context.adapter.findMany({
+          model: "mcpGrant",
+          where: [
+            { field: "connection", value: row.id },
+            { field: "userId", value: row.userId },
+          ],
+        }),
+      ).pipe(Effect.flatMap((rows) => parse(Schema.Array(Record), rows)));
+      yield* Effect.forEach(grants, (grant) => revoke(ctx, grant.id), { discard: true });
+    });
+  const serverOnly = { method: "POST", metadata: { SERVER_ONLY: true } } as const;
   const lookupBrowser = (ctx: GenericEndpointContext) =>
     Effect.gen(function* () {
       const userId = yield* browser(ctx);
@@ -244,7 +375,7 @@ export const grantOAuthPlugins = (settings: GrantOAuthOptions) => {
       const row = yield* get(ctx, id);
       if (row.userId !== userId) return yield* Effect.fail(new APIError("FORBIDDEN"));
       yield* settings.checkResource(ctx, userId, row.resource);
-      return yield* project(row, yield* targetFor(ctx, row));
+      return yield* project(ctx, row, yield* targetFor(ctx, row));
     });
   const plugin = {
     id: "executor-grants",
@@ -260,6 +391,24 @@ export const grantOAuthPlugins = (settings: GrantOAuthOptions) => {
           resource: { type: "string", required: true },
           policy: { type: "string", required: true },
           revoked: { type: "boolean", required: true, defaultValue: false },
+          // Nullable and unreferenced so existing grant rows keep their own policy unchanged.
+          // Better Auth adds columns before creating tables, so a foreign key could not apply.
+          connection: { type: "string", required: false },
+        },
+      },
+      mcpConnection: {
+        fields: {
+          userId: {
+            type: "string",
+            required: true,
+            references: { model: "user", field: "id", onDelete: "cascade" },
+          },
+          resource: { type: "string", required: true },
+          name: { type: "string", required: true },
+          policy: { type: "string", required: true },
+          revoked: { type: "boolean", required: true, defaultValue: false },
+          createdAt: { type: "date", required: true },
+          updatedAt: { type: "date", required: true },
         },
       },
     },
@@ -283,6 +432,133 @@ export const grantOAuthPlugins = (settings: GrantOAuthOptions) => {
           metadata: { SERVER_ONLY: true },
         },
         (ctx) => runAuth(lookupBrowser(ctx)),
+      ),
+      listMcpConnections: createAuthEndpoint(
+        "/mcp/connections/list",
+        { ...serverOnly, body: Schema.toStandardSchemaV1(Schema.Struct(ConnectionOwner)) },
+        (ctx) =>
+          runAuth(
+            Effect.gen(function* () {
+              const rows = yield* authCall(() =>
+                ctx.context.adapter.findMany({
+                  model: "mcpConnection",
+                  where: [
+                    { field: "userId", value: ctx.body.userId },
+                    { field: "resource", value: ctx.body.resource },
+                    { field: "revoked", value: false },
+                  ],
+                  sortBy: { field: "createdAt", direction: "asc" },
+                }),
+              ).pipe(Effect.flatMap((rows) => parse(Schema.Array(ConnectionRecord), rows)));
+              return yield* Effect.forEach(rows, connectionView);
+            }),
+          ),
+      ),
+      createMcpConnection: createAuthEndpoint(
+        "/mcp/connections/create",
+        {
+          ...serverOnly,
+          body: Schema.toStandardSchemaV1(
+            Schema.Struct({
+              ...ConnectionOwner,
+              id: ConnectionId,
+              name: ConnectionName,
+              policy: ConnectionPolicy,
+            }),
+          ),
+        },
+        (ctx) =>
+          runAuth(
+            Effect.gen(function* () {
+              const input = ctx.body;
+              const existing = yield* findConnection(ctx, input.id);
+              // The client chose this ID for one editor, so a retry returns the first result.
+              if (existing !== undefined)
+                return existing.userId === input.userId &&
+                  existing.resource === input.resource &&
+                  !existing.revoked
+                  ? yield* connectionView(existing)
+                  : yield* Effect.fail(new APIError("CONFLICT"));
+              // Resources exist before the URL is shown, so the first authorization can use it.
+              yield* authCall(() =>
+                seedOAuthResources(ctx.context, {
+                  ...options,
+                  resources: mcpOAuthResources(origin, input.id),
+                }),
+              );
+              const now = new Date();
+              const row = yield* authCall(() =>
+                ctx.context.adapter.create({
+                  model: "mcpConnection",
+                  forceAllowId: true,
+                  data: {
+                    id: input.id,
+                    userId: input.userId,
+                    resource: input.resource,
+                    name: input.name,
+                    policy: JSON.stringify(input.policy),
+                    revoked: false,
+                    createdAt: now,
+                    updatedAt: now,
+                  },
+                }),
+              ).pipe(Effect.flatMap((row) => parse(ConnectionRecord, row)));
+              return yield* connectionView(row);
+            }),
+          ),
+      ),
+      updateMcpConnection: createAuthEndpoint(
+        "/mcp/connections/update",
+        {
+          ...serverOnly,
+          body: Schema.toStandardSchemaV1(
+            Schema.Struct({
+              ...ConnectionOwner,
+              id: ConnectionId,
+              name: ConnectionName,
+              policy: ConnectionPolicy,
+            }),
+          ),
+        },
+        (ctx) =>
+          runAuth(
+            Effect.gen(function* () {
+              const input = ctx.body;
+              yield* ownedConnection(ctx, input, input.id);
+              // Connected agents read this record on their next request.
+              const row = yield* authCall(() =>
+                ctx.context.adapter.update({
+                  model: "mcpConnection",
+                  where: [
+                    { field: "id", value: input.id },
+                    { field: "revoked", value: false },
+                  ],
+                  update: {
+                    name: input.name,
+                    policy: JSON.stringify(input.policy),
+                    updatedAt: new Date(),
+                  },
+                }),
+              );
+              if (row === null) return yield* Effect.fail(new APIError("NOT_FOUND"));
+              return yield* connectionView(yield* parse(ConnectionRecord, row));
+            }),
+          ),
+      ),
+      revokeMcpConnection: createAuthEndpoint(
+        "/mcp/connections/revoke",
+        {
+          ...serverOnly,
+          body: Schema.toStandardSchemaV1(Schema.Struct({ ...ConnectionOwner, id: ConnectionId })),
+        },
+        (ctx) =>
+          runAuth(
+            Effect.gen(function* () {
+              const row = yield* ownedConnection(ctx, ctx.body, ctx.body.id);
+              yield* revokeConnection(ctx, row);
+              return { revoked: true };
+            }),
+          ),
       ),
       listMcpGrants: createAuthEndpoint(
         "/mcp/grants",
@@ -327,16 +603,25 @@ export const grantOAuthPlugins = (settings: GrantOAuthOptions) => {
                   ],
                 }),
               );
-              return yield* Effect.forEach(rows, (row) =>
+              const listed = yield* Effect.forEach(rows, (row) =>
                 parse(Record, row).pipe(
                   Effect.flatMap((record) => {
                     const target = targets.get(record.id);
-                    return target === undefined
-                      ? Effect.fail(new APIError("UNAUTHORIZED"))
-                      : project(record, target);
+                    if (target === undefined) return Effect.fail(new APIError("UNAUTHORIZED"));
+                    const current = project(ctx, record, target).pipe(Effect.map(Option.some));
+                    // A grant whose connection was just revoked grants nothing; omit it.
+                    return (record.connection ?? undefined) === undefined
+                      ? current
+                      : current.pipe(
+                          Effect.catchIf(
+                            (error) => error.statusCode === 401,
+                            () => Effect.succeed(Option.none()),
+                          ),
+                        );
                   }),
                 ),
               );
+              return listed.flatMap((item) => (Option.isSome(item) ? [item.value] : []));
             }),
           ),
       ),
@@ -352,8 +637,10 @@ export const grantOAuthPlugins = (settings: GrantOAuthOptions) => {
                 ctx.body,
               );
               const row = yield* get(ctx, id);
-              if (row.userId !== userId) return yield* Effect.fail(new APIError("FORBIDDEN"));
-              const previous = (yield* project(row, yield* targetFor(ctx, row))).grant.policy;
+              // A connection's grants follow the connection; edit the connection instead.
+              if (row.userId !== userId || (row.connection ?? undefined) !== undefined)
+                return yield* Effect.fail(new APIError("FORBIDDEN"));
+              const previous = (yield* project(ctx, row, yield* targetFor(ctx, row))).grant.policy;
               if (
                 !isToolSelectionSubset(previous, policy) ||
                 (previous.kind === "tools" &&
@@ -434,10 +721,29 @@ export const grantOAuthPlugins = (settings: GrantOAuthOptions) => {
                     }),
                   );
                 const policyHeader = ctx.headers?.get("x-executor-grant");
+                const connection =
+                  target.kind === "mcp" && target.connection !== undefined
+                    ? yield* ownedConnection(ctx, { userId }, target.connection).pipe(
+                        Effect.mapError(
+                          (error) =>
+                            new APIError(
+                              error.statusCode === 503 ? "SERVICE_UNAVAILABLE" : "FORBIDDEN",
+                              {
+                                message: "This connection is no longer available.",
+                              },
+                            ),
+                        ),
+                      )
+                    : undefined;
+                // A connection's access comes from its record; the consent page cannot widen it.
+                if (connection !== undefined && policyHeader !== null && policyHeader !== undefined)
+                  return yield* Effect.fail(new APIError("BAD_REQUEST"));
                 const policy =
-                  policyHeader === null || policyHeader === undefined
-                    ? GrantPolicy.make({ kind: "all" })
-                    : yield* parse(Schema.fromJsonString(GrantPolicy), policyHeader);
+                  connection !== undefined
+                    ? connectionGrantPlaceholder
+                    : policyHeader === null || policyHeader === undefined
+                      ? GrantPolicy.make({ kind: "all" })
+                      : yield* parse(Schema.fromJsonString(GrantPolicy), policyHeader);
                 if (
                   target.kind === "mcp" &&
                   policy.kind === "tools" &&
@@ -445,7 +751,7 @@ export const grantOAuthPlugins = (settings: GrantOAuthOptions) => {
                   target.mode !== "browser"
                 )
                   return yield* Effect.fail(new APIError("FORBIDDEN"));
-                const resource = yield* settings.selectResource(ctx, userId);
+                const resource = yield* settings.selectResource(ctx, userId, connection?.resource);
                 const clientId = yield* parse(
                   Schema.NonEmptyString,
                   new URLSearchParams(body.oauth_query).get("client_id"),
@@ -459,6 +765,7 @@ export const grantOAuthPlugins = (settings: GrantOAuthOptions) => {
                       resource,
                       policy: JSON.stringify(policy),
                       revoked: false,
+                      ...(connection === undefined ? {} : { connection: connection.id }),
                     },
                   }),
                 );

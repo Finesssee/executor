@@ -42,20 +42,8 @@ export const staticDocument = (entry?: string) =>
   );
 
 /** Same fast split as the old site: cookie presence chooses the product, never access authority. */
-export const homepage = (cookiePrefix: string, evaluate: HeroFlagEvaluator) =>
-  homepageResponse(
-    cookiePrefix,
-    experimentHomepage(staticDocument, evaluate),
-    // The generated `_headers` file denies framing for every dashboard path, but
-    // `runWorkerFirst` lists "/", and Cloudflare does not apply `_headers` to a
-    // response the Worker produces. This is the one dashboard document the asset
-    // server never serves, so it carries the same denial here.
-    staticDocument("/dashboard.html").pipe(
-      Effect.map((response) =>
-        response.pipe(
-          HttpServerResponse.setHeader("content-security-policy", "frame-ancestors 'none'"),
-          HttpServerResponse.setHeader("x-frame-options", "DENY"),
-        ),
-      ),
-    ),
-  );
+export const homepage = <E, R>(
+  cookiePrefix: string,
+  evaluate: HeroFlagEvaluator,
+  dashboard: Effect.Effect<HttpServerResponse.HttpServerResponse, E, R>,
+) => homepageResponse(cookiePrefix, experimentHomepage(staticDocument, evaluate), dashboard);

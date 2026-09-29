@@ -22,6 +22,7 @@ import {
   Effect,
   FileSystem,
   Layer,
+  Option,
   Path,
   Queue,
   Schema,
@@ -41,6 +42,7 @@ import { runtimeAdapter } from "./runtime.ts";
 
 import { connectedWorkerdApps, workerdHostHandler } from "./workerd-client.ts";
 import { workerdHostModules } from "./workerd-bundle.ts";
+import { appWorkerLimit } from "./app-worker-residency.ts";
 
 /** Existing stores need an explicit migration; opening a new empty store would hide retained app data. */
 export class WorkerdMigrationRequired extends Schema.TaggedError<WorkerdMigrationRequired>()(
@@ -181,6 +183,7 @@ export const workerdApps = (options: {
           }),
           JsonBinding.local("AUTH", secret),
           JsonBinding.local("APPS_PRIVATE_FETCH", privateAppFetch),
+          JsonBinding.local("APP_WORKERS", Option.getOrNull(yield* appWorkerLimit)),
           publicEgressBinding,
           JsonBinding.local("SELF_ORIGIN", options.selfOrigin?.origin ?? ""),
           ...(options.selfOrigin === undefined ? [] : [selfOriginBinding]),

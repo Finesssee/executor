@@ -26,7 +26,8 @@ const packageRuntime = Effect.gen(function* () {
   const alchemyResolve = createRequire(path.join(alchemyRoot, "package.json"));
   yield* fs.remove(output, { recursive: true, force: true });
   yield* fs.makeDirectory(output, { recursive: true });
-  const web = path.join(root, "apps/hosted/self-host/web/dist");
+  // The product Worker bundles the document renderer; only browser files are served from disk.
+  const web = path.join(root, "apps/hosted/self-host/web/dist/client");
   const types: Readonly<Record<string, string>> = {
     ".html": "text/html; charset=utf-8",
     ".js": "text/javascript",
@@ -167,6 +168,25 @@ const packageRuntime = Effect.gen(function* () {
     path.join(output, "motel"),
     { overwrite: true },
   );
+  // The collector shares the product's process and memory limit. Bound what it holds for
+  // exports in flight (4 x 16 MiB) and what it stores; beyond either it refuses and counts.
+  const motelBounds = Object.entries({
+    MOTEL_OTEL_MAX_PENDING_INGEST: 4,
+    MOTEL_OTEL_MAX_INGEST_BYTES: 16 * 1024 * 1024,
+    MOTEL_OTEL_MAX_SPANS: 1_000_000,
+    MOTEL_OTEL_MAX_DB_SIZE_MB: 1024,
+    MOTEL_OTEL_RETENTION_HOURS: 168,
+  })
+    .map(([name, value]) => `(name=${JSON.stringify(name)},text=${JSON.stringify(String(value))})`)
+    .join(",");
+  // Every workflow run is its own Engine durable object, and pinning engines kept every finished
+  // run resident. workerd unloads an engine about 70 s after its last call once no caller holds
+  // it, even with a step in flight; only a run started by create() has a caller holding it. The
+  // patched engine re-arms its alarm every 30 s while a step runs, so runs woken by an alarm, an
+  // event, a resume or a restart keep their engine loaded. Sleeps, retry delays and event waits
+  // resume from durable alarms, so a finished engine leaves memory, and so could a waiting one,
+  // but the host's reconciliation reads every open run every few seconds, which keeps it loaded.
+  const workflowEngines = `(className="Engine",uniqueKey="executor-app-workflows",enableSql=true)`;
   const config = `using Workerd = import "/workerd/workerd.capnp";
 const config :Workerd.Config = (
  extensions=[(modules=[(name="cloudflare-runtime:workflows-wrapped-binding",internal=true,esModule=embed "@@RUNTIME@@/workflow-binding.mjs")])],
@@ -179,17 +199,17 @@ const config :Workerd.Config = (
   )),
   (name="apps",worker=(
    compatibilityDate="2026-07-30",compatibilityFlags=["nodejs_compat"],modules=[${moduleConfig.join(",")}],
-   bindings=[(name="LOADER",workerLoader=()),(name="DATA",durableObjectNamespace="AppDataSupervisor"),(name="AUTH",text="service-binding"),(name="APPS_PRIVATE_FETCH",json="@@APPS_PRIVATE_FETCH@@"),(name="PUBLIC_FETCH",service="public"),(name="SELF_ORIGIN",text=@@SELF_ORIGIN@@),(name="SELF",service=(name="product",entrypoint="SelfOrigin")),(name="HOST",service=(name="product",entrypoint="WorkflowCallbacks")),(name="RUNS",wrapped=(moduleName="cloudflare-runtime:workflows-wrapped-binding",innerBindings=[(name="binding",service=(name="workflows",entrypoint="WorkflowBinding"))]))],
+   bindings=[(name="LOADER",workerLoader=()),(name="DATA",durableObjectNamespace="AppDataSupervisor"),(name="AUTH",text="service-binding"),(name="APPS_PRIVATE_FETCH",json="@@APPS_PRIVATE_FETCH@@"),(name="APP_WORKERS",json="@@APP_WORKERS@@"),(name="PUBLIC_FETCH",service="public"),(name="SELF_ORIGIN",text=@@SELF_ORIGIN@@),(name="SELF",service=(name="product",entrypoint="SelfOrigin")),(name="HOST",service=(name="product",entrypoint="WorkflowCallbacks")),(name="RUNS",wrapped=(moduleName="cloudflare-runtime:workflows-wrapped-binding",innerBindings=[(name="binding",service=(name="workflows",entrypoint="WorkflowBinding"))]))],
    durableObjectNamespaces=[(className="AppDataSupervisor",uniqueKey="executor-app-data",enableSql=true)],durableObjectStorage=(localDisk="app-data")
   )),
   (name="workflows",worker=(
    compatibilityDate="2026-09-01",compatibilityFlags=["experimental","nodejs_compat"],modules=[${workflowModules.join(",")}],
    bindings=[(name="ENGINE",durableObjectNamespace="Engine"),(name="USER_WORKFLOW",service=(name="apps",entrypoint="AppWorkflows")),(name="BINDING_NAME",json=${JSON.stringify(JSON.stringify("executor-app-workflows"))}),(name="WORKFLOW_NAME",json=${JSON.stringify(JSON.stringify("executor-app-workflows"))})],
-   durableObjectNamespaces=[(className="Engine",uniqueKey="executor-app-workflows",enableSql=true,preventEviction=true)],durableObjectStorage=(localDisk="workflow-data")
+   durableObjectNamespaces=[${workflowEngines}],durableObjectStorage=(localDisk="workflow-data")
   )),
   (name="motel",worker=(
    compatibilityDate="2026-09-01",compatibilityFlags=["nodejs_compat"],modules=[(name="motel.mjs",esModule=embed "@@RUNTIME@@/motel/motel.mjs")],
-   bindings=[(name="STORE",durableObjectNamespace="MotelCollector"),(name="ASSETS",service="motel-assets")],
+   bindings=[(name="STORE",durableObjectNamespace="MotelCollector"),(name="ASSETS",service="motel-assets"),${motelBounds}],
    durableObjectNamespaces=[(className="MotelCollector",uniqueKey="motel",enableSql=true)],durableObjectStorage=(localDisk="motel-data")
   )),
   (name="native",external=(address="unix:/tmp/executor-native.sock",http=())),

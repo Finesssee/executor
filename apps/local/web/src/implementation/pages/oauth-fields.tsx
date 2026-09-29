@@ -1,3 +1,4 @@
+import { usePageUrl } from "@executor-js/dashboard-start/page";
 import type { OAuthSubmission } from "@executor-js/ui/contracts/credentials";
 import { useAtomSet } from "@effect/atom-react";
 import type { Atom } from "effect/unstable/reactivity";
@@ -44,6 +45,7 @@ export function OAuthFields({
   readonly onPendingChange?: (pending: boolean) => void;
   readonly disabled?: boolean;
 }) {
+  const page = usePageUrl();
   const start = useAtomSet(startOAuthAtom, { mode: "promiseExit" });
   const startConnection = useAtomSet(startConnectionOAuthAtom, { mode: "promiseExit" });
   const reconnect = useAtomSet(reconnectAccountAtom, { mode: "promiseExit" });
@@ -64,7 +66,7 @@ export function OAuthFields({
           setupAction={action}
           disabled={disabled}
           {...(onPendingChange ? { onPendingChange } : {})}
-          redirectUri={new URL(OAuthCallbackPath, window.location.origin).href}
+          redirectUri={new URL(OAuthCallbackPath, page.origin).href}
           requiresClient={(cause) => {
             const failure = Cause.findErrorOption(cause);
             const required =

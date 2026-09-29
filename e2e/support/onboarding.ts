@@ -141,19 +141,20 @@ const make = Effect.gen(function* () {
           `Choose the identity on the ${provider} emulator`,
           (page) =>
             Promise.all([
+              // The Worker resolves sign-in and opens team setup directly, rendered on the server.
               page.waitForResponse((response) => {
                 const url = new URL(response.url());
                 return (
                   response.request().isNavigationRequest() &&
                   url.origin === target.metadata.origin &&
-                  url.pathname === "/login"
+                  url.pathname === "/create"
                 );
               }),
               page.getByRole("button").filter({ hasText: identity.email }).click(),
             ]).then(([response]) =>
               response.text().then((html) => ({
                 status: response.status(),
-                prepared: html.includes('id="executor-entry"') && html.includes('"path":"/create"'),
+                prepared: html.includes("Create your team") && html.includes("cloud:entry-team:"),
                 private: response.headers()["cache-control"]?.includes("no-store") === true,
               })),
             ),
@@ -182,6 +183,23 @@ const make = Effect.gen(function* () {
           sessionInjected: false,
         });
         return identity;
+      }),
+    /** Sign in with Google as an address that already has an Executor account. */
+    googleSignInAs: (user: {
+      readonly email: string;
+      readonly name: string;
+      readonly picture: string;
+    }) =>
+      Effect.gen(function* () {
+        yield* evidence.step(
+          "Seed a Google profile for the existing email through emulators.dev",
+          emulators.googleUser(user),
+        );
+        yield* openLogin;
+        yield* chooseSocial("google");
+        yield* browser.use("Choose the identity on the google emulator", (page) =>
+          page.getByRole("button").filter({ hasText: user.email }).click(),
+        );
       }),
     delayPreparation: Effect.gen(function* () {
       const arrived = yield* Deferred.make<void>(),

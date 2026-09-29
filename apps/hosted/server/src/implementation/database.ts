@@ -49,7 +49,13 @@ export const postgresExecutor = (
   options?: Partial<
     Pick<
       ExecutorOptions,
-      "storage" | "appStorage" | "webhookOrigin" | "workflows" | "declarations" | "background"
+      | "storage"
+      | "appStorage"
+      | "webhookOrigin"
+      | "workflows"
+      | "declarations"
+      | "toolListings"
+      | "background"
     >
   >,
 ) =>
@@ -64,6 +70,7 @@ export const postgresExecutor = (
       ...(options?.webhookOrigin === undefined ? {} : { webhookOrigin: options.webhookOrigin }),
       ...(options?.appStorage === undefined ? {} : { appStorage: options.appStorage }),
       ...(options?.declarations === undefined ? {} : { declarations: options.declarations }),
+      ...(options?.toolListings === undefined ? {} : { toolListings: options.toolListings }),
       ...(options?.background === undefined ? {} : { background: options.background }),
       blobs,
       sources,

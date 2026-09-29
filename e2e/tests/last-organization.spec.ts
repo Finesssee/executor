@@ -4,7 +4,7 @@ import { TestLive, withCase } from "../support/case.ts";
 import { Browser } from "../support/browser.ts";
 import { Onboarding } from "../support/onboarding.ts";
 import { waitForLastOrganization } from "../support/organization-entry.ts";
-import { SessionHint } from "../support/contracts.ts";
+import { LastOrganization } from "../support/contracts.ts";
 import { scenarios } from "../test-plan.ts";
 
 layer(TestLive, { excludeTestServices: true })("Last active organization", (it) => {
@@ -80,24 +80,26 @@ layer(TestLive, { excludeTestServices: true })("Last active organization", (it) 
         yield* resume({ ...second, slug: renamed });
         yield* browser.checkpoint("Stable identity survives an organization rename");
 
-        const cookies = yield* browser.use("Read the public display hint", (page) =>
+        const cookies = yield* browser.use("Read the saved organization memory", (page) =>
           page.context().cookies(),
         );
-        const cookie = cookies.find((value) => value.name.startsWith("executor-ui"));
-        if (cookie === undefined) throw new Error("The navigation hint is missing");
-        const hint = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(SessionHint))(
+        const cookie = cookies.find((value) => value.name.startsWith("executor-org"));
+        if (cookie === undefined) throw new Error("The organization memory is missing");
+        const saved = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(LastOrganization))(
           decodeURIComponent(cookie.value),
         );
+        expect(saved.organization).toBe(second.id);
         yield* browser.use("Represent a destination that no longer exists", (page) =>
           page.context().addCookies([
             {
               ...cookie,
               value: encodeURIComponent(
-                JSON.stringify({ ...hint, lastOrganization: "missing-entry-test-organization" }),
+                JSON.stringify({ ...saved, organization: "missing-entry-test-organization" }),
               ),
             },
           ]),
         );
+        // The server checks access before opening the saved organization.
         yield* browser.use("Return with the stale destination", (page) => page.goto("/"));
         yield* browser.use(
           "Unavailable remembered organizations fall back without a loop",
@@ -106,15 +108,6 @@ layer(TestLive, { excludeTestServices: true })("Last active organization", (it) 
               .getByRole("heading", { name: "Choose an organization", exact: true })
               .waitFor({ state: "visible" }),
         );
-        const remaining = yield* browser.use("Read the corrected hint", (page) =>
-          page.context().cookies(),
-        );
-        const corrected = remaining.find((value) => value.name === cookie.name);
-        if (corrected === undefined) throw new Error("Recovery removed the signed-in identity");
-        const parsed = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(SessionHint))(
-          decodeURIComponent(corrected.value),
-        );
-        expect(parsed.lastOrganization).toBeUndefined();
         yield* browser.use("The first organization remains available", (page) =>
           page.getByRole("link", { name: first.name, exact: true }).waitFor({ state: "visible" }),
         );

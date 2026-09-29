@@ -3,28 +3,15 @@ import { Effect } from "effect";
 import { Browser } from "./browser.ts";
 import { holdQuery, refreshVisiblePage } from "./query-transition.ts";
 
-/** Keep the first live session check neutral, then show the confirmed signed-out form. */
+/** The server verifies there is no session before sending the sign-in form. */
 export const openSignedOutLogin = (path: string) =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const browser = yield* Browser;
-      const initial = yield* holdQuery(["/api/auth/get-session"], "continue");
-      yield* browser.use("Open sign-in with the first session check held", (page) =>
-        page.goto(path),
-      );
-      yield* initial.requested;
-      expect(
-        yield* browser.use("An unknown session does not display a sign-in form", (page) =>
-          page.getByLabel("Email", { exact: true }).count(),
-        ),
-      ).toBe(0);
-      yield* browser.checkpoint("Initial unknown session stays neutral");
-      yield* initial.release;
-      yield* browser.use("Confirmed sign-out displays the form", (page) =>
-        page.getByLabel("Email", { exact: true }).waitFor({ state: "visible" }),
-      );
-    }),
-  );
+  Effect.gen(function* () {
+    const browser = yield* Browser;
+    yield* browser.use("Open sign-in", (page) => page.goto(path));
+    yield* browser.use("The confirmed sign-out form arrives with the page", (page) =>
+      page.getByLabel("Email", { exact: true }).waitFor({ state: "visible" }),
+    );
+  });
 
 /** Carry a synthetic sign-in draft through pending, failed and recovered session checks. */
 export const retainedDraft = (field: "Password" | "Sign-in code", value: string) =>

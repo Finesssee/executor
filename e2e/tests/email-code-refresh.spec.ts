@@ -1,5 +1,5 @@
 import { expect, layer } from "@effect/vitest";
-import { Effect, Schema } from "effect";
+import { Effect } from "effect";
 import { Browser } from "../support/browser.ts";
 import { TestLive, withCase } from "../support/case.ts";
 import { retainedDraft } from "../support/sign-in-refresh.ts";
@@ -22,31 +22,10 @@ layer(TestLive, { excludeTestServices: true })("Email code refresh", (it) => {
             private: response.headers()["cache-control"]?.includes("no-store"),
           }));
         });
-        expect(document.html).toContain('id="executor-entry"');
-        expect(document.html).toContain('"session":null');
+        // The Worker verified there is no session before rendering; a signed-in visitor is
+        // redirected instead of receiving this form.
+        expect(document.html).toContain('placeholder="Your email address"');
         expect(document.private).toBe(true);
-        yield* browser
-          .use("Cloud verifies sign-out before rendering the form", (page) =>
-            page.evaluate(
-              (html) =>
-                new DOMParser().parseFromString(html, "text/html").getElementById("executor-entry")
-                  ?.textContent,
-              document.html,
-            ),
-          )
-          .pipe(
-            Effect.flatMap(
-              Schema.decodeUnknownEffect(
-                Schema.fromJsonString(
-                  Schema.Struct({
-                    kind: Schema.Literal("page"),
-                    path: Schema.Literal("/login"),
-                    session: Schema.Null,
-                  }),
-                ),
-              ),
-            ),
-          );
         yield* browser.use("Type email", (page) =>
           page.getByLabel("Email", { exact: true }).fill("focus@example.test"),
         );

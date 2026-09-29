@@ -4,14 +4,20 @@ import { Effect, Option, Schema } from "effect";
 import { Atom, AsyncResult } from "effect/unstable/reactivity";
 import {
   OnboardingReady,
-  type OnboardingEntry,
+  OnboardingEntry,
   type CreateTeam,
 } from "../../../src/contracts/onboarding.ts";
 import { CloudClient } from "./billing.ts";
 
 /** Initial setup metadata comes from the private sign-in document, not a second browser request. */
-export const entryTeamAtom = Atom.family((_userId: string) =>
-  Atom.make<Option.Option<typeof OnboardingEntry.Type>>(Option.none()).pipe(Atom.keepAlive),
+export const entryTeamAtom = Atom.family((userId: string) =>
+  Atom.make<Option.Option<typeof OnboardingEntry.Type>>(Option.none()).pipe(
+    Atom.serializable({
+      key: `cloud:entry-team:${userId}`,
+      schema: Schema.Option(OnboardingEntry),
+    }),
+    Atom.keepAlive,
+  ),
 );
 
 /** Explicit refresh discards document data and reads current membership, invitations and suggestions. */

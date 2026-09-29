@@ -1,5 +1,7 @@
 /** Sharing state and mutations are keyed by organization and resource, with confirmed updates. */
-import { pollingQuery } from "@executor-js/ui/contracts/polling";
+import { hydrated } from "@executor-js/ui/contracts/http";
+import { refreshOnFocus } from "@executor-js/ui/contracts/refresh";
+import { pollingQuery, whileLoaded } from "@executor-js/ui/contracts/polling";
 import { Data, Effect } from "effect";
 import { Atom, AsyncResult } from "effect/unstable/reactivity";
 import type { AccountId, AppId, Profile } from "@executor-js/sdk";
@@ -29,20 +31,28 @@ class AccountKey extends Data.Class<{
   readonly account: AccountId;
 }> {}
 const directory = Atom.family((key: DirectoryKey) =>
-  HostedClient.query("resourceAccess", "directory", {
-    params: { organization: key.organization },
-    query: { view: key.view },
-  }).pipe(Atom.refreshOnWindowFocus, pollingQuery, protectedQuery),
+  HostedClient.query(
+    "resourceAccess",
+    "directory",
+    hydrated({
+      params: { organization: key.organization },
+      query: { view: key.view },
+    }),
+  ).pipe(
+    refreshOnFocus,
+    (source) => pollingQuery(source, { active: whileLoaded(({ pendingApp }) => pendingApp) }),
+    protectedQuery,
+  ),
 );
 const appAccess = Atom.family((key: AppKey) =>
-  HostedClient.query("resourceAccess", "app", { params: key }).pipe(
-    Atom.refreshOnWindowFocus,
+  HostedClient.query("resourceAccess", "app", hydrated({ params: key })).pipe(
+    refreshOnFocus,
     protectedQuery,
   ),
 );
 const accountAccess = Atom.family((key: AccountKey) =>
-  HostedClient.query("resourceAccess", "account", { params: key }).pipe(
-    Atom.refreshOnWindowFocus,
+  HostedClient.query("resourceAccess", "account", hydrated({ params: key })).pipe(
+    refreshOnFocus,
     protectedQuery,
   ),
 );

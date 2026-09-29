@@ -1,31 +1,24 @@
-/** Public static shell; every data read still goes through authenticated dashboard routes. */
+/** Rendered dashboard pages and their bundled files; every data read still goes through authenticated routes. */
+import { dashboardDocument, withSameSiteReload } from "@executor-js/dashboard-start/document";
 import { Effect, Path, Schema } from "effect";
 import { HttpRouter, HttpServerResponse } from "effect/unstable/http";
 
-/** Serve the built SPA and its bundled assets from the local host. */
+/** Serve pages rendered in this process and the browser files built beside them. */
 export const webFiles = Effect.gen(function* () {
   const path = yield* Path.Path;
-  const directory = yield* path.fromFileUrl(new URL("../../../web/dist/", import.meta.url));
-  const document = HttpServerResponse.file(path.join(directory, "index.html"), {
-    contentType: "text/html",
-    headers: {
-      "cache-control": "no-store",
-      "x-content-type-options": "nosniff",
-      "referrer-policy": "no-referrer",
-      // The MCP consent page grants credentials on one click, and a same-site
-      // loopback page on any other port would otherwise be able to frame it.
-      "content-security-policy": "frame-ancestors 'none'",
-      "x-frame-options": "DENY",
-    },
-  }).pipe(
-    Effect.catch(() =>
-      Effect.succeed(
-        HttpServerResponse.text(
-          "Dashboard files could not be loaded. Run bun run web:build from the repository root.",
-          { status: 503 },
-        ),
+  const directory = yield* path.fromFileUrl(new URL("../../../web/dist/client/", import.meta.url));
+  // The local session cookie is strict; see `withSameSiteReload`.
+  const document = withSameSiteReload(
+    dashboardDocument({
+      // Loaded on the first page request; API and MCP clients never load React.
+      server: Effect.promise(() => import("@executor-js/local-web/server")).pipe(
+        Effect.map((module) => module.default),
       ),
-    ),
+      // Local pages read their session through the same in-process API as their data.
+      context: () => Effect.succeed({}),
+      // Local pages keep their stricter referrer policy.
+      headers: { "referrer-policy": "no-referrer" },
+    }),
   );
   const favicon = HttpServerResponse.file(path.join(directory, "favicon.png"), {
     contentType: "image/png",

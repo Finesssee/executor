@@ -13,10 +13,12 @@ import { Code } from "@executor-js/ui/dashboard/code";
 import { ToolBrowser } from "@executor-js/ui/dashboard/tools";
 import {
   appToolReadiness,
+  unfilledAccountSlots,
   type AccountSummary,
   type FailureProps,
 } from "@executor-js/ui/contracts/dashboard";
 import { ErrorNotice } from "@executor-js/ui/dashboard/error-notice";
+import { Empty } from "@executor-js/ui/dashboard/common";
 import { AppSectionHeader, AppSectionTitle } from "@executor-js/ui/dashboard/app-section-header";
 import { Button } from "@executor-js/ui/components/button";
 import { Textarea } from "@executor-js/ui/components/textarea";
@@ -54,18 +56,19 @@ export function AppTools({
   };
   if (readiness.state === "not-deployed")
     return <p className="p-5 text-sm text-muted-foreground">Deploy this app to load its tools.</p>;
+  const accountsLink = (
+    <Link
+      to="/org/$organizationSlug/apps/$appId"
+      params={{ organizationSlug, appId: app.id }}
+      search={{ view: "accounts", profile: profile?.id }}
+    >
+      Accounts
+    </Link>
+  );
   if (readiness.state !== "ready")
     return (
       <p className="p-5 text-sm text-muted-foreground">
-        Review the selected accounts in{" "}
-        <Link
-          to="/org/$organizationSlug/apps/$appId"
-          params={{ organizationSlug, appId: app.id }}
-          search={{ view: "accounts", profile: profile?.id }}
-        >
-          Accounts
-        </Link>{" "}
-        to load tools.
+        Review the selected accounts in {accountsLink} to load tools.
       </p>
     );
   return (
@@ -83,6 +86,13 @@ export function AppTools({
         detail={(tool) => toolDetailAtom({ ...catalog, tool: tool.name })}
         Failure={ToolsFailure}
         selected={selected}
+        empty={
+          unfilledAccountSlots(app, profile?.accounts ?? {}).length > 0 ? (
+            <Empty title="No accounts connected">
+              This app lists tools for each connected account. Connect one in {accountsLink}.
+            </Empty>
+          ) : undefined
+        }
         onSelect={(tool) => {
           void navigate({
             to: "/org/$organizationSlug/apps/$appId",

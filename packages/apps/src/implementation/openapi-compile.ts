@@ -9,8 +9,7 @@ import {
   isOpenapiTextMedia,
   openapiBinaryResultSchema,
 } from "../contracts/openapi.ts";
-import "../contracts/swagger-client.ts";
-import SwaggerClient from "swagger-client";
+import { loadSwaggerClient, type SwaggerClient } from "./swagger-client.ts";
 import { OpenapiCompileError as TemplateError } from "../contracts/openapi-compile.ts";
 import type { OpenApiImport } from "../contracts/openapi-document.ts";
 import {
@@ -42,13 +41,14 @@ type Server = { readonly url: string; readonly variables?: JsonObject | undefine
  * omits a variable's declaration uses the document server's declaration of the same name.
  */
 function serverAddress(
+  swagger: SwaggerClient,
   server: Server,
   connectUrl: string | undefined,
   documentServer?: Server,
 ): string {
   const variables = { ...documentServer?.variables, ...server.variables };
   const request = record(
-    SwaggerClient.buildRequest({
+    swagger.buildRequest({
       spec: {
         openapi: "3.1.0",
         servers: [{ url: server.url, variables }],
@@ -208,6 +208,7 @@ export const compileOpenApiDocument = (
   Effect.tryPromise({
     try: async () => {
       const document = await openApiDocument(inputDocument);
+      const swagger = await loadSwaggerClient();
       const { spec } = document;
       const schemes = { ...(options.securitySchemes ?? spec.components?.securitySchemes) };
       const bindings = new Map<string, readonly CredentialBinding[]>();
@@ -332,6 +333,7 @@ export const compileOpenApiDocument = (
           if (serverUrl === undefined)
             fail("server_missing", "The API has no server URL. Set an API base URL and try again.");
           const baseUrl = serverAddress(
+            swagger,
             options.baseUrl === undefined && server !== undefined ? server : { url: serverUrl },
             entry.connectUrl,
             documentServer,
@@ -540,7 +542,7 @@ export const compileOpenApiDocument = (
       let documentOrigin: string | undefined;
       try {
         if (documentServer !== undefined)
-          documentOrigin = new URL(serverAddress(documentServer, entry.connectUrl)).origin;
+          documentOrigin = new URL(serverAddress(swagger, documentServer, entry.connectUrl)).origin;
       } catch (error) {
         if (!(error instanceof TemplateError)) throw error;
       }

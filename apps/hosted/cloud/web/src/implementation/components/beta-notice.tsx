@@ -1,23 +1,16 @@
-import { useState } from "react";
-import { betaNoticeDismissalKey, earlyPreview } from "@executor-js/ui/contracts/early-preview";
+import { useAtom } from "@effect/atom-react";
+import { betaNoticeDismissal, earlyPreview } from "@executor-js/ui/contracts/early-preview";
+import { betaNoticeDismissedAtom } from "../../contracts/beta-notice.ts";
 import { EarlyPreviewNotice } from "@executor-js/ui/components/early-preview-notice";
 import rhysAvatar from "../assets/rhys-sullivan.jpg";
 
-/** Show the cloud beta notice on organization pages until the browser dismisses it. */
+/** Show the cloud beta notice on organization pages until this browser dismisses it. */
 export function BetaNotice() {
-  const [dismissed, setDismissed] = useState(() => {
-    try {
-      return localStorage.getItem(betaNoticeDismissalKey) === "true";
-    } catch {
-      return false;
-    }
-  });
+  const [dismissed, setDismissed] = useAtom(betaNoticeDismissedAtom);
 
   const dismiss = () => {
     setDismissed(true);
-    try {
-      localStorage.setItem(betaNoticeDismissalKey, "true");
-    } catch {}
+    document.cookie = betaNoticeDismissal(location.protocol === "https:");
   };
 
   const openPreview = () => {

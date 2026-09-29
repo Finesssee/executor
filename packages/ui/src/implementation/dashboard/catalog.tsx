@@ -111,7 +111,9 @@ export function CatalogPage<E, P>({
           }}
           placeholder="Search apps…"
         />
-        <span className="muted text-muted-foreground">{entries.length.toLocaleString()} apps</span>
+        <span className="muted text-muted-foreground">
+          {entries.length.toLocaleString("en-US")} apps
+        </span>
       </div>
       {AsyncResult.isFailure(result) && <Failure cause={result.cause} retry={retry} />}
       {AsyncResult.isFailure(publicResult) && (

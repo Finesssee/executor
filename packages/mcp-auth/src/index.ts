@@ -2,8 +2,10 @@
 export {
   GrantId,
   ApprovalMode,
+  ConnectionId,
+  McpAddress,
   GrantTarget,
-  requestedMcpMode,
+  requestedMcpAddress,
   mcpResource,
   mcpOAuthResources,
   grantTarget,
@@ -13,8 +15,7 @@ export {
   Grant,
   AppPermission,
   GrantForbidden,
-  permitsApp,
-  permitsTool,
   permitsDelivery,
+  permitsBrowserApproval,
 } from "./contracts/grant.ts";
 export { restrictMcpBackend } from "./implementation/backend.ts";

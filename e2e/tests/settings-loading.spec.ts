@@ -4,6 +4,7 @@ import { Actors } from "../support/actors.ts";
 import { Browser } from "../support/browser.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { holdQuery } from "../support/query-transition.ts";
+import { openThroughBrowser } from "../support/in-app-navigation.ts";
 import { scenarios } from "../test-plan.ts";
 
 const viewports = [
@@ -23,13 +24,38 @@ layer(HostedLive, { excludeTestServices: true })("Settings page loading", (it) =
           yield* Effect.scoped(
             Effect.gen(function* () {
               yield* browser.use("Set viewport", (page) => page.setViewportSize(viewport));
-              const metadata = yield* holdQuery(["/api/auth/organization/list"], "continue", {
-                allRequests: true,
+              // A document load renders every settings value, member rows included, on the server.
+              const reads: string[] = [];
+              yield* browser.use("Watch member reads", (page) => {
+                page.on("request", (request) => {
+                  if (new URL(request.url()).pathname === "/api/auth/organization/list-members")
+                    reads.push(request.url());
+                });
+                return Promise.resolve();
               });
-              yield* browser.use("Open settings with unknown organization values", (page) =>
+              const response = yield* browser.use("Open settings", (page) =>
                 page.goto(`/org/${actors.organization.slug}/organization`),
               );
-              yield* metadata.requested;
+              if (response === null) throw new Error("Settings did not return a document");
+              const html = yield* browser.use("Read the settings document", () => response.text());
+              expect(html).toContain('aria-label="Members"');
+              // Each member row has a role control named for the member.
+              expect(html).toMatch(/aria-label="Role for [^"@]+@[^"]+"/);
+              expect(reads).toEqual([]);
+              // Opening settings from another page reads members in the browser; the cards around
+              // them keep their places while they load.
+              const members = yield* holdQuery(
+                ["/api/auth/organization/list-members"],
+                "continue",
+                {
+                  allRequests: true,
+                },
+              );
+              yield* openThroughBrowser(
+                "Open settings while members are held",
+                `/org/${actors.organization.slug}/organization`,
+              );
+              yield* members.requested;
               for (const name of [
                 "Organization name",
                 "Organization icon",
@@ -42,6 +68,26 @@ layer(HostedLive, { excludeTestServices: true })("Settings page loading", (it) =
                   ),
                 ).toBe(true);
               }
+              expect(
+                yield* browser.use("The organization name is already known", (page) =>
+                  page
+                    .getByRole("textbox", {
+                      name: "Organization name",
+                      exact: true,
+                    })
+                    .inputValue(),
+                ),
+              ).toMatch(/\S/);
+              expect(
+                yield* browser.use("Only member rows are pending", (page) =>
+                  page
+                    .getByRole("status", {
+                      name: "Loading members",
+                      exact: true,
+                    })
+                    .isVisible(),
+                ),
+              ).toBe(true);
               const before = yield* browser.use("Record static card positions", (page) =>
                 page.locator(".organization-settings h2").evaluateAll((headings) =>
                   headings.map((heading) => ({
@@ -50,25 +96,11 @@ layer(HostedLive, { excludeTestServices: true })("Settings page loading", (it) =
                   })),
                 ),
               );
-              expect(
-                yield* browser.use("Settings values have small placeholders", (page) =>
-                  page.getByLabel("Loading name", { exact: true }).count(),
-                ),
-              ).toBe(1);
-              expect(
-                yield* browser.use("Unloaded settings cannot be saved", (page) =>
-                  page
-                    .getByRole("button", { name: "Save", exact: true })
-                    .evaluateAll((buttons) =>
-                      buttons.every((button) => button.matches(":disabled")),
-                    ),
-                ),
-              ).toBe(true);
-              yield* browser.checkpoint(`${viewport.width} settings values pending`);
-              yield* metadata.release;
-              yield* browser.use("The name input loads", (page) =>
+              yield* browser.checkpoint(`${viewport.width} settings members pending`);
+              yield* members.release;
+              yield* browser.use("Members finish loading", (page) =>
                 page
-                  .getByRole("textbox", { name: "Organization name", exact: true })
+                  .getByRole("table", { name: "Members", exact: true })
                   .waitFor({ state: "visible" }),
               );
               const after = yield* browser.use("Record loaded card positions", (page) =>
@@ -86,11 +118,6 @@ layer(HostedLive, { excludeTestServices: true })("Settings page loading", (it) =
                 if (loaded === undefined) throw new Error("A static settings heading disappeared");
                 expect(Math.abs(loaded.y - heading.y)).toBeLessThanOrEqual(2);
               }
-              yield* browser.use("Members finish loading", (page) =>
-                page
-                  .getByRole("table", { name: "Members", exact: true })
-                  .waitFor({ state: "visible" }),
-              );
               yield* browser.checkpoint(`${viewport.width} settings loaded`);
             }),
           );
@@ -110,16 +137,16 @@ layer(HostedLive, { excludeTestServices: true })("Settings page loading", (it) =
           yield* Effect.scoped(
             Effect.gen(function* () {
               yield* browser.use("Set viewport", (page) => page.setViewportSize(viewport));
-              const metadata = yield* holdQuery(["/api/auth/organization/list"], "continue", {
-                allRequests: true,
-              });
+              // A document load reads tokens on the server; opening the page from another one
+              // reads them in the browser, where they can be held.
               const tokens = yield* holdQuery(["/api/auth/api-key/list"], "continue", {
                 allRequests: true,
               });
-              yield* browser.use("Open API keys while metadata and tokens are held", (page) =>
-                page.goto(`/org/${actors.organization.slug}/api-keys`),
+              yield* openThroughBrowser(
+                "Open API keys while tokens are held",
+                `/org/${actors.organization.slug}/api-keys`,
               );
-              yield* metadata.requested;
+              yield* tokens.requested;
               expect(
                 yield* browser.use(
                   "The API keys heading never becomes Organization settings",
@@ -127,34 +154,35 @@ layer(HostedLive, { excludeTestServices: true })("Settings page loading", (it) =
                     page.getByRole("heading", { name: "API keys", exact: true }).isVisible(),
                 ),
               ).toBe(true);
-              yield* tokens.requested;
               yield* browser.use("Only token values are pending", (page) =>
                 page
-                  .getByRole("status", { name: "Loading tokens", exact: true })
+                  .getByRole("status", {
+                    name: "Loading tokens",
+                    exact: true,
+                  })
                   .waitFor({ state: "visible" }),
               );
               expect(
                 yield* browser.use("Connection instructions are already visible", (page) =>
                   page
-                    .getByRole("heading", { name: "Connect an MCP client", exact: true })
+                    .getByRole("heading", {
+                      name: "Connect an MCP client",
+                      exact: true,
+                    })
                     .isVisible(),
                 ),
               ).toBe(true);
               yield* browser.checkpoint(`${viewport.width} API keys values pending`);
               yield* tokens.release;
-              yield* browser.use("Token data resolves before organization metadata", (page) =>
+              yield* browser.use("Tokens resolve", (page) =>
                 page
-                  .getByRole("status", { name: "Loading tokens", exact: true })
+                  .getByRole("status", {
+                    name: "Loading tokens",
+                    exact: true,
+                  })
                   .waitFor({ state: "hidden" }),
               );
-              expect(
-                yield* browser.use("Create waits for verified organization details", (page) =>
-                  page.getByRole("button", { name: "Create token", exact: true }).isDisabled(),
-                ),
-              ).toBe(true);
-              yield* browser.checkpoint(`${viewport.width} API keys before metadata`);
-              yield* metadata.release;
-              yield* browser.use("Create becomes usable", (page) =>
+              yield* browser.use("Create is usable", (page) =>
                 page.getByRole("button", { name: "Create token", exact: true }).click(),
               );
               yield* browser.use("A token name can be entered", (page) =>

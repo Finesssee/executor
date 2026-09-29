@@ -52,6 +52,10 @@ are banned: do not add `*.test.*`, `*.spec.*`, type tests, `test/` or
 and do not import application implementations into tests. `bun run check` fails
 on any test outside `e2e/`.
 
+The one exception is the Go host in `apps/hosted/self-host/native`. Its
+`go test` suite covers timing races between the host's proxy and workerd that a
+real image cannot hit reliably, and CI runs it in the `self-host-native` job.
+
 Tests are not sacred. Delete a scenario when it no longer proves behavior a user
 or public API caller depends on, or when other scenarios already cover it. Say
 what it covered and why that coverage is not needed. Deletion is not a fix for
@@ -118,9 +122,11 @@ single-threaded PGlite workload. Static checks use 4 vCPUs.
 - `e2e-local` and `e2e-self-host` run `bun run e2e:prepare`, then `e2e:local`
   under `xvfb-run` and `e2e:self-host` headlessly on macOS. The self-host run excludes the Claude
   Code MCP scenario, which needs a model API key that CI does not hold.
-- `e2e-self-host-scale` runs the 1,000-account workload on its own runner, in parallel
-  with the functional jobs. This preserves its four concurrent writers and
-  60-second deadline without competing with 15 independent product servers.
+- `e2e-self-host-scale` runs the 1,000-account workload and then the 7,000-tool MCP
+  catalog scenario and the slow and stalled tool listing scenarios on its own runner,
+  in parallel with the functional jobs. This preserves the four concurrent writers,
+  the catalog and listing latency bounds and the 60-second deadline without competing
+  with 15 independent product servers.
 - `e2e-cloud` runs Cloud onboarding and delivered observability scenarios. It starts the local Cloud
   Worker, a throwaway Postgres container and the service emulators, so it needs
   Docker but no credentials.

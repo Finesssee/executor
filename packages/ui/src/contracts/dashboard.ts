@@ -181,6 +181,12 @@ export function accountSelectionIssues(
     },
   );
 }
+/** Slots that accept many accounts and have none selected. Their tools list empty, not missing. */
+export const unfilledAccountSlots = (app: App, selection: SelectedAccounts): readonly string[] =>
+  Object.keys(app.requirements.accounts).filter((slot) => {
+    const selected = selection[slot];
+    return typeof selected !== "string" && selected?.length === 0;
+  });
 /** Account metadata can block tool discovery; missing credential-health metadata makes no claim. */
 export function appToolReadiness<A extends AccountSummary>(
   app: App,
@@ -216,11 +222,3 @@ export function providerDisplayUrl(definition: ProviderDefinition | undefined): 
     }
   return null;
 }
-/** A consistent short date for account/source metadata. */
-export const displayDate = (value: Date) =>
-  value.toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });

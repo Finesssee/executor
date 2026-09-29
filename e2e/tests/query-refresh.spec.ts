@@ -1,3 +1,4 @@
+import { openThroughBrowser } from "../support/in-app-navigation.ts";
 import { expect, layer } from "@effect/vitest";
 import { Effect } from "effect";
 import { randomUUID } from "node:crypto";
@@ -127,8 +128,9 @@ export default defineApp({ accounts: {} }, async () => ({
         );
         yield* browser.login(actors.owner);
         const first = yield* holdQuery(paths, "fail");
-        yield* browser.use("Open the app with its first read held", (page) =>
-          page.goto(`/org/${actors.organization.slug}/apps/${app.id}?view=settings`),
+        yield* openThroughBrowser(
+          "Open the app with its first read held",
+          `/org/${actors.organization.slug}/apps/${app.id}?view=settings`,
         );
         yield* first.requested;
         yield* browser.use("Initial data has a content skeleton", (page) =>

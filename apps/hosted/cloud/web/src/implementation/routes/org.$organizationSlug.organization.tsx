@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { OrganizationPage } from "@executor-js/hosted-web/pages/organization";
 import { DeleteOrganization } from "../components/delete-organization.tsx";
@@ -9,7 +10,11 @@ export const Route = createFileRoute("/org/$organizationSlug/organization")({
   component: () => (
     <OrganizationPage emailInvitations footer={<DeleteOrganization />}>
       <BillingSettings />
-      <SsoSettings />
+      {/* Only enterprise plans show this card, and its plan check calls the billing provider;
+          the rest of the page does not wait for it. */}
+      <Suspense fallback={null}>
+        <SsoSettings />
+      </Suspense>
     </OrganizationPage>
   ),
 });

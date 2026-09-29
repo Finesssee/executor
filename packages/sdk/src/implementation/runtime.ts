@@ -1,5 +1,5 @@
 /** Public Promise boundary for host-supplied runtime implementations. */
-import { Effect, Option, Schema } from "effect";
+import { Clock, Effect, Option, Schema } from "effect";
 import {
   HostAccountsInvalid,
   ResolvedAccounts,
@@ -10,7 +10,13 @@ import {
   type AppSkillSource,
   type ResolvedAccountsInput,
 } from "apps/contracts";
-import type { BuiltApp, Runtime, RuntimeAsset } from "../contracts/runtime.ts";
+import {
+  AppCacheChanges,
+  type BuiltApp,
+  type Runtime,
+  type RuntimeAsset,
+} from "../contracts/runtime.ts";
+import type { DeclarationCache } from "../contracts/declarations.ts";
 import type { SourceFiles } from "../contracts/deployment.ts";
 import type { BuildId, Json } from "../contracts/shared.ts";
 import { BlobStore, type BlobStorage } from "../contracts/blobs.ts";
@@ -150,11 +156,27 @@ export const createAppRuntime = (options: {
   };
 };
 
-/** Provide the host store without changing caller cancellation, tracing, or resource scopes. */
-export const toEffectRuntime = (definition: AppRuntime, blobs: BlobStorage): Runtime => {
+/**
+ * Provide the host store without changing caller cancellation, tracing, or resource scopes. App
+ * cache changes the runtime reports forget that app's kept results in `declarations`.
+ */
+export const toEffectRuntime = (
+  definition: AppRuntime,
+  blobs: BlobStorage,
+  declarations?: DeclarationCache,
+): Runtime => {
   const runtime = definition[NativeRuntime];
   const asset = runtime.asset;
-  const provide = Effect.provideService(BlobStore, {
+  const changes =
+    declarations === undefined
+      ? undefined
+      : {
+          changed: (app: string) =>
+            Clock.currentTimeMillis.pipe(Effect.map((at) => declarations.changed(app, at))),
+        };
+  const observe = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    changes === undefined ? effect : Effect.provideService(effect, AppCacheChanges, changes);
+  const store = Effect.provideService(BlobStore, {
     get: (key) =>
       blobs.get(key).pipe(
         Effect.tap((body) =>
@@ -173,6 +195,7 @@ export const toEffectRuntime = (definition: AppRuntime, blobs: BlobStorage): Run
       ),
     remove: (key) => blobs.remove(key).pipe(Effect.withSpan("storage.blob.remove")),
   });
+  const provide = <A, E, R>(effect: Effect.Effect<A, E, R>) => observe(store(effect));
   return {
     ...(runtime.changes === undefined ? {} : { changes: runtime.changes }),
     build: (input) => runtime.build(input).pipe(provide),

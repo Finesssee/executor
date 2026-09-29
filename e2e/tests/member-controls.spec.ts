@@ -1,3 +1,4 @@
+import { openThroughBrowser } from "../support/in-app-navigation.ts";
 import { createProfile, selectProfileAccounts } from "../support/profiles.ts";
 /** Members keep a stable app overview and discover restricted actions without gaining authority. */
 import { expect, layer } from "@effect/vitest";
@@ -159,8 +160,9 @@ layer(HostedLive, { excludeTestServices: true })("Member controls", (it) => {
                   "continue",
                   { allRequests: true },
                 );
-                yield* browser.use("Open member overview before permissions resolve", (page) =>
-                  page.goto(`${url}?view=overview`),
+                yield* openThroughBrowser(
+                  "Open member overview before permissions resolve",
+                  `${url}?view=overview`,
                 );
                 yield* authority.requested;
                 yield* inventory.requested;

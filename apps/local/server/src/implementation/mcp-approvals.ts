@@ -1,4 +1,5 @@
-import { GrantId, permitsTool, permitsDelivery } from "@executor-js/mcp-auth";
+import { GrantId, permitsBrowserApproval, restrictMcpBackend } from "@executor-js/mcp-auth";
+import { localMcpBackend } from "./mcp.ts";
 import type { LocalMcpOAuth } from "./mcp-oauth.ts";
 import type { Executor } from "@executor-js/sdk/core";
 /** Browser approval access uses paired dashboard cookies, never the programmatic bearer key. */
@@ -50,13 +51,22 @@ export const localMcpApproval = (
             target: { kind: "mcp" as const, mode: "browser" as const },
           }
         : (yield* oauth.browserGrant(headers, query.grantId)).grant;
-    if (!permitsDelivery(grant, "browser")) return HttpServerResponse.empty({ status: 403 });
+    if (!permitsBrowserApproval(grant)) return HttpServerResponse.empty({ status: 403 });
     const view = yield* approvals.get(grant.id, address);
     if (view.status === "pending") {
       const tool =
         view.request.status === "approval-required" ? view.request.invocation : view.request.tool;
-      if (!permitsTool(grant.policy, tool.app, tool.tool))
-        return HttpServerResponse.empty({ status: 403 });
+      // The same grant checks as the MCP route, including runs-as targets and read-only tools.
+      const allowed = yield* restrictMcpBackend<Error, never>(
+        localMcpBackend(executor),
+        Effect.succeed(grant),
+      )
+        .authorizeElicitation(tool)
+        .pipe(
+          Effect.as(true),
+          Effect.catchTag("ElicitationFailed", () => Effect.succeed(false)),
+        );
+      if (!allowed) return HttpServerResponse.empty({ status: 403 });
     }
     if (request.method !== "POST") {
       if (view.status !== "pending") return HttpServerResponse.jsonUnsafe(view);

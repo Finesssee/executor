@@ -1,3 +1,4 @@
+import { usePageUrl } from "@executor-js/dashboard-start/page";
 import { OrganizationMembersPending } from "./organization-members.tsx";
 import type { ReactNode } from "react";
 import { Button } from "@executor-js/ui/components/button";
@@ -19,6 +20,7 @@ export const organizationSettingClass =
 
 /** Render known settings copy and controls, with placeholders only for server values. */
 export function OrganizationSettingsPending({ children }: { readonly children?: ReactNode }) {
+  const page = usePageUrl();
   return (
     <PageFrame>
       <PageHeader
@@ -77,7 +79,7 @@ export function OrganizationSettingsPending({ children }: { readonly children?: 
           <CardContent>
             <div className="flex w-[min(100%,_520px)] min-w-0 items-center overflow-hidden rounded-[6px] border border-input">
               <span className="max-w-[50%] shrink-0 overflow-hidden text-ellipsis whitespace-nowrap border-r border-input px-[10px] py-[7px] text-xs text-muted-foreground">
-                {window.location.host}/org/
+                {page.host}/org/
               </span>
               <div className="flex h-8.5 min-w-0 flex-1 items-center px-3 max-[740px]:min-h-11 max-[640px]:h-9.5">
                 <Skeleton className="h-3.5 w-24 max-w-full" aria-label="Loading organization URL" />

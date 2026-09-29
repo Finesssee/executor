@@ -34,6 +34,15 @@ const errorMessage = Match.type<HostedError>().pipe(
           "Personal accounts stay private. Connect a shared account to give your team access.",
       })[reason],
     ScheduleNotFound: () => "This schedule or run is no longer available.",
+    ConnectionNotFound: () => "This connection was revoked or no longer exists.",
+    ConnectionIdTaken: () => "This connection could not be created. Close the form and try again.",
+    ConnectionAccessInvalid: ({ reason }) =>
+      ({
+        app: "An included app is no longer available to you. Remove it and try again.",
+        profile: "A selected profile is no longer available. Choose how the app runs again.",
+        account: "A selected account is no longer available for this app. Choose another one.",
+        target: "Choose how each included app runs.",
+      })[reason],
     ScheduleConflict: () =>
       "The schedule is busy or changed. Check its current status and try again.",
     ScheduleInvalid: () => "Update the interval or calendar timing in the app source.",
@@ -92,6 +101,7 @@ const errorMessage = Match.type<HostedError>().pipe(
     InputInvalid: () => "The input does not match this tool’s schema.",
     AppProviderFailed: (error) => `${error.description} ${error.recovery.action}`,
     AppEvaluationFailed: (error) => `${error.description} ${error.recovery.action}`,
+    ToolListingTimedOut: (error) => `${error.description} ${error.recovery.action}`,
     ToolNotFound: () => "This tool is no longer available. Reload the app’s tools and try again.",
     ToolBlocked: () => "The tool's approval policy blocked this tool call. The tool did not run.",
     ToolApprovalRequired: () =>

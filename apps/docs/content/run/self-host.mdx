@@ -27,7 +27,12 @@ These settings override the defaults:
 | `EXECUTOR_ENVIRONMENT`               | no       | Label for this deployment. The default is `self-host`.                   |
 | `EXECUTOR_APP_UI_BASE_URL`           | no       | HTTPS origin that serves app web pages. See below.                       |
 | `EXECUTOR_APPS_ALLOW_PRIVATE_FETCH`  | no       | Let app code reach your private network. See below.                      |
+| `EXECUTOR_APP_WORKERS` | no | Most app Workers kept loaded at once, besides one data Worker per app with a database. The default is `32`. See below. |
 | `EXECUTOR_REGISTRY_URL`              | no       | Origin of the public app registry. The default is `https://v2.executor.sh`. |
+| `EXECUTOR_TOOL_LISTING_FRESH_SECONDS` | no     | Reuse an app's evaluated tool list this long before refreshing it in the background. The default is `30`. |
+| `EXECUTOR_TOOL_LISTING_MAX_AGE_SECONDS` | no  | Never serve an evaluated tool list older than this; `0` evaluates every list. The default is `60`. |
+| `EXECUTOR_TOOL_LISTING_LOAD_SECONDS` | no     | Stop evaluating an app's tool list after this long when no request is waiting for it; capped at the maximum age. The default is `45`. |
+| `EXECUTOR_EVALUATION_MEMORY_MB`      | no       | Memory for kept tool lists and app declarations. The default is `256`.  |
 | `SSO_DISCOVERY_URL`                  | no       | OIDC discovery document. Leave it empty to keep SSO off.                 |
 | `SSO_CLIENT_ID`, `SSO_CLIENT_SECRET` | no       | Credentials for that identity provider.                                  |
 | `SSO_ALLOWED_DOMAINS`                | no       | Comma-separated email domains allowed to join through SSO.               |
@@ -39,6 +44,19 @@ that origin resolves to a private address, such as a Tailscale name. To let app
 code reach other private addresses, set `EXECUTOR_APPS_ALLOW_PRIVATE_FETCH=true`.
 The default is `false`. Every app in the instance shares that network position,
 so grant it deliberately.
+
+Each app runs in its own Worker for each set of accounts it is called with, and
+each loaded Worker holds its own memory. The server keeps at most
+`EXECUTOR_APP_WORKERS` of them loaded. When more are needed, it unloads the
+ones idle longest; their next call loads them again, which takes longer than a
+call to a loaded Worker. A Worker that is still handling a call is never
+unloaded. Raise the limit if many apps are used at the same time and the
+server has memory to spare; lower it on a small machine.
+
+Apps with a database also keep one data Worker loaded each, for the accounts
+they were last called with. These are not counted against
+`EXECUTOR_APP_WORKERS`, so add one Worker per app with a database when you size
+memory.
 
 `BETTER_AUTH_URL` must match the scheme, host and port you actually use. If it
 does not, browser sign-in is rejected as an invalid origin. Railway detection uses `RAILWAY_PUBLIC_DOMAIN`. Origins are never inferred
@@ -102,7 +120,12 @@ The key files are readable only by the server user. Back up the whole volume.
 
 Motel stores telemetry separately at `/app/motel-data`. Replacing the container
 discards that telemetry by default. Mount a separate volume there if you need
-to retain it.
+to retain it. Motel keeps telemetry until the first of three bounds is reached:
+seven days, one million spans or 1 GiB, evicting the oldest traces first. A busy
+server reaches 1 GiB first, so it may keep only the last hours or minutes of
+traces. When exports arrive faster than Motel can store them, it refuses the
+excess rather than holding it in memory, and it counts every export it does not
+store. The server log reports those losses.
 
 If you supply keys through environment variables, keep those values in your
 secret manager as well; Executor does not save those overrides to disk. Keep

@@ -1,4 +1,4 @@
-import { createProfile } from "../support/profiles.ts";
+import { createProfile, Profile } from "../support/profiles.ts";
 import { expect, layer } from "@effect/vitest";
 import { Effect, Schema } from "effect";
 import { randomUUID } from "node:crypto";
@@ -254,6 +254,85 @@ layer(HostedLive, { excludeTestServices: true })("Empty state recovery", (it) =>
           ).toBe(true);
           yield* browser.checkpoint(`Member empty ${tab}`);
         }
+      }),
+    ),
+  );
+
+  it.effect(scenarios.emptyAccountTools.title, (context) =>
+    withHostedCase(
+      context,
+      Effect.gen(function* () {
+        const api = yield* Api,
+          actors = yield* Actors,
+          browser = yield* Browser;
+        const prefix = `/api/organizations/${actors.organization.id}`;
+        const deployed = yield* body(
+          App,
+          yield* api.request(actors.owner, "POST", `${prefix}/apps/deploy`, {
+            name: `Per-account tools ${randomUUID().slice(0, 8)}`,
+            files: [
+              {
+                path: "index.ts",
+                content: `import { accountOperations, defineApp, defineProvider, object, secrets, string } from "apps";
+const service = defineProvider({ name: "Per-account service", auth: { key: secrets({ label: "API key", fields: object({ token: string() }) }) } });
+export default defineApp({ accounts: { service: service.many() } }, async ({ accounts, signal }) =>
+  accountOperations(accounts.service, async () => ({ queries: {} }), { signal }));`,
+              },
+            ],
+          }),
+        );
+        yield* Effect.addFinalizer(() =>
+          api.request(actors.owner, "DELETE", `${prefix}/apps/${deployed.id}`).pipe(Effect.orDie),
+        );
+        // A many-account slot with nothing selected is a valid profile, so tool discovery runs
+        // and the app lists nothing. The page must ask for an account rather than report no tools.
+        const profile = yield* body(
+          Profile,
+          yield* api.request(actors.owner, "POST", `${prefix}/apps/${deployed.id}/profiles`, {
+            accounts: { service: [] },
+            idempotencyKey: randomUUID(),
+          }),
+        );
+        expect(profile.accounts).toEqual({ service: [] });
+        yield* browser.login(actors.owner);
+        yield* browser.use("Use dark theme", (page) => page.emulateMedia({ colorScheme: "dark" }));
+        yield* browser.use("Open the tools of a profile without accounts", (page) =>
+          page.goto(
+            `/org/${actors.organization.slug}/apps/${deployed.id}?view=tools&profile=${profile.id}`,
+          ),
+        );
+        yield* browser.use("Tools ask for an account", (page) =>
+          page.getByRole("heading", { name: "No accounts connected", exact: true }).waitFor(),
+        );
+        expect(
+          yield* browser.use("Tools do not claim the app exposes nothing", (page) =>
+            page.getByRole("heading", { name: "No tools", exact: true }).count(),
+          ),
+        ).toBe(0);
+        yield* browser.checkpoint("Tools ask for an account");
+        yield* browser.use("The account step is one click away", (page) =>
+          page
+            .locator(".tools-section")
+            .getByRole("link", { name: "Accounts", exact: true })
+            .click(),
+        );
+        yield* browser.use("Accounts opens for the same profile", (page) =>
+          page.waitForURL(
+            (url) =>
+              url.searchParams.get("view") === "accounts" &&
+              url.searchParams.get("profile") === profile.id,
+          ),
+        );
+        yield* browser.use("Open the overview of a profile without accounts", (page) =>
+          page.goto(`/org/${actors.organization.slug}/apps/${deployed.id}?profile=${profile.id}`),
+        );
+        yield* browser.use("The overview tools card asks for an account", (page) =>
+          page
+            .getByRole("region", { name: "App tools preview", exact: true })
+            .getByRole("heading", { name: "No accounts connected", exact: true })
+            .waitFor(),
+        );
+        yield* browser.checkpoint("Overview tools ask for an account");
       }),
     ),
   );

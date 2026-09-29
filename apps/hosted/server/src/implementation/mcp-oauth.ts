@@ -21,7 +21,18 @@ import {
   type OAuthResourceSeedContext,
 } from "@executor-js/mcp-auth/oauth";
 import { AuthenticationUnavailable, Unauthorized } from "../contracts/auth.ts";
-import { McpAccess, McpForbidden, McpUnauthorized } from "../contracts/mcp.ts";
+import {
+  McpAccess,
+  McpForbidden,
+  McpUnauthorized,
+  type McpConnectionStore,
+} from "../contracts/mcp.ts";
+import {
+  Connection,
+  ConnectionIdTaken,
+  ConnectionNotFound,
+  type ConnectionPolicy,
+} from "@executor-js/mcp-auth/connections";
 import {
   OrganizationForbidden,
   OrganizationId,
@@ -74,11 +85,20 @@ const hostedGrantOAuth = (origin: string) =>
       ...mcpOAuthResources(origin),
       { identifier: `${origin}/api`, allowedScopes: ["executor", "offline_access"] },
     ],
-    selectResource: (ctx, userId) =>
+    selectResource: (ctx, userId, required) =>
       Effect.gen(function* () {
+        const header = ctx.headers?.get("x-executor-organization") ?? undefined;
+        // A connection belongs to one organization. The consent page may omit the choice,
+        // but it cannot name a different organization.
         const organization = yield* Schema.decodeUnknownEffect(OrganizationId)(
-          ctx.headers?.get("x-executor-organization"),
+          required ?? header,
         ).pipe(Effect.mapError(() => new APIError("BAD_REQUEST")));
+        if (required !== undefined && header !== undefined && header !== required)
+          return yield* Effect.fail(
+            new APIError("FORBIDDEN", {
+              message: "This connection belongs to a different organization.",
+            }),
+          );
         yield* membership(ctx.context, userId, organization);
         return organization;
       }),
@@ -344,3 +364,79 @@ export const apiAuthenticationError = (cause: unknown) =>
     : isAPIError(cause) && (cause.statusCode === 400 || cause.statusCode === 401)
       ? new Unauthorized()
       : new AuthenticationUnavailable();
+
+type ConnectionBody = {
+  userId: string;
+  resource: string;
+  id: string;
+  name: string;
+  policy: typeof ConnectionPolicy.Encoded;
+};
+/** The server-only Better Auth endpoints that store connections. */
+export interface McpConnectionApi {
+  readonly listMcpConnections: (input: {
+    body: { userId: string; resource: string };
+  }) => Promise<unknown>;
+  readonly createMcpConnection: (input: { body: ConnectionBody }) => Promise<unknown>;
+  readonly updateMcpConnection: (input: { body: ConnectionBody }) => Promise<unknown>;
+  readonly revokeMcpConnection: (input: {
+    body: { userId: string; resource: string; id: string };
+  }) => Promise<unknown>;
+}
+const storeFailure = (cause: unknown) =>
+  isAPIError(cause) ? cause.statusCode : ("unavailable" as const);
+/**
+ * Adapt a host's native auth instance to the connection store. Results cross the Better Auth
+ * boundary and are parsed again; missing records and storage outages stay distinct.
+ */
+export const mcpConnectionStore = (
+  call: <A>(run: (api: McpConnectionApi) => Promise<A>) => Effect.Effect<A, unknown>,
+): McpConnectionStore => {
+  const request = <A>(
+    run: (api: McpConnectionApi) => Promise<unknown>,
+    schema: Schema.Decoder<A>,
+  ) =>
+    call(run).pipe(
+      Effect.mapError(storeFailure),
+      Effect.flatMap((value) =>
+        Schema.decodeUnknownEffect(schema)(value).pipe(
+          Effect.mapError(() => "unavailable" as const),
+        ),
+      ),
+    );
+  const unavailable = () => new AuthenticationUnavailable();
+  return {
+    list: (owner) =>
+      request((api) => api.listMcpConnections({ body: owner }), Schema.Array(Connection)).pipe(
+        Effect.mapError(unavailable),
+      ),
+    create: (owner, input) =>
+      request((api) => api.createMcpConnection({ body: { ...owner, ...input } }), Connection).pipe(
+        Effect.mapError((status) =>
+          status === 409
+            ? new ConnectionIdTaken({ connection: input.id })
+            : new AuthenticationUnavailable(),
+        ),
+      ),
+    update: (owner, input) =>
+      request((api) => api.updateMcpConnection({ body: { ...owner, ...input } }), Connection).pipe(
+        Effect.mapError((status) =>
+          status === 404
+            ? new ConnectionNotFound({ connection: input.id })
+            : new AuthenticationUnavailable(),
+        ),
+      ),
+    revoke: (owner, id) =>
+      request(
+        (api) => api.revokeMcpConnection({ body: { ...owner, id } }),
+        Schema.Struct({ revoked: Schema.Literal(true) }),
+      ).pipe(
+        Effect.asVoid,
+        Effect.mapError((status) =>
+          status === 404
+            ? new ConnectionNotFound({ connection: id })
+            : new AuthenticationUnavailable(),
+        ),
+      ),
+  };
+};

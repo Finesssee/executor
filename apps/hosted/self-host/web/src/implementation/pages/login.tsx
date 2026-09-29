@@ -1,9 +1,10 @@
+import { usePageUrl } from "@executor-js/dashboard-start/page";
 import { useAtomRefresh, useAtomSet, useAtomValue } from "@effect/atom-react";
 import { AuthFailed, sessionAtom } from "@executor-js/hosted-web/contracts/auth";
 import {
   ContinueAfterSignIn,
   LoginLegalFooter,
-  loginSearch,
+  type LoginProps,
 } from "@executor-js/hosted-web/pages/login";
 import { Button } from "@executor-js/ui/components/button";
 import { Input } from "@executor-js/ui/components/input";
@@ -19,11 +20,9 @@ import {
 import { productTitle, useDocumentTitle } from "@executor-js/ui/hooks/document-title";
 
 /** Password login and first-run setup; only an operator-configured SSO button is shown. */
-export function SelfHostLoginPage({
-  redirect,
-  error: callbackError,
-}: ReturnType<typeof loginSearch>) {
+export function SelfHostLoginPage({ redirect, error: callbackError }: LoginProps) {
   useDocumentTitle(productTitle("Sign in"));
+  const page = usePageUrl();
   const config = useAtomValue(configurationAtom);
   const session = useAtomValue(sessionAtom);
   const refreshSession = useAtomRefresh(sessionAtom);
@@ -49,8 +48,7 @@ export function SelfHostLoginPage({
     return (
       <ContinueAfterSignIn
         redirect={
-          submittedKind === "setup" &&
-          new URL(redirect, window.location.origin).pathname !== "/mcp/authorize"
+          submittedKind === "setup" && new URL(redirect, page.origin).pathname !== "/mcp/authorize"
             ? "/setup/agent"
             : submittedKind === "invite"
               ? "/"
@@ -75,7 +73,7 @@ export function SelfHostLoginPage({
         <p role="alert">Unable to load sign-in settings. Reload to try again.</p>
       </main>
     );
-  const invitation = new URL(redirect, location.origin).searchParams.get("invitation");
+  const invitation = new URL(redirect, page.origin).searchParams.get("invitation");
   const setup = config.value.setup;
   const registration = setup || (joining && invitation !== null);
   const complete = async (input: SelfHostSignIn) => {

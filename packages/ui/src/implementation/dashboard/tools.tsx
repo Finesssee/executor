@@ -26,12 +26,15 @@ export function ToolBrowser<E>({
   selected,
   onSelect,
   renderAction,
+  empty,
 }: QueryProps<readonly ToolSummary[], E> & {
   /** Undefined when the tool left the catalog after the list was read. */
   readonly detail: (tool: ToolSummary) => Query<Tool | undefined, E>;
   readonly selected: string | undefined;
   readonly onSelect: (tool: string) => void;
   readonly renderAction?: (tool: ToolSummary) => ReactNode;
+  /** Replaces the empty catalog message when the host knows why the app listed nothing. */
+  readonly empty?: ReactNode;
 }) {
   const { result, data, refresh } = useQuery(query);
   const [search, setSearch] = useState("");
@@ -130,7 +133,11 @@ export function ToolBrowser<E>({
                 <span className="text-muted-foreground">0</span>
               </AppSectionHeader>
               <div className="p-6">
-                <Empty title="No tools">This app's live definition did not expose any tools.</Empty>
+                {empty ?? (
+                  <Empty title="No tools">
+                    This app's live definition did not expose any tools.
+                  </Empty>
+                )}
               </div>
             </>
           ) : (

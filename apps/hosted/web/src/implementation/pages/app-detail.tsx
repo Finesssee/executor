@@ -1,3 +1,4 @@
+import { usePreload } from "@executor-js/dashboard-start/registry";
 import { AppResources } from "./app-resources.tsx";
 import { AppAccounts } from "./app-accounts.tsx";
 import { ProfileResources } from "@executor-js/ui/dashboard/profile-resources";
@@ -19,7 +20,11 @@ import { ProfilePicker } from "@executor-js/ui/dashboard/profile-picker";
 import { ProfileStatus } from "@executor-js/ui/dashboard/profile-status";
 import { AppAccessSettings } from "./resource-settings.tsx";
 import { appAccessAtom } from "../../contracts/resource-access.ts";
-import { accountSelectionIssues, type AppView } from "@executor-js/ui/contracts/dashboard";
+import {
+  accountSelectionIssues,
+  unfilledAccountSlots,
+  type AppView,
+} from "@executor-js/ui/contracts/dashboard";
 import { AppSchedules } from "@executor-js/ui/dashboard/schedules";
 import { scheduleBindings } from "../../contracts/schedules.ts";
 import { AppDetailLoading, OverviewCardLoading } from "@executor-js/ui/dashboard/app-loading";
@@ -34,6 +39,14 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { ArrowLeft02Icon } from "@hugeicons/core-free-icons";
 import { Button } from "@executor-js/ui/components/button";
 import { Skeleton } from "@executor-js/ui/components/skeleton";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogTitle,
+  DialogTrigger,
+} from "@executor-js/ui/components/dialog";
 import type { HostedError } from "../../contracts/errors.ts";
 import { RenameApp } from "@executor-js/ui/dashboard/rename-app";
 import { CopyApp } from "@executor-js/ui/dashboard/copy-app";
@@ -83,6 +96,12 @@ export function AppDetailPage({
     enableBeforeUnload: skillDirty,
   });
   const atoms = useDashboardAtoms();
+  usePreload(
+    atoms.inventory,
+    liveAppAtom({ organization, app: appId }),
+    profilesAtom({ organization, app: appId }),
+    appAccessAtom({ organization, app: appId }),
+  );
   const inventory = useQuery(atoms.inventory);
   const query = useQuery(liveAppAtom({ organization, app: appId }));
   const app = Option.isSome(query.data)
@@ -492,6 +511,11 @@ export function AppDetailPage({
                                   app={current}
                                   Failure={HostedFailure}
                                   empty={previewEmpty}
+                                  accountsNeeded={previewContexts.every(
+                                    (context) =>
+                                      unfilledAccountSlots(context.app, context.accounts).length >
+                                      0,
+                                  )}
                                   sources={previewContexts.map((context) => ({
                                     key: context.key,
                                     query: toolsAtom({
@@ -571,40 +595,58 @@ function DeleteApp({ app }: { readonly app: App }) {
   const { organization, slug: organizationSlug } = useOrganizationRoute();
   const remove = useAtomSet(removeAppAtom({ organization, app: app.id }), { mode: "promiseExit" });
   const navigate = useNavigate();
-  const [confirm, setConfirm] = useState(false);
+  const [open, setOpen] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string>();
-  return confirm ? (
-    <div className="delete-confirm max-w-85 text-[13px] [&_.form-actions]:mt-2.5">
-      <p>
-        Delete {app.name} and its app data? Saved accounts and copies installed by others are kept.
-      </p>
-      <div className="form-actions flex items-center gap-5 pt-1 text-[13px] [&_a]:text-muted-foreground max-[740px]:[&_>_a]:min-h-11 max-[740px]:[&_>_a]:inline-flex max-[740px]:[&_>_a]:items-center max-[740px]:flex-wrap max-[740px]:gap-[12px_20px]">
-        <Button
-          variant="destructive"
-          loading={pending}
-          onClick={async () => {
-            setPending(true);
-            const result = await remove();
-            setPending(false);
-            if (Exit.isFailure(result)) setError(appError(result.cause));
-            else {
-              await navigate({ to: "/org/$organizationSlug/apps", params: { organizationSlug } });
-            }
-          }}
-        >
-          Delete
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (pending) return;
+        setOpen(next);
+        setError(undefined);
+      }}
+    >
+      <DialogTrigger asChild>
+        <Button variant="destructive" size="sm">
+          Delete app
         </Button>
-        <Button variant="outline" onClick={() => setConfirm(false)}>
-          Cancel
-        </Button>
-      </div>
-      {error && <p role="alert">{error}</p>}
-    </div>
-  ) : (
-    <Button variant="destructive" size="sm" onClick={() => setConfirm(true)}>
-      Delete app
-    </Button>
+      </DialogTrigger>
+      <DialogContent className="sm:max-w-[440px]">
+        <DialogTitle>Delete app?</DialogTitle>
+        <p className="text-sm font-medium">{app.name}</p>
+        <DialogDescription>
+          This permanently removes the app and its saved data. Connected accounts and copies
+          installed by others are kept.
+        </DialogDescription>
+        {error && (
+          <p role="alert" className="text-sm text-destructive">
+            {error}
+          </p>
+        )}
+        <DialogFooter>
+          <Button variant="outline" disabled={pending} onClick={() => setOpen(false)}>
+            Cancel
+          </Button>
+          <Button
+            variant="destructive"
+            loading={pending}
+            onClick={async () => {
+              setPending(true);
+              setError(undefined);
+              const result = await remove();
+              setPending(false);
+              if (Exit.isFailure(result)) setError(appError(result.cause));
+              else {
+                await navigate({ to: "/org/$organizationSlug/apps", params: { organizationSlug } });
+              }
+            }}
+          >
+            Delete app
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

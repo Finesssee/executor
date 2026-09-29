@@ -4,7 +4,7 @@ import { tagline, introduction } from "../../content/site-copy";
 import { heroVariants, type HeroVariant } from "../../content/hero-experiment";
 import DocBody from "./doc-body.astro";
 import EarlyPreviewNotice from "../early-preview-notice.astro";
-import { betaNoticeDismissalKey, earlyPreview } from "@executor-js/ui/contracts/early-preview";
+import { betaNoticeDismissalCookie, earlyPreview } from "@executor-js/ui/contracts/early-preview";
 
 interface Props { variant?: HeroVariant }
 const { variant = heroVariants[0] } = Astro.props;
@@ -15,12 +15,10 @@ const GH = "https://github.com/UsefulSoftwareCo/executor";
   title={`Executor — ${tagline}`}
   description={introduction}
 >
-  <script is:inline slot="banner" define:vars={{ betaNoticeDismissalKey }}>
-    try {
-      if (localStorage.getItem(betaNoticeDismissalKey) === "true") {
-        document.documentElement.dataset.betaNoticeDismissed = "true";
-      }
-    } catch {}
+  <script is:inline slot="banner" define:vars={{ betaNoticeDismissalCookie }}>
+    if (document.cookie.split(/;\s*/).includes(`${betaNoticeDismissalCookie}=dismissed`)) {
+      document.documentElement.dataset.betaNoticeDismissed = "true";
+    }
   </script>
   <aside
     slot="banner"
@@ -41,13 +39,11 @@ const GH = "https://github.com/UsefulSoftwareCo/executor";
 </RailLayout>
 
 <script>
-  import { betaNoticeDismissalKey } from "@executor-js/ui/contracts/early-preview";
+  import { betaNoticeDismissal } from "@executor-js/ui/contracts/early-preview";
 
   document.querySelector<HTMLButtonElement>("[data-beta-notice-dismiss]")?.addEventListener("click", () => {
     document.querySelector<HTMLElement>("[data-beta-notice]")?.setAttribute("hidden", "");
-    try {
-      localStorage.setItem(betaNoticeDismissalKey, "true");
-    } catch {}
+    document.cookie = betaNoticeDismissal(location.protocol === "https:");
   });
 </script>
 

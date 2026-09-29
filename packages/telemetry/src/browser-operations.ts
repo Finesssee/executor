@@ -52,7 +52,8 @@ const observe = <A, E, R>(effect: Effect.Effect<A, E, R>, name: string) =>
             "error.type": kind,
             "executor.error.expected": expected,
           });
-          if (!interrupted && !expected)
+          // The browser's error reporter listens for this; the server records the span itself.
+          if (!interrupted && !expected && typeof window !== "undefined")
             window.dispatchEvent(
               new CustomEvent("executor:operation-failed", {
                 detail: {

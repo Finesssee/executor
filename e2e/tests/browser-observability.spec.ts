@@ -5,7 +5,7 @@ import { scenarios } from "../test-plan.ts";
 import {
   awaitSentry,
   injectDashboardResponse,
-  corruptDashboardEntry,
+  incompleteDashboardDocument,
   docsCopyFailure,
   docsPageActionsChunk,
   failDocsCopy,
@@ -111,11 +111,12 @@ layer(HostedLive, { excludeTestServices: true })("Browser observability", (it) =
         yield* browser.use("Restore the dashboard entry module", (page) =>
           page.unroute("**/assets/main-*.js"),
         );
-        yield* corruptDashboardEntry(actors.organization.slug);
+        yield* incompleteDashboardDocument(actors.organization.slug);
         const boot = yield* awaitSentry(
           (event) =>
-            event.exception?.values.some((value) => value.value === "Invalid entry document") ===
-            true,
+            event.exception?.values.some(
+              (value) => value.value === "Dashboard document is incomplete",
+            ) === true,
         );
         yield* evidence.json("boot-failure.json", boot);
         yield* browser.use("Open documentation", (page) => page.goto("/docs/"));

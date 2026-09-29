@@ -1,10 +1,11 @@
+import { dashboardHttpClient, hydrated } from "@executor-js/ui/contracts/http";
 import { observeBrowserTransport, observeBrowserResponse } from "@executor-js/telemetry/browser";
 import { DashboardRuntime } from "./telemetry.ts";
 import { LocalAppManagementApi } from "@executor-js/local-server/app-management";
-import { DashboardApi } from "@executor-js/local-server/contracts";
+import { DashboardApi, DashboardOverview } from "@executor-js/local-server/contracts";
 import type { AppId, DeploymentId, ProfileId } from "@executor-js/sdk";
 import { Cause, Clock, Data, Effect, Option, Schedule, Schema, Stream } from "effect";
-import { FetchHttpClient, HttpClientError } from "effect/unstable/http";
+import { HttpClientError } from "effect/unstable/http";
 import { AsyncResult, Atom, AtomHttpApi } from "effect/unstable/reactivity";
 import { accountNeedsSignIn } from "./dashboard.ts";
 import { acknowledgedQuery, currentQuery } from "@executor-js/ui/contracts/mutations";
@@ -12,7 +13,7 @@ import { acknowledgedQuery, currentQuery } from "@executor-js/ui/contracts/mutat
 /** The browser uses the same schemas and route definitions as the local product server. */
 export class DashboardClient extends AtomHttpApi.Service<DashboardClient>()("DashboardClient", {
   api: DashboardApi.addHttpApi(LocalAppManagementApi),
-  httpClient: FetchHttpClient.layer,
+  httpClient: dashboardHttpClient,
   runtime: DashboardRuntime,
   transformClient: observeBrowserTransport,
   transformResponse: observeBrowserResponse,
@@ -85,11 +86,27 @@ const liveOverviewAtom = liveQueryAtom(
   Effect.flatMap(DashboardClient, (client) => client.dashboard.liveOverview()),
 );
 
+/**
+ * The snapshot a server render displayed, sent with the page. The browser shows it until its own
+ * live subscription delivers a snapshot, instead of a loading state.
+ */
+const renderedOverviewAtom = Atom.make<Option.Option<DashboardOverview>>(Option.none()).pipe(
+  Atom.serializable({ key: "local:overview", schema: Schema.Option(DashboardOverview) }),
+  Atom.keepAlive,
+);
+
 /** Repaint at the next known expiry without polling the server or loading every app's tools. */
 export const overviewAtom = acknowledgedQuery(
   Atom.readable(
     (get) => {
-      const result = get(liveOverviewAtom);
+      const live = get(liveOverviewAtom);
+      if (typeof window === "undefined" && AsyncResult.isSuccess(live))
+        get.set(renderedOverviewAtom, Option.some(live.value));
+      const rendered = get(renderedOverviewAtom);
+      const result =
+        AsyncResult.isInitial(live) && Option.isSome(rendered)
+          ? AsyncResult.success(rendered.value)
+          : live;
       const data = AsyncResult.value(result);
       const now = Effect.runSync(Clock.currentTimeMillis);
       if (Option.isSome(data)) {
@@ -132,7 +149,7 @@ export const appAtom = Atom.family((app: AppId) =>
 /** Immutable retained source follows the deployment selected by its live app atom. */
 export const sourceAtom = Atom.family(
   (key: { readonly app: AppId; readonly deployment: DeploymentId }) =>
-    DashboardClient.query("dashboard", "sourceDisplay", { params: key }),
+    DashboardClient.query("dashboard", "sourceDisplay", hydrated({ params: key })),
 );
 class SourceFileKey extends Data.Class<{
   readonly app: AppId;
@@ -140,10 +157,14 @@ class SourceFileKey extends Data.Class<{
   readonly path: string;
 }> {}
 const sourceFileQuery = Atom.family((key: SourceFileKey) =>
-  DashboardClient.query("dashboard", "sourceDisplayFile", {
-    params: { app: key.app, deployment: key.deployment },
-    query: { path: key.path },
-  }).pipe(Atom.setIdleTTL("5 minutes")),
+  DashboardClient.query(
+    "dashboard",
+    "sourceDisplayFile",
+    hydrated({
+      params: { app: key.app, deployment: key.deployment },
+      query: { path: key.path },
+    }),
+  ).pipe(Atom.setIdleTTL("5 minutes")),
 );
 /** One display file of a retained deployment, read when the listing did not inline it. */
 export const sourceFileAtom = (key: ConstructorParameters<typeof SourceFileKey>[0]) =>

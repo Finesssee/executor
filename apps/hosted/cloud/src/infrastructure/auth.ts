@@ -24,17 +24,19 @@ import {
   lookupOrganizationSlug,
   resolveOrganizationReference,
   mcpAuthenticationError,
+  mcpConnectionStore,
   ApiAuthentication,
   apiAuthenticationError,
 } from "@executor-js/hosted-server";
-import { BetterAuth, BetterAuthApiError, isAPIErrorLike } from "@alchemy.run/better-auth";
+import { betterAuth } from "better-auth";
+import { BetterAuthApiError, isAPIErrorLike } from "@alchemy.run/better-auth";
 import { cloudSessionCookiePrefix } from "../contracts/browser.ts";
 import { RuntimeContext } from "alchemy";
-import { Context, Effect, Layer, Option, Schema, type Scope } from "effect";
+import { Context, Effect, Layer, Option, Redacted, Schema, type Scope } from "effect";
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import type { SendAuthEmail } from "../contracts/email.ts";
 import { cloudSecrets } from "./secrets.ts";
-import { authQueryAdapter, bindAuthQueries } from "./auth-database.ts";
+import { AuthDatabase, boundAuthAdapter } from "./auth-database.ts";
 
 /** Bind during initialization; database calls capture the current invocation only. */
 export const cloudAuth = (send: SendAuthEmail) =>
@@ -103,41 +105,50 @@ export const cloudAuth = (send: SendAuthEmail) =>
           ),
         ),
     );
-    const auth = yield* BetterAuth({
-      ...options,
-      plugins: [...options.plugins, observation.plugin],
-      // Cookies use hostnames, not ports; cloud dev must not replace self-host sessions.
-      advanced: {
-        ...options.advanced,
-        cookiePrefix: cloudSessionCookiePrefix(settings.url),
-        // The deployment migration validates the schema. Alchemy owns a fresh auth
-        // instance per event; repeating Kysely introspection would delay every read.
-        database: { ...options.advanced.database, validateSchema: false },
-      },
-      secret: secrets.authSecret,
-      migrate: false,
-    });
-    // Better Auth work runs as Promise code. Bind it to the calling span so each
-    // auth SQL timing span is a child of the operation that issued the query.
-    const nativeCall = <A>(call: (instance: Effect.Success<typeof auth.auth>) => Promise<A>) =>
-      auth.auth.pipe(
-        Effect.provide(RuntimeContext.phantom),
-        Effect.flatMap((instance) =>
-          Effect.flatMap(bindAuthQueries, (bind) =>
-            Effect.tryPromise({ try: () => bind(() => call(instance)), catch: (error) => error }),
-          ),
+    const database = yield* AuthDatabase;
+    const makeInstance = (secret: string) =>
+      betterAuth({
+        ...options,
+        plugins: [...options.plugins, observation.plugin],
+        database: database.options,
+        secret,
+        // Cookies use hostnames, not ports; cloud dev must not replace self-host sessions.
+        advanced: {
+          ...options.advanced,
+          cookiePrefix: cloudSessionCookiePrefix(settings.url),
+          // The deployment migration validates the schema; runtime reads skip introspection.
+          database: { ...options.advanced.database, validateSchema: false },
+          backgroundTasks: { handler: database.background },
+        },
+      });
+    // One Better Auth instance per isolate, like a long-running server's. Its options,
+    // plugins and endpoints hold no request state: request context travels through
+    // `callbacks`, and every call binds its own invocation's pool through `database`.
+    // The signing secret is deployment configuration, read in the first invocation.
+    let instance: ReturnType<typeof makeInstance> | undefined;
+    const native = secrets.authSecret.pipe(
+      Effect.map((secret) => (instance ??= makeInstance(Redacted.value(secret)))),
+    );
+    // Better Auth work runs as Promise code on this invocation's pool, bound to the
+    // calling span so each auth SQL timing span is a child of the operation that issued it.
+    const bound = Effect.all([native, database.bind]).pipe(Effect.provide(RuntimeContext.phantom));
+    const nativeCall = <A>(call: (instance: ReturnType<typeof makeInstance>) => Promise<A>) =>
+      bound.pipe(
+        Effect.flatMap(([instance, bind]) =>
+          Effect.tryPromise({ try: () => bind(() => call(instance)), catch: (error) => error }),
         ),
-        // The same failure contract as Alchemy's `auth.api` wrappers.
         Effect.catch((error) =>
           isAPIErrorLike(error)
             ? Effect.fail(BetterAuthApiError.fromAPIError(error))
             : Effect.die(error),
         ),
       );
-    const adapter = auth.auth.pipe(
+    const authContext = Effect.flatMap(native, (instance) =>
+      Effect.promise(() => instance.$context),
+    );
+    const adapter = Effect.all([authContext, database.bind]).pipe(
+      Effect.map(([context, bind]) => boundAuthAdapter(context.adapter, bind)),
       Effect.provide(RuntimeContext.phantom),
-      Effect.flatMap((instance) => Effect.promise(() => instance.$context)),
-      Effect.flatMap((context) => authQueryAdapter(context.adapter)),
     );
     const identity = Layer.effect(
       Authentication,
@@ -168,15 +179,12 @@ export const cloudAuth = (send: SendAuthEmail) =>
               .pipe(Effect.flatMap((adapter) => resolveOrganizationReference(adapter, reference)))
               .pipe(Effect.withSpan("auth.organization")),
           organizationSlug: (headers, organizationId) =>
-            auth.auth
+            bound
               .pipe(
-                Effect.provide(RuntimeContext.phantom),
-                Effect.flatMap((native) =>
-                  Effect.flatMap(bindAuthQueries, (bind) =>
-                    lookupOrganizationSlug(() =>
-                      bind(() =>
-                        native.api.getOrganization({ headers, query: { organizationId } }),
-                      ),
+                Effect.flatMap(([instance, bind]) =>
+                  lookupOrganizationSlug(() =>
+                    bind(() =>
+                      instance.api.getOrganization({ headers, query: { organizationId } }),
                     ),
                   ),
                 ),
@@ -201,35 +209,41 @@ export const cloudAuth = (send: SendAuthEmail) =>
         return McpAuthentication.of({
           origin: settings.url,
           authenticate: (headers, mode, organization) =>
-            auth.auth
+            bound
               .pipe(
-                Effect.provide(RuntimeContext.phantom),
-                Effect.flatMap((native) =>
-                  Effect.flatMap(bindAuthQueries, (bind) =>
-                    Effect.tryPromise({
-                      try: () =>
-                        bind(() =>
-                          native.api.getMcpAccess({ headers, query: { mode, organization } }),
-                        ),
-                      catch: mcpAuthenticationError,
-                    }),
-                  ),
+                Effect.flatMap(([instance, bind]) =>
+                  Effect.tryPromise({
+                    try: () =>
+                      bind(() =>
+                        instance.api.getMcpAccess({ headers, query: { mode, organization } }),
+                      ),
+                    catch: mcpAuthenticationError,
+                  }),
                 ),
               )
               .pipe(Effect.withSpan("auth.authenticate")),
           browserGrant: (headers, id) =>
-            auth.auth.pipe(
-              Effect.provide(RuntimeContext.phantom),
-              Effect.flatMap((native) =>
+            bound.pipe(
+              Effect.flatMap(([instance, bind]) =>
                 Effect.tryPromise({
-                  try: () => native.api.getMcpBrowserAccess({ headers, body: { id } }),
+                  try: () =>
+                    bind(() => instance.api.getMcpBrowserAccess({ headers, body: { id } })),
                   catch: mcpAuthenticationError,
                 }),
               ),
             ),
-          metadata: auth.api.getOAuthServerConfig().pipe(
-            Effect.provide(RuntimeContext.phantom),
+          metadata: nativeCall((instance) => instance.api.getOAuthServerConfig()).pipe(
             Effect.mapError(() => new AuthenticationUnavailable()),
+          ),
+          connections: mcpConnectionStore((run) =>
+            bound.pipe(
+              Effect.flatMap(([instance, bind]) =>
+                Effect.tryPromise({
+                  try: () => bind(() => run(instance.api)),
+                  catch: (cause) => cause,
+                }),
+              ),
+            ),
           ),
         });
       }),
@@ -240,17 +254,14 @@ export const cloudAuth = (send: SendAuthEmail) =>
         return ApiAuthentication.of({
           origin: settings.url,
           authenticate: (headers, organization) =>
-            auth.auth
+            bound
               .pipe(
-                Effect.provide(RuntimeContext.phantom),
-                Effect.flatMap((native) =>
-                  Effect.flatMap(bindAuthQueries, (bind) =>
-                    Effect.tryPromise({
-                      try: () =>
-                        bind(() => native.api.getApiAccess({ headers, query: { organization } })),
-                      catch: apiAuthenticationError,
-                    }),
-                  ),
+                Effect.flatMap(([instance, bind]) =>
+                  Effect.tryPromise({
+                    try: () =>
+                      bind(() => instance.api.getApiAccess({ headers, query: { organization } })),
+                    catch: apiAuthenticationError,
+                  }),
                 ),
               )
               .pipe(Effect.withSpan("auth.authenticate")),
@@ -259,27 +270,33 @@ export const cloudAuth = (send: SendAuthEmail) =>
     );
     const appSessions = Layer.effect(
       HostedAppSessions,
-      auth.auth.pipe(
-        Effect.provide(RuntimeContext.phantom),
-        Effect.flatMap((native) =>
-          Effect.tryPromise({
-            try: () => native.$context,
-            catch: () => new AuthenticationUnavailable(),
-          }),
+      Effect.all([authContext, database.bind]).pipe(
+        Effect.map(([context, bind]) =>
+          hostedAppSessions(
+            {
+              internalAdapter: boundAuthAdapter(context.internalAdapter, bind),
+              adapter: boundAuthAdapter(context.adapter, bind),
+            },
+            globalThis.crypto,
+          ),
         ),
-        Effect.map((context) => hostedAppSessions(context, globalThis.crypto)),
+        Effect.provide(RuntimeContext.phantom),
         Effect.withSpan("auth.app_sessions.initialize"),
       ),
     );
-    const requestHandler = Effect.flatMap(
-      Effect.context<RuntimeContext | HttpServerRequest.HttpServerRequest | Scope.Scope>(),
-      (context) =>
-        Effect.promise((signal) =>
-          callbacks.run({ context, signal }, () =>
-            Effect.runPromiseExit(auth.fetch.pipe(Effect.provideContext(context)), { signal }),
-          ),
-        ).pipe(Effect.flatten),
-    );
+    const requestHandler = Effect.gen(function* () {
+      const request = yield* HttpServerRequest.HttpServerRequest;
+      const web = yield* HttpServerRequest.toWeb(request).pipe(Effect.orDie);
+      const [instance, bind] = yield* bound;
+      const context = yield* Effect.context<
+        RuntimeContext | HttpServerRequest.HttpServerRequest | Scope.Scope
+      >();
+      // Better Auth returns API errors as responses; it rejects only on defects.
+      const response = yield* Effect.promise((signal) =>
+        callbacks.run({ context, signal }, () => bind(() => instance.handler(web))),
+      );
+      return HttpServerResponse.fromWeb(response);
+    });
     const handler = observation
       .observe(requestHandler)
       .pipe(
@@ -288,13 +305,15 @@ export const cloudAuth = (send: SendAuthEmail) =>
       );
     return {
       browserSession: (headers: Headers) =>
-        auth.api
-          .getSession({ headers, query: { disableRefresh: true, disableCookieCache: true } })
-          .pipe(
-            Effect.provide(RuntimeContext.phantom),
-            Effect.flatMap(Schema.decodeUnknownEffect(BrowserSession)),
-            Effect.mapError(() => new AuthenticationUnavailable()),
-          ),
+        nativeCall((instance) =>
+          instance.api.getSession({
+            headers,
+            query: { disableRefresh: true, disableCookieCache: true },
+          }),
+        ).pipe(
+          Effect.flatMap(Schema.decodeUnknownEffect(BrowserSession)),
+          Effect.mapError(() => new AuthenticationUnavailable()),
+        ),
       identity,
       mcpIdentity,
       apiIdentity,

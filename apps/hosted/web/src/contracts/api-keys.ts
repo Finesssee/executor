@@ -1,7 +1,9 @@
+import { dashboardHttpClient, hydratedResult } from "@executor-js/ui/contracts/http";
+import { refreshOnFocus } from "@executor-js/ui/contracts/refresh";
 import { observeBrowserUsage } from "./product-analytics.ts";
 import { Effect, Schema } from "effect";
-import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http";
-import { Atom } from "effect/unstable/reactivity";
+import { HttpClient, HttpClientRequest } from "effect/unstable/http";
+import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import {
   ApiKeyPage,
   CreatedApiKey,
@@ -62,27 +64,34 @@ const request = <A>(
       ),
     ),
     (work) => observeBrowserUsage("api_keys", operation, work),
-    Effect.provide(FetchHttpClient.layer),
+    Effect.provide(dashboardHttpClient),
   );
 
 /** User-owned token metadata; session changes invalidate cached reads. */
-export const apiKeysAtom = Atom.family((offset: number) =>
+const apiKeyPageAtom = Atom.family((offset: number) =>
   BrowserAtoms.atom((get) => {
     get(sessionAtom);
-    return request("list", offset, ApiKeyPage).pipe(
-      Effect.map((page) => ({
+    return request("list", offset, ApiKeyPage);
+  }).pipe(
+    hydratedResult({ key: `hosted:api-keys:${offset}`, success: ApiKeyPage, error: ApiKeyFailed }),
+  ),
+);
+export const apiKeysAtom = Atom.family((offset: number) =>
+  Atom.readable(
+    (get) =>
+      AsyncResult.map(get(apiKeyPageAtom(offset)), (page) => ({
         ...page,
         apiKeys: page.apiKeys.map((key) => ({
           ...key,
           status: !key.enabled
-            ? "Disabled"
+            ? ("Disabled" as const)
             : key.expiresAt !== null && new Date(key.expiresAt).getTime() <= Date.now()
-              ? "Expired"
-              : "Active",
+              ? ("Expired" as const)
+              : ("Active" as const),
         })),
       })),
-    );
-  }).pipe(Atom.refreshOnWindowFocus),
+    (refresh) => refresh(apiKeyPageAtom(offset)),
+  ).pipe(refreshOnFocus),
 );
 /** Creation returns a redacted token; the page keeps it only in the one-time copy dialog. */
 export const createApiKeyAtom = BrowserAtoms.fn((input: typeof CreateApiKey.Type) =>

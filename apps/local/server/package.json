@@ -26,6 +26,8 @@
     "@executor-js/app-source": "workspace:*",
     "@executor-js/app-templates": "workspace:*",
     "@executor-js/catalog": "workspace:*",
+    "@executor-js/dashboard-start": "workspace:*",
+    "@executor-js/local-web": "workspace:*",
     "@executor-js/mcp": "workspace:*",
     "@executor-js/mcp-auth": "workspace:*",
     "@executor-js/sdk": "workspace:*",

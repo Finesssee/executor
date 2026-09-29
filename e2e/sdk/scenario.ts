@@ -44,11 +44,16 @@ export const prepareScenario = (
   });
 
 /** Start an isolated product instance for single-organization hosts, or namespace a shared Cloud stage. */
-export const startScenario = (base: typeof Target.Service, label: string, id?: string) =>
+export const startScenario = (
+  base: typeof Target.Service,
+  label: string,
+  id?: string,
+  environment?: Readonly<Record<string, string>>,
+) =>
   Effect.gen(function* () {
     const target = yield* prepareScenario(base, label, id);
     if (base.metadata.target === "cloud") return target;
-    const server = yield* startManagedServer(target);
+    const server = yield* startManagedServer(target, "product", environment);
     return Target.of({
       ...target,
       controlOrigin: server.controlOrigin,

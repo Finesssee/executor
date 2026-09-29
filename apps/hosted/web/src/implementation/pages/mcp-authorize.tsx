@@ -1,3 +1,4 @@
+import { usePageUrl } from "@executor-js/dashboard-start/page";
 import { EmptyState } from "@executor-js/ui/dashboard/empty-state";
 import { reportBrowserUsage } from "../../contracts/product-analytics.ts";
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
@@ -24,11 +25,12 @@ import { organizationsAtom } from "../../contracts/organization.ts";
 
 /** The user approves the URL's requested connection. App/tool scoping remains a backend capability. */
 export function McpAuthorizePage() {
+  const page = usePageUrl();
   // Keep the signed query intact; repeated OAuth fields must not be reserialized by the router.
-  const query = window.location.search.slice(1),
+  const query = page.search.slice(1),
     params = new URLSearchParams(query);
   const clientId = params.get("client_id") ?? "";
-  const target = grantTarget(window.location.origin, params.getAll("resource"));
+  const target = grantTarget(page.origin, params.getAll("resource"));
   const destination = consentDestination(params.get("redirect_uri"));
   const client = useAtomValue(mcpClientAtom(clientId));
   const organizations = useAtomValue(organizationsAtom);
@@ -38,11 +40,17 @@ export function McpAuthorizePage() {
   const [error, setError] = useState<string | null>(null);
   const available = AsyncResult.isSuccess(organizations) ? organizations.value : [];
   const organization = selected || available[0]?.id || "";
+  // A scoped connection belongs to one organization; the server binds consent to it.
+  const scoped = target?.kind === "mcp" && target.connection !== undefined;
   const decide = async (accept: boolean) => {
     const action = accept ? "approve_connection" : "decline_connection";
     reportBrowserUsage({ area: "mcp", action, outcome: "started" });
     setError(null);
-    const result = await consent({ accept, organization, query });
+    const result = await consent({
+      accept,
+      organization: scoped ? undefined : organization,
+      query,
+    });
     reportBrowserUsage({
       area: "mcp",
       action,
@@ -79,7 +87,7 @@ export function McpAuthorizePage() {
         </p>
       }
     >
-      {available.length > 0 && (
+      {available.length > 0 && !scoped && (
         <div className="mcp-consent-organization grid gap-2 text-[13px] [font-weight:550] [&_[data-slot='select-trigger']]:w-full">
           <label htmlFor="mcp-organization">Organization</label>
           <Select value={organization} onValueChange={setSelected} disabled={state.waiting}>
@@ -114,7 +122,7 @@ export function McpAuthorizePage() {
         </Button>
         {available.length > 0 && (
           <Button
-            disabled={organization === "" || state.waiting}
+            disabled={(!scoped && organization === "") || state.waiting}
             loading={state.waiting}
             onClick={() => decide(true)}
           >

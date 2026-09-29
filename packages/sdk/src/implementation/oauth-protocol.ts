@@ -193,19 +193,30 @@ const metadata = (server: OAuthTokenServer): oauth.AuthorizationServer => ({
     : { token_endpoint_auth_methods_supported: [...server.token_endpoint_auth_methods_supported] }),
 });
 
+const basicAuth =
+  (secret: string, encode: (value: string) => string): oauth.ClientAuth =>
+  (_server, registered, _body, headers) => {
+    headers.set(
+      "authorization",
+      `Basic ${Encoding.encodeBase64(new TextEncoder().encode(`${encode(registered.client_id)}:${encode(secret)}`))}`,
+    );
+  };
+
+/**
+ * RFC 6749 section 2.3.1 form-encodes Basic credentials. The URL Standard's serializer leaves
+ * letters, digits and `*-._` as they are. Servers that decode read the same values, and
+ * Doorkeeper, which compares the header literally, accepts the IDs and secrets it issues.
+ */
+const formEncode = (value: string) => new URLSearchParams([["", value]]).toString().slice(1);
+
 const clientAuth = (client: OAuthRegistration) => {
   switch (client.token_endpoint_auth_method) {
     case "none":
       return oauth.None();
     case "client_secret_basic":
-      return oauth.ClientSecretBasic(client.client_secret);
+      return basicAuth(client.client_secret, formEncode);
     case "client_secret_basic_raw":
-      return ((_server, registered, _body, headers) => {
-        headers.set(
-          "authorization",
-          `Basic ${Encoding.encodeBase64(new TextEncoder().encode(`${registered.client_id}:${client.client_secret}`))}`,
-        );
-      }) satisfies oauth.ClientAuth;
+      return basicAuth(client.client_secret, (value) => value);
     case "client_secret_post":
       return oauth.ClientSecretPost(client.client_secret);
   }
@@ -618,15 +629,18 @@ export const makeOAuthProtocol = (options: OAuthOptions) => {
             new Response(registrationBody(text), { status: 201, headers: response.headers }),
           );
         });
-        if (
-          registered.token_endpoint_auth_method !== undefined &&
-          registered.token_endpoint_auth_method !== advertised
-        )
+        const issued = registered.token_endpoint_auth_method;
+        if (issued === undefined || issued === advertised)
+          return yield* decode(OAuthRegistration, {
+            ...registered,
+            token_endpoint_auth_method: method,
+          });
+        // RFC 7591 section 3.2.1: the server may replace requested metadata, and the client
+        // uses what was issued. Vercel registers a public client when asked for a secret one.
+        // A method the app configured is a requirement, so a replacement there is a mismatch.
+        if (configured !== undefined)
           return yield* new OAuthProtocolFailed({ reason: "invalid_response" });
-        return yield* decode(OAuthRegistration, {
-          ...registered,
-          token_endpoint_auth_method: method,
-        });
+        return yield* decode(OAuthRegistration, registered);
       }).pipe(protocolStage("register")),
     authorize: (input: {
       server: OAuthServer;

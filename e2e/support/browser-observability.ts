@@ -79,7 +79,14 @@ export const injectDashboardResponse = (slug: string, body: string, status: numb
         }),
       ),
     );
-    yield* browser.use("Open the dashboard", (page) => page.goto(`/org/${slug}/apps`));
+    // Pages render on the server with their data, so the browser reads resources only when it
+    // navigates to them itself.
+    yield* browser.use("Open a page that does not read resources", (page) =>
+      page.goto(`/org/${slug}/connect`),
+    );
+    yield* browser.use("Navigate to Apps in the browser", (page) =>
+      page.getByRole("navigation").getByRole("link", { name: /^Apps/ }).click(),
+    );
     yield* browser.use("Wait for the decoded operation failure", (page) =>
       page.waitForFunction(() => document.documentElement.hasAttribute("data-observed-failure")),
     );
@@ -89,28 +96,22 @@ export const injectDashboardResponse = (slug: string, body: string, status: numb
     return trace;
   });
 
-/** Corrupt synthetic private entry data before any authored dashboard code executes. */
-export const corruptDashboardEntry = (slug: string) =>
+/** Withhold the server's bootstrap data so the dashboard's browser entry cannot start. */
+export const incompleteDashboardDocument = (slug: string) =>
   Effect.gen(function* () {
     const browser = yield* Browser;
     yield* browser.use("Leave the previous document", (page) => page.goto("about:blank"));
-    yield* browser.use("Corrupt the private entry before module execution", (page) =>
+    yield* browser.use("Drop the document's bootstrap data before any script runs", (page) =>
       page.addInitScript(() => {
-        const observer = new MutationObserver(() => {
-          if (document.head === null) return;
-          const entry =
-            document.getElementById("executor-entry") ?? document.createElement("script");
-          entry.id = "executor-entry";
-          entry.setAttribute("type", "application/json");
-          entry.textContent = '{"invalid":true}';
-          if (!entry.isConnected) document.head.append(entry);
-          document.documentElement.setAttribute("data-corrupt-entry", "true");
-          observer.disconnect();
+        Object.defineProperty(window, "$_TSR", {
+          configurable: false,
+          get: () => undefined,
+          set: () => {},
         });
-        observer.observe(document, { childList: true, subtree: true });
+        document.documentElement.setAttribute("data-incomplete-document", "true");
       }),
     );
-    yield* browser.use("Open the corrupt document", (page) => page.goto(`/org/${slug}/apps`));
+    yield* browser.use("Open the incomplete document", (page) => page.goto(`/org/${slug}/apps`));
   });
 
 /**

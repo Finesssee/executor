@@ -11,7 +11,7 @@ import {
 import { Effect, Schema } from "effect";
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import { McpAuthentication } from "../contracts/mcp.ts";
-import { restrictMcpBackend, permitsDelivery } from "@executor-js/mcp-auth";
+import { restrictMcpBackend, permitsBrowserApproval } from "@executor-js/mcp-auth";
 import { CurrentOrganization } from "../contracts/organization.ts";
 import type { McpAccess } from "../contracts/mcp.ts";
 import { mcpSessionKey } from "./mcp-http.ts";
@@ -82,7 +82,7 @@ export const hostedMcpApproval = (
 ) =>
   Effect.gen(function* () {
     const request = yield* HttpServerRequest.HttpServerRequest;
-    if (!permitsDelivery(access.grant, "browser")) return HttpServerResponse.empty({ status: 403 });
+    if (!permitsBrowserApproval(access.grant)) return HttpServerResponse.empty({ status: 403 });
     const caller = mcpSessionKey(access);
     const view = yield* approvals.get(caller, address);
     if (view.status === "pending") {

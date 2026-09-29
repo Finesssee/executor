@@ -1,3 +1,4 @@
+import { LocalTime } from "../components/local-time.tsx";
 import { EmptyState } from "./empty-state.tsx";
 import { AppWorkspaceLoading, SourceHistoryLoading } from "./app-loading.tsx";
 import { AppSectionHeader, AppSectionTitle } from "./app-section-header.tsx";
@@ -125,7 +126,6 @@ function WorkspaceSource<E>({
   );
 }
 function CloneRepository({ source }: { readonly source: typeof AppSourceDisplay.Type }) {
-  const cloneUrl = window.location.origin + source.gitPath;
   return (
     <Popover>
       <PopoverTrigger asChild>
@@ -135,27 +135,36 @@ function CloneRepository({ source }: { readonly source: typeof AppSourceDisplay.
         </Button>
       </PopoverTrigger>
       <PopoverContent aria-label="Clone repository">
-        <h2 className="text-sm font-medium">Clone</h2>
-        <div className="mt-4 border-b pb-2 text-xs font-medium">
-          {window.location.protocol === "https:" ? "HTTPS" : "HTTP"}
-        </div>
-        <div className="mt-3 flex items-center gap-2">
-          <Input
-            aria-label="Git clone URL"
-            readOnly
-            value={cloneUrl}
-            onFocus={(event) => event.target.select()}
-            className="min-w-0 font-mono text-xs"
-          />
-          <CopyButton code={cloneUrl} label="Copy clone URL" inline />
-        </div>
-        <p className="mt-3 text-xs leading-5 text-muted-foreground">
-          {source.canEdit
-            ? "Clone to work locally. Push your changes, then deploy when you’re ready."
-            : "Clone to read the files locally. Make a copy to change this app."}
-        </p>
+        <CloneDetails source={source} />
       </PopoverContent>
     </Popover>
+  );
+}
+/** Rendered only in the browser, once the popover opens. */
+function CloneDetails({ source }: { readonly source: typeof AppSourceDisplay.Type }) {
+  const cloneUrl = window.location.origin + source.gitPath;
+  return (
+    <>
+      <h2 className="text-sm font-medium">Clone</h2>
+      <div className="mt-4 border-b pb-2 text-xs font-medium">
+        {window.location.protocol === "https:" ? "HTTPS" : "HTTP"}
+      </div>
+      <div className="mt-3 flex items-center gap-2">
+        <Input
+          aria-label="Git clone URL"
+          readOnly
+          value={cloneUrl}
+          onFocus={(event) => event.target.select()}
+          className="min-w-0 font-mono text-xs"
+        />
+        <CopyButton code={cloneUrl} label="Copy clone URL" inline />
+      </div>
+      <p className="mt-3 text-xs leading-5 text-muted-foreground">
+        {source.canEdit
+          ? "Clone to work locally. Push your changes, then deploy when you’re ready."
+          : "Clone to read the files locally. Make a copy to change this app."}
+      </p>
+    </>
   );
 }
 function SourceHistoryLink<E>({
@@ -219,7 +228,7 @@ function SourceHistory<E>({ app, atoms, Failure }: AppManagementProps<E> & { rea
                   <div className="min-w-0 flex-1">
                     <p className="break-words text-sm font-medium">{entry.message}</p>
                     <p className="mt-1 text-xs text-muted-foreground">
-                      {entry.author} · {new Date(entry.timestamp * 1000).toLocaleString()}
+                      {entry.author} · <LocalTime value={entry.timestamp * 1000} />
                     </p>
                   </div>
                   <code className="shrink-0 text-xs text-muted-foreground" title={entry.commit}>

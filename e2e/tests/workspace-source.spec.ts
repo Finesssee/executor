@@ -10,6 +10,13 @@ import { Workspace } from "../support/app-authoring.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { Evidence, Telemetry } from "../support/evidence.ts";
 import { Target } from "../support/platform.ts";
+import {
+  cacheOutcome,
+  named,
+  outsideRevalidation,
+  settledTrace,
+  type Spans,
+} from "../support/workspace-cache.ts";
 
 const App = Schema.Struct({ id: Schema.String, repository: Schema.NullOr(Schema.String) });
 const files = (value: string) => [
@@ -104,14 +111,16 @@ layer(HostedLive, { excludeTestServices: true })("Workspace source", (it) => {
                 result.data.some(({ span }) => span.operationName === "source.repository.open"),
               ).toBe(false);
             }
-            return result.data.map(({ span }) => span.operationName);
+            return result.data;
           });
+        const operations = (spans: Spans) => spans.map(({ span }) => span.operationName);
+        const cloud = target.metadata.target === "cloud";
 
         const path = yield* create("snapshot");
         const initial = yield* read(path);
         expect(initial.files).toEqual(files("initial"));
         expect(initial.revision.commit).toMatch(/^[a-f0-9]{40}$/);
-        const initialized = yield* trace("initialized");
+        const initialized = operations(yield* trace("initialized"));
         expect(initialized.filter((name) => name === "source.initial.read")).toHaveLength(1);
         expect(initialized.filter((name) => name === "apps.repository.initialize")).toHaveLength(1);
         expect(initialized).not.toContain("source.workspace.read");
@@ -126,14 +135,28 @@ layer(HostedLive, { excludeTestServices: true })("Workspace source", (it) => {
 
         // Preparation is asynchronous. Complete one acquisition before asserting warm reuse.
         expect(yield* read(path)).toEqual(initial);
-        expect(yield* read(path)).toEqual(initial);
-        const existing = yield* trace("existing", true);
-        expect(existing.filter((name) => name === "source.workspace.read")).toHaveLength(1);
-        expect(existing).not.toContain("source.initial.read");
-        expect(existing).not.toContain("source.git.refs");
-        if (target.metadata.target === "cloud") {
-          expect(existing.filter((operation) => operation === "source.git.clone")).toHaveLength(1);
+        if (cloud) {
+          // Initialization replaced the stored workspace, so this read uses Git and stores it.
+          const filled = yield* settledTrace("filled", ["source.workspace.cache.save"]);
+          expect(cacheOutcome(filled)).toBe("miss");
+          expect(named(filled, "source.git.clone")).toHaveLength(1);
+          expect(
+            named(filled, "source.workspace.cache.save")[0]?.span.tags[
+              "source.workspace.cache.saved"
+            ],
+          ).toBe("true");
         }
+        expect(yield* read(path)).toEqual(initial);
+        // Cloud serves the stored commit; its only Git use is the background head check.
+        const existing = yield* trace("existing", true);
+        expect(named(existing, "source.workspace.read")).toHaveLength(1);
+        expect(operations(existing)).not.toContain("source.initial.read");
+        if (cloud) {
+          expect(cacheOutcome(existing)).toBe("hit");
+          expect(named(existing, "source.git.clone")).toHaveLength(0);
+          expect(named(existing, "source.git.refs")).toHaveLength(1);
+          expect(outsideRevalidation(existing)).toEqual([]);
+        } else expect(operations(existing)).not.toContain("source.git.refs");
 
         let winner = initial;
         for (let round = 0; round < 3; round += 1) {
@@ -149,7 +172,7 @@ layer(HostedLive, { excludeTestServices: true })("Workspace source", (it) => {
             { concurrency: 4 },
           );
           expect(writes.map((response) => response.status).sort()).toEqual([200, 409, 409, 409]);
-          const saved = yield* trace(`saved-${round}`, true);
+          const saved = operations(yield* trace(`saved-${round}`, true));
           expect(saved).not.toContain("source.repository.create");
           const accepted = writes.find((response) => response.status === 200);
           if (accepted === undefined)

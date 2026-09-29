@@ -33,7 +33,10 @@ export interface AppCache {
     retention: Duration.Input,
   ) => Promise<void>;
   readonly invalidate: (key: JsonValue) => Promise<void>;
-  /** Uses the current bound credentials' fingerprint, never just the saved account ID. */
+  /**
+   * Scope entries to a bound account and its credential generation. Token renewal keeps the
+   * entries; reconnecting or replacing the account's credentials starts an empty scope.
+   */
   readonly forAccount: (account: { readonly id: string }) => AppCache;
 }
 

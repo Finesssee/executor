@@ -50,7 +50,7 @@ export function PagePending({
       : /\/apps\//.test(pathname)
         ? "App"
         : /\/connect\/?$/.test(pathname)
-          ? "Connect"
+          ? "Connections"
           : "Executor";
   return <PageSkeleton title={title} />;
 }

@@ -12,6 +12,7 @@ import { ProfileId, ProfileRevision } from "@executor-js/sdk/core";
 import { ProfileErrors } from "@executor-js/sdk/core";
 import { AppWorkflowsActive, AccountWorkflowsActive } from "@executor-js/sdk/core";
 import { DashboardSchedules } from "./schedules.ts";
+import { DashboardMcpConnections } from "./mcp-connections.ts";
 import { AccountWebhooksActive } from "@executor-js/sdk/core";
 import { AppWebhooksActive } from "@executor-js/sdk/core";
 /** Browser-safe read contracts for inspecting the local Executor instance. */
@@ -27,6 +28,7 @@ import {
   App,
   AppNotDeployed,
   AppEvaluationFailed,
+  ToolListingTimedOut,
   AppProviderFailed,
   AppId,
   AppName,
@@ -268,6 +270,7 @@ const toolErrors = [
   AppNotDeployed,
   DeploymentNotFound,
   AppEvaluationFailed,
+  ToolListingTimedOut,
   AppProviderFailed,
   AccountNotFound,
   AccountRequired,
@@ -393,6 +396,7 @@ export const DashboardApi = HttpApi.make("local-dashboard").add(
           AppNotDeployed,
           DeploymentNotFound,
           AppEvaluationFailed,
+          ToolListingTimedOut,
           AppProviderFailed,
           AccountNotFound,
           AccountRequired,
@@ -611,4 +615,5 @@ export const DashboardApi = HttpApi.make("local-dashboard").add(
   DashboardProfiles.middleware(DashboardAccess),
   DashboardWorkflows.middleware(DashboardAccess),
   DashboardWebhooks.middleware(DashboardAccess),
+  DashboardMcpConnections.middleware(DashboardAccess),
 );

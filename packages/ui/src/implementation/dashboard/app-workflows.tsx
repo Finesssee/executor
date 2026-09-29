@@ -1,3 +1,4 @@
+import { LocalTime, shortMoment } from "../components/local-time.tsx";
 import { EmptyState, EmptyStatePanel } from "./empty-state.tsx";
 import { useState, type ReactNode, type ComponentType } from "react";
 import type { App, HostedWorkflow, WorkflowRun, WorkflowRunId } from "@executor-js/sdk";
@@ -254,18 +255,9 @@ function RunList({
               >
                 {statuses[run.status]}
               </span>
-              <time
-                className="col-span-2 text-xs text-muted-foreground min-[640px]:col-span-1"
-                dateTime={run.createdAt}
-                title={new Date(run.createdAt).toLocaleString()}
-              >
-                {new Date(run.createdAt).toLocaleString(undefined, {
-                  month: "short",
-                  day: "numeric",
-                  hour: "numeric",
-                  minute: "2-digit",
-                })}
-              </time>
+              <span className="col-span-2 text-xs text-muted-foreground min-[640px]:col-span-1">
+                <LocalTime value={run.createdAt} options={shortMoment} title={{}} />
+              </span>
             </button>
             {selected === run.id && (
               <section

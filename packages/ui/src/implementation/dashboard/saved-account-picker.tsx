@@ -1,3 +1,15 @@
+import { LocalTime } from "../components/local-time.tsx";
+
+/** Accounts created in the same second are told apart by milliseconds. */
+const preciseMoment: Intl.DateTimeFormatOptions = {
+  year: "numeric",
+  month: "short",
+  day: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+  second: "2-digit",
+  fractionalSecondDigits: 3,
+};
 import { useState, type ReactNode, type ComponentType } from "react";
 import { Exit, type Cause } from "effect";
 import type { AccountId, AccountRequirement, SelectedAccounts } from "@executor-js/sdk";
@@ -163,7 +175,8 @@ export function SavedAccountPicker<E, Saved>({
                   (item) =>
                     item.id !== account.id &&
                     item.label === account.label &&
-                    item.createdAt.toLocaleString() === account.createdAt.toLocaleString(),
+                    Math.floor(item.createdAt.getTime() / 1000) ===
+                      Math.floor(account.createdAt.getTime() / 1000),
                 );
                 const auth = requirement.definition.auth[account.method];
                 const detail = auth?.type === "oauth2" ? "Browser sign-in" : auth?.label;
@@ -174,8 +187,15 @@ export function SavedAccountPicker<E, Saved>({
                     </span>
                     <span className="block text-xs text-muted-foreground">
                       {detail}
-                      {duplicate &&
-                        ` · Added ${sameSecond ? account.createdAt.toLocaleString(undefined, { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit", fractionalSecondDigits: 3 }) : account.createdAt.toLocaleString()}`}
+                      {duplicate && (
+                        <>
+                          {" · Added "}
+                          <LocalTime
+                            value={account.createdAt}
+                            {...(sameSecond ? { options: preciseMoment } : {})}
+                          />
+                        </>
+                      )}
                     </span>
                   </span>
                 );

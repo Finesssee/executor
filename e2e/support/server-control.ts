@@ -6,7 +6,7 @@ import { Evidence } from "./evidence.ts";
 
 /** Control calls never touch a shared developer preview or production service. */
 export const serverControl = (
-  action: "start" | "stop" | "restart" | "clock/advance",
+  action: "start" | "stop" | "restart" | "kill" | "clock/advance",
   expectedStatus: 200 | 500 = 200,
   body?: { readonly milliseconds: number },
 ) =>

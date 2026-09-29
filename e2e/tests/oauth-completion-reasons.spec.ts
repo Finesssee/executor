@@ -13,6 +13,7 @@ import { HostedLive, withHostedCase } from "../support/case.ts";
 import { Resource } from "../support/contracts.ts";
 import { Target } from "../support/platform.ts";
 import { oauthSetupIssuer } from "../support/oauth-setup-issuer.ts";
+import { oauthMcpAppFiles } from "../support/authored-templates.ts";
 import { createProfile } from "../support/profiles.ts";
 import { scenarios } from "../test-plan.ts";
 
@@ -234,6 +235,113 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
           ),
         ).toEqual([1, 0, 0, 1]);
         yield* browser.checkpoint("Issuer mismatch callback");
+
+        // A client Executor registered is not the user's to edit. A saved registration the
+        // service stops accepting is discarded and "Try again" registers a new one; a client
+        // rejected right after registration is a configuration problem that a retry cannot fix.
+        const deployRegistered = Effect.gen(function* () {
+          const name = `Registered client ${randomUUID().slice(0, 8)}`;
+          const deployed = yield* api.request(actors.owner, "POST", `${prefix}/apps/deploy`, {
+            name,
+            files: oauthMcpAppFiles(name, `${issuer.origin}/mcp`),
+          });
+          expect(deployed.status, JSON.stringify(deployed.body)).toBe(200);
+          const deployedApp = yield* body(AppProvider, deployed);
+          yield* Effect.addFinalizer(() =>
+            api
+              .request(actors.owner, "DELETE", `${prefix}/apps/${deployedApp.id}`)
+              .pipe(Effect.orDie),
+          );
+          return { id: deployedApp.id, name };
+        });
+        const openAccounts = (registeredApp: { readonly id: string }) =>
+          browser.use("Open the registered-client app", (page) =>
+            page.goto(`/org/${actors.organization.slug}/apps/${registeredApp.id}?view=accounts`),
+          );
+        const connectInDialog = (registeredApp: { readonly name: string }, label: string) =>
+          browser.use(`Connect ${label}`, (page) => {
+            const dialog = page.getByRole("dialog");
+            return dialog
+              .getByLabel("Account name", { exact: true })
+              .fill(label)
+              .then(() =>
+                dialog
+                  .getByRole("button", { name: `Connect ${registeredApp.name}`, exact: true })
+                  .click(),
+              );
+          });
+        const addAccount = (
+          registeredApp: { readonly id: string; readonly name: string },
+          label: string,
+        ) =>
+          Effect.gen(function* () {
+            yield* openAccounts(registeredApp);
+            yield* browser.use("Add an account", (page) =>
+              page
+                .getByRole("button", { name: `Add ${registeredApp.name} account`, exact: true })
+                .click(),
+            );
+            yield* connectInDialog(registeredApp, label);
+          });
+        const accounts = (count: string) =>
+          browser.use(`Wait for ${count}`, (page) =>
+            page.getByText(count, { exact: true }).waitFor({ state: "visible" }),
+          );
+        const recoveryActions = (step: string, text: string) =>
+          browser.use(step, (page) =>
+            Promise.all([
+              page.getByText(text, { exact: false }).count(),
+              page.getByRole("link", { name: "Try again", exact: true }).count(),
+              page.getByRole("link", { name: "Update client details", exact: true }).count(),
+              page.getByRole("button", { name: "Copy fix prompt", exact: true }).count(),
+            ]),
+          );
+
+        yield* issuer.configure({ callbackIssuer: null, tokenError: null });
+        const reusedApp = yield* deployRegistered;
+        yield* addAccount(reusedApp, "First");
+        yield* accounts("1 account");
+        // The next sign-in reuses the saved registration, which the service now refuses.
+        yield* issuer.configure({ tokenError: { status: 401, body: { error: "invalid_client" } } });
+        const registrations = (yield* issuer.metrics).registrations;
+        yield* addAccount(reusedApp, "Second");
+        yield* browser.use("A rejected saved client offers a retry", (page) =>
+          page.getByRole("link", { name: "Try again", exact: true }).waitFor({ state: "visible" }),
+        );
+        expect((yield* issuer.metrics).registrations).toBe(registrations);
+        expect(
+          yield* recoveryActions(
+            "Read the saved-client recovery",
+            "no longer accepts the OAuth client Executor registered",
+          ),
+        ).toEqual([1, 1, 0, 0]);
+        yield* browser.checkpoint("Saved registered client rejected callback");
+        yield* issuer.configure({ tokenError: null });
+        yield* browser.use("Click Try again", (page) =>
+          page.getByRole("link", { name: "Try again", exact: true }).click(),
+        );
+        yield* connectInDialog(reusedApp, "Second");
+        yield* accounts("2 accounts");
+        // The rejected registration was discarded, so the retry registered a new client.
+        expect((yield* issuer.metrics).registrations).toBe(registrations + 1);
+
+        // A client rejected moments after its registration will not work on a retry either.
+        const freshApp = yield* deployRegistered;
+        yield* issuer.configure({ tokenError: { status: 401, body: { error: "invalid_client" } } });
+        yield* addAccount(freshApp, "Fresh");
+        yield* browser.use("A rejected new client offers the fix prompt", (page) =>
+          page
+            .getByRole("button", { name: "Copy fix prompt", exact: true })
+            .waitFor({ state: "visible" }),
+        );
+        expect(
+          yield* recoveryActions(
+            "Read the new-client recovery",
+            "rejected the OAuth client Executor had just registered",
+          ),
+        ).toEqual([1, 0, 0, 1]);
+        yield* browser.checkpoint("New registered client rejected callback");
+        yield* issuer.configure({ tokenError: null });
       }),
     ),
   );

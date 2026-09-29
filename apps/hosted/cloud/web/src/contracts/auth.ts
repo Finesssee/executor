@@ -2,6 +2,7 @@ import { observeBrowserUsage } from "@executor-js/hosted-web/contracts/product-a
 import { BrowserAtoms } from "@executor-js/hosted-web/contracts/telemetry";
 import { passkeyClient } from "@better-auth/passkey/client";
 import { createAuthClient } from "better-auth/client";
+import { dashboardAuthClientOptions } from "@executor-js/ui/contracts/http";
 import { emailOTPClient } from "better-auth/client/plugins";
 import { authRequest } from "@executor-js/hosted-web/contracts/auth";
 import { Effect } from "effect";
@@ -13,7 +14,10 @@ export const finishCloudSignIn = (redirect: string) =>
   window.location.replace(signInCallback(redirect));
 
 /** Cloud-only credentials; shared session queries use the same origin and cookie. */
-export const cloudAuthClient = createAuthClient({ plugins: [passkeyClient(), emailOTPClient()] });
+export const cloudAuthClient = createAuthClient({
+  ...dashboardAuthClientOptions,
+  plugins: [passkeyClient(), emailOTPClient()],
+});
 /** Prefer verified company SSO; send a code only when the server confirms no SSO connection. */
 export const beginEmailSignInAtom = BrowserAtoms.fn(
   (input: { readonly email: string; readonly redirect: string }) =>

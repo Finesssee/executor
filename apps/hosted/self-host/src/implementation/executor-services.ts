@@ -12,6 +12,7 @@ import {
   WorkflowHost,
   recoverAppRepositories,
   makeDeclarationCache,
+  declarationConfig,
   type Executor,
   type SourceFile,
 } from "@executor-js/sdk/core";
@@ -62,6 +63,7 @@ export const selfHostExecutorServices = <E, R>(
         Config.map(Option.getOrUndefined),
       );
       const storage = yield* makeExecutorStorage({ provider: "postgresql" });
+      const evaluation = yield* declarationConfig;
       const server = yield* Scope.Scope;
       const ready = yield* Deferred.make<Executor>();
       const { runtime, workflows, blobs, repositories } = yield* acquire(Deferred.await(ready));
@@ -85,7 +87,8 @@ export const selfHostExecutorServices = <E, R>(
           storage,
           webhookOrigin: origin,
           workflows,
-          declarations: makeDeclarationCache(),
+          declarations: makeDeclarationCache(evaluation.limits),
+          toolListings: evaluation.toolListings,
           // Stale declarations refresh on the server's own lifetime.
           background: (work) => Effect.forkIn(work, server).pipe(Effect.as(true)),
         },

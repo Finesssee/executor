@@ -126,19 +126,28 @@ export interface SkillTransport {
 export interface SkillReaderOptions extends SkillTransport {
   readonly service: string;
 }
-/** A public GitHub repository and an optional immutable commit, tag or branch. */
-export interface GitHubSkillsOptions extends SkillTransport {
+/**
+ * Catalog reuse shared by remote skill loaders, with the same policy as MCP tool catalogs. Pass
+ * `ctx.cache` to keep the loaded catalog; without it every read fetches the source again.
+ */
+export interface SkillCacheOptions {
+  readonly cache?: import("./cache.ts").AppCache;
+  /** Reuse the catalog for this duration. Defaults to five minutes. */
+  readonly freshFor?: import("effect").Duration.Input;
+  /** Serve the retained catalog while refreshing. Defaults to one day. */
+  readonly staleFor?: import("effect").Duration.Input;
+}
+/**
+ * A public GitHub repository and an optional immutable commit, tag or branch. With a cache, a
+ * branch or tag is resolved again when the catalog refreshes, and each commit's file list is kept.
+ */
+export interface GitHubSkillsOptions extends SkillTransport, SkillCacheOptions {
   readonly repo: string;
   readonly path?: string;
   readonly ref?: string;
-  /**
-   * Pass `ctx.cache` to keep each commit's skill file list. Content at a commit never changes,
-   * so later reads of the same commit skip the tree fetch. The ref is still resolved each read.
-   */
-  readonly cache?: import("./cache.ts").AppCache;
 }
 /** A published directory index, including its listed skill documents and text references. */
-export interface WellKnownSkillsOptions extends SkillTransport {
+export interface WellKnownSkillsOptions extends SkillTransport, SkillCacheOptions {
   readonly url: string;
 }
 

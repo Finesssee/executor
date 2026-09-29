@@ -1,6 +1,5 @@
 /** OpenAPI reference and dialect rules, shared by every part of the app importer. */
-import "../contracts/swagger-client.ts";
-import SwaggerClient from "swagger-client";
+import { loadSwaggerClient } from "./swagger-client.ts";
 import { upgrade } from "@scalar/openapi-upgrader";
 import { JsonPointer, JsonSchema, Schema } from "effect";
 import { JsonObject } from "../contracts/schema.ts";
@@ -41,7 +40,9 @@ export async function openApiDocument(input: unknown) {
       },
     ),
   );
-  const resolved = await SwaggerClient.resolve({
+  const resolved = await (
+    await loadSwaggerClient()
+  ).resolve({
     spec: masked,
     skipNormalization: true,
     useCircularStructures: false,

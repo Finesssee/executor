@@ -1,6 +1,5 @@
-import react from "@vitejs/plugin-react";
+import { dashboardStartPlugins } from "@executor-js/dashboard-start/vite";
 import tailwindcss from "@tailwindcss/vite";
-import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import { defineConfig } from "vite-plus";
 
 // T3 Code uses bundled development to avoid cold ESM import waterfalls.
@@ -13,34 +12,6 @@ if (desktopDevelopment) {
 
 export default defineConfig({
   experimental: { bundledDev: desktopDevelopment },
-  plugins: [
-    {
-      name: "executor-build-metadata",
-      transformIndexHtml: () => [
-        {
-          tag: "meta",
-          attrs: {
-            name: "executor-build",
-            content: process.env.EXECUTOR_BUILD_VERSION ?? "development",
-          },
-          injectTo: "head" as const,
-        },
-        {
-          tag: "meta",
-          attrs: {
-            name: "executor-environment",
-            content: process.env.EXECUTOR_ENVIRONMENT ?? "development",
-          },
-          injectTo: "head" as const,
-        },
-      ],
-    },
-    tanstackRouter({
-      routesDirectory: "./src/implementation/routes",
-      generatedRouteTree: "./src/implementation/routeTree.gen.ts",
-      autoCodeSplitting: true,
-    }),
-    react(),
-    tailwind,
-  ],
+  // The local server and desktop app run the document renderer in Node.
+  plugins: dashboardStartPlugins({ runtime: "node", tailwind }),
 });

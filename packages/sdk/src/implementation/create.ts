@@ -20,6 +20,7 @@ import { toEffectRuntime } from "./runtime.ts";
 import { database } from "./database.ts";
 import { makeOAuth } from "./oauth.ts";
 import { makeDeclarationCache, makeDeclarations } from "./declarations.ts";
+import { makeListings } from "./listings.ts";
 
 /** Capture host cryptography; caller owns database and platform resource lifetimes. */
 export const createExecutor = (
@@ -28,7 +29,8 @@ export const createExecutor = (
   Effect.gen(function* () {
     const crypto = yield* Crypto.Crypto;
     const db = database(options.storage);
-    const runtime = toEffectRuntime(options.runtime, options.blobs);
+    const cache = options.declarations ?? makeDeclarationCache();
+    const runtime = toEffectRuntime(options.runtime, options.blobs, cache);
     const oauth = makeOAuth(
       db,
       options.credentials,
@@ -38,7 +40,7 @@ export const createExecutor = (
       options.background,
     );
     const declarations = makeDeclarations({
-      cache: options.declarations ?? makeDeclarationCache(),
+      cache,
       background: options.background,
       resolveAccount: oauth.resolve,
       accountUsable: oauth.usable,
@@ -80,6 +82,14 @@ export const createExecutor = (
       runtime,
       options.credentials,
       crypto,
+      makeListings({
+        cache,
+        background: options.background,
+        declarations,
+        resolveAccount: oauth.resolve,
+        lifecycle: options.lifecycle,
+        ...(options.toolListings === undefined ? {} : { policy: options.toolListings }),
+      }),
       options.appStorage,
       workflows.controls,
       options.lifecycle,

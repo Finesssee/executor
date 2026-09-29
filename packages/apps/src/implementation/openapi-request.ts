@@ -1,5 +1,4 @@
-import "../contracts/swagger-client.ts";
-import SwaggerClient from "swagger-client";
+import { loadSwaggerClient } from "./swagger-client.ts";
 import { httpProviderError, accountProviderError } from "./provider-error.ts";
 import { ProviderError } from "../contracts/provider-error.ts";
 /** Swagger constructs requests; Effect owns HTTP policy and bounded results. */
@@ -218,6 +217,7 @@ export function createRequest(config: {
   ) =>
     Effect.scoped(
       Effect.gen(function* () {
+        const swagger = yield* Effect.promise(loadSwaggerClient);
         const prepared = yield* Effect.try({
           try: () => {
             const args = object(input);
@@ -259,7 +259,7 @@ export function createRequest(config: {
               }
             }
             const prepared = swaggerRequest(
-              SwaggerClient.buildRequest({
+              swagger.buildRequest({
                 spec: {
                   openapi: op.openapi,
                   servers: [{ url: op.baseUrl }],

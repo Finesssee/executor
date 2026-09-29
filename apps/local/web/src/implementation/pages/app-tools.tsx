@@ -17,7 +17,11 @@ import { ToolBrowser } from "@executor-js/ui/dashboard/tools";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Key01Icon } from "@hugeicons/core-free-icons";
 import { toolDetailAtom, toolsAtom, toolListAtom } from "../../contracts/api.ts";
-import { appToolReadiness, accountSetupFailure } from "../../contracts/dashboard.ts";
+import {
+  appToolReadiness,
+  accountSetupFailure,
+  unfilledAccountSlots,
+} from "../../contracts/dashboard.ts";
 import { Button } from "@executor-js/ui/components/button";
 import { Link, useNavigate } from "@tanstack/react-router";
 
@@ -154,6 +158,11 @@ function LiveAppTools({ app, accounts, selected, profile, revision, selection }:
       query={toolListAtom(catalog)}
       detail={(tool) => toolDetailAtom({ ...catalog, tool: tool.name })}
       selected={selected}
+      empty={
+        unfilledAccountSlots(app, selection).length > 0 ? (
+          <AccountSetup app={app} profile={profile} accounts={accounts} disconnected={false} />
+        ) : undefined
+      }
       onSelect={(tool) => {
         void navigate({
           to: "/apps/$appId",

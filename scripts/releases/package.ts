@@ -71,7 +71,7 @@ const build = Effect.gen(function* () {
       access: "public",
       tag: `${release.channel}-${target.platform}-${target.arch}`,
     },
-    engines: { node: ">=24.14.0" },
+    engines: { node: `>=${release.minimumNodeVersion}` },
     os: [process.platform],
     cpu: [process.arch],
     files: [

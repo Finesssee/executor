@@ -43,6 +43,16 @@ export const defaultToolApprovalLimits = ToolApprovalLimits.make({ ttlMs: 15 * 6
 export interface ToolInvocationOptions {
   readonly elicitation?: ElicitationHandler;
 }
+/** How an in-process caller with its own wait bound reads a tool listing. Not an HTTP input. */
+export interface ToolListOptions {
+  /**
+   * Report a listing that another request started at least this long ago, and that is still
+   * running, as `ToolListingTimedOut` at once instead of waiting for it. A caller that gives up
+   * after this long, such as MCP discovery, would not get it in time. Such a caller is also told
+   * at once about a remembered slow failure. Without it the read waits for a live evaluation.
+   */
+  readonly reportRunningAfterMillis?: number;
+}
 export {
   ElicitationFailed,
   type ElicitationHandler,
@@ -267,6 +277,37 @@ export const AppEvaluationFailed = UserFacingError.define({
 });
 /** Parsed evaluation failure; raw runtime diagnostics never enter its presentation. */
 export type AppEvaluationFailed = typeof AppEvaluationFailed.Type;
+
+/**
+ * A tool listing ran longer than a caller waits, or than its bound with nobody waiting, or was
+ * stopped before it finished. While it still runs, callers with a shorter wait, and briefly after
+ * it gave up, every reader, are told this at once rather than wait for the same slow app again.
+ */
+export const ToolListingTimedOut = UserFacingError.define({
+  tag: "ToolListingTimedOut",
+  status: 504,
+  fields: {
+    app: AppId,
+    deployment: DeploymentId,
+    elapsedMs: Schema.Number,
+    /** The listing is still running in the background. */
+    running: Schema.Boolean,
+  },
+  presentation: ({ elapsedMs, running }) => ({
+    title: "App tools did not load in time",
+    description: running
+      ? `Listing this app's tools timed out: it has been running for ${elapsedMs}ms, longer than this request waits, so the app is unavailable until it finishes.`
+      : `Listing this app's tools timed out after ${elapsedMs}ms, so the app is unavailable until a later listing finishes.`,
+    retryable: true,
+    recovery: {
+      action:
+        "Try again shortly. If this continues, check that the app's upstream server responds.",
+      instructions:
+        "Tell the user this app's tools could not be listed in time; its server may be slow or offline. Its tools cannot be called until a listing finishes. Other apps remain usable.",
+    },
+  }),
+});
+export type ToolListingTimedOut = typeof ToolListingTimedOut.Type;
 
 /** Recognized provider failure, enriched only with trusted selected-account metadata. */
 export const AppProviderFailed = UserFacingError.define({
@@ -528,6 +569,7 @@ export const ToolsGroup = HttpApiGroup.make("tools")
         AppNotDeployed,
         DeploymentNotFound,
         AppEvaluationFailed,
+        ToolListingTimedOut,
         AppProviderFailed,
         AccountNotFound,
         AccountRequired,

@@ -43,6 +43,7 @@ import {
   ToolInvocation,
   ToolInputs,
   type ToolInvocationOptions,
+  type ToolListOptions,
   type ToolResumeResult,
 } from "../contracts/tools.ts";
 import type { ExecutorDatabase } from "./storage.ts";
@@ -54,6 +55,7 @@ import { storedProfile } from "./profiles.ts";
 import { CurrentProfile, ProfileConflict } from "../contracts/profiles.ts";
 import type { ProfileId } from "../contracts/shared.ts";
 import { validateSelection } from "./selection.ts";
+import type { Listings, ToolListing } from "./listings.ts";
 
 /**
  * Resolve the app, pinned deployment, profile and account selection before invoking authored code.
@@ -181,6 +183,7 @@ export function resolve(
             id: account.id,
             provider: required.definition,
             method: account.method,
+            generation: account.credentialGeneration,
             fields: Redacted.value(fields),
           })),
         ),
@@ -324,6 +327,7 @@ export const makeTools = (
   runtime: Runtime,
   credentials: Credentials,
   crypto: Crypto.Crypto,
+  listings: Listings,
   appStorage?: AppDatabases,
   workflows?: (state: InvocationSnapshot) => WorkflowHostControls,
   lifecycle?: ResourceLifecycle,
@@ -379,27 +383,63 @@ export const makeTools = (
       return { state, catalog, value };
     });
   return {
-    list: (input: Parameters<Executor["tools"]["list"]>[0]) =>
+    /**
+     * Page through the app's evaluated catalog. The whole listing is evaluated once and, with a
+     * listing store, reused across pages and requests for identical inputs.
+     */
+    list: (input: Parameters<Executor["tools"]["list"]>[0], options?: ToolListOptions) =>
       Effect.gen(function* () {
-        const {
-          state,
-          catalog,
-          value: tools,
-        } = yield* evaluate(input, (options) => runtime.inspect(options));
-        const sorted = [...tools]
-          .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
-          .filter((tool) => input.cursor === undefined || tool.name > input.cursor);
-        const selected = sorted.slice(0, input.limit ?? 2_000);
+        const state = yield* snapshot(db, input).pipe(Effect.withSpan("sdk.invocation.snapshot"));
+        yield* Effect.annotateCurrentSpan({
+          "executor.app.id": state.app.id,
+          "executor.deployment.id": state.deployment.id,
+          "executor.build.id": state.deployment.build,
+        });
+        const evaluate = (context: Effect.Success<ReturnType<typeof resolve>>) =>
+          runtime
+            .inspect({
+              app: state.app.id,
+              build: state.deployment.build,
+              ...context,
+              ...(workflows === undefined ? {} : { workflowControls: workflows(state) }),
+            })
+            .pipe(
+              Effect.mapError((error) =>
+                Schema.is(ProviderError)(error)
+                  ? appProviderFailure(state, error)
+                  : evaluationFailure(
+                      { app: state.app.id, deployment: state.deployment.id },
+                      error,
+                    ),
+              ),
+              Effect.map((tools): ToolListing => ({
+                catalog: {
+                  deployment: state.deployment.id,
+                  ...(state.profile === undefined
+                    ? {}
+                    : { profile: state.profile.id, profileRevision: state.profile.revision }),
+                },
+                items: [...tools]
+                  .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+                  .map((tool) => ({
+                    ...tool,
+                    app: state.app.id,
+                    deployment: state.deployment.id,
+                    name: ToolName.make(tool.name),
+                  })),
+              })),
+            );
+        const listing = yield* listings.read(state, evaluate, options);
+        // Pages share the listing's item objects, so a caller can recognise a kept listing.
+        const cursor: string | undefined = input.cursor;
+        const after =
+          cursor === undefined ? listing.items : listing.items.filter((tool) => tool.name > cursor);
+        const selected = after.slice(0, input.limit ?? 2_000);
         const last = selected.at(-1);
         return {
-          ...catalog,
-          items: selected.map((tool) => ({
-            ...tool,
-            app: state.app.id,
-            deployment: state.deployment.id,
-            name: ToolName.make(tool.name),
-          })),
-          ...(last !== undefined && sorted.length > selected.length
+          ...listing.catalog,
+          items: selected,
+          ...(last !== undefined && after.length > selected.length
             ? { next: Cursor.make(last.name) }
             : {}),
         };

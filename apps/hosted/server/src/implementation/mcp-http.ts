@@ -7,7 +7,7 @@ import {
   restrictMcpBackend,
   permitsDelivery,
   GrantForbidden,
-  requestedMcpMode,
+  requestedMcpAddress,
   mcpResource,
   mcpResourceMetadataUrl,
 } from "@executor-js/mcp-auth";
@@ -60,7 +60,8 @@ const requestBackend: McpBackend<RequestError> = {
     Effect.flatMap(RequestBackend, (backend) => backend.authorizeElicitation(input)),
   listApps: (input) => Effect.flatMap(RequestBackend, (backend) => backend.listApps(input)),
   listTargets: (input) => Effect.flatMap(RequestBackend, (backend) => backend.listTargets(input)),
-  listTools: (input) => Effect.flatMap(RequestBackend, (backend) => backend.listTools(input)),
+  listTools: (input, options) =>
+    Effect.flatMap(RequestBackend, (backend) => backend.listTools(input, options)),
   callTool: (input, options) =>
     Effect.flatMap(RequestBackend, (backend) => backend.callTool(input, options)),
   resumeInvocation: (request, response, options) =>
@@ -115,13 +116,13 @@ export const dispatchHostedMcp = <E, R>(
     const authentication = yield* McpAuthentication;
     const request = yield* HttpServerRequest.HttpServerRequest;
     const url = new URL(request.url, authentication.origin);
-    const mode = requestedMcpMode(url);
+    const address = requestedMcpAddress(url);
     const organization = requestedMcpOrganization(url);
     const scoped = (fresh: McpAccess) =>
       Effect.gen(function* () {
         if (
-          mode === undefined ||
-          !permitsDelivery(fresh.grant, mode) ||
+          address === undefined ||
+          !permitsDelivery(fresh.grant, address) ||
           mcpSessionKey(fresh) !== mcpSessionKey(access)
         )
           return yield* new McpForbidden();
@@ -141,7 +142,7 @@ export const dispatchHostedMcp = <E, R>(
     // Calls and elicitation can run after a wait, so recheck token/grant/membership
     // before executing or releasing them, including calls after an approved one.
     const current = authentication
-      .authenticate(new Headers(request.headers), mode, organization)
+      .authenticate(new Headers(request.headers), address?.mode, organization)
       .pipe(Effect.flatMap(scoped), Effect.provideContext(services));
     const authorized: McpBackend<RequestError> = {
       ...backend,
@@ -176,6 +177,11 @@ export const dispatchHostedMcp = <E, R>(
     );
   });
 
+const invalidAddress = HttpServerResponse.jsonUnsafe(
+  { error: "Unsupported elicitation_mode or connection." },
+  { status: 400 },
+);
+
 /** Authenticate every MCP HTTP method through OAuth or PAT validation; never fall back to a browser cookie. */
 export const authenticatedMcp = <E, R>(
   handle: (access: McpAccess) => Effect.Effect<HttpServerResponse.HttpServerResponse, E, R>,
@@ -187,15 +193,11 @@ export const authenticatedMcp = <E, R>(
     if (request.headers.origin !== undefined && request.headers.origin !== auth.origin)
       return HttpServerResponse.empty({ status: 403 });
     const url = new URL(request.url, auth.origin);
-    const mode = requestedMcpMode(url);
-    if (mode === undefined)
-      return HttpServerResponse.jsonUnsafe(
-        { error: "Unsupported elicitation_mode." },
-        { status: 400 },
-      );
+    const address = requestedMcpAddress(url);
+    if (address === undefined) return invalidAddress;
     const access = yield* auth.authenticate(
       new Headers(request.headers),
-      mode,
+      address.mode,
       requestedMcpOrganization(url),
     );
     return yield* handle(access);
@@ -204,16 +206,12 @@ export const authenticatedMcp = <E, R>(
       Effect.gen(function* () {
         const { origin } = yield* McpAuthentication;
         const request = yield* HttpServerRequest.HttpServerRequest;
-        const mode = requestedMcpMode(new URL(request.url, origin));
-        if (mode === undefined)
-          return HttpServerResponse.jsonUnsafe(
-            { error: "Unsupported elicitation_mode." },
-            { status: 400 },
-          );
+        const address = requestedMcpAddress(new URL(request.url, origin));
+        if (address === undefined) return invalidAddress;
         return HttpServerResponse.empty({
           status: 401,
           headers: {
-            "www-authenticate": `Bearer resource_metadata="${mcpResourceMetadataUrl(origin, mode)}", scope="mcp offline_access"`,
+            "www-authenticate": `Bearer resource_metadata="${mcpResourceMetadataUrl(origin, address)}", scope="mcp offline_access"`,
           },
         });
       }),
@@ -231,14 +229,10 @@ export const authenticatedMcp = <E, R>(
 export const mcpProtectedResource = Effect.gen(function* () {
   const { origin } = yield* McpAuthentication;
   const request = yield* HttpServerRequest.HttpServerRequest;
-  const mode = requestedMcpMode(new URL(request.url, origin));
-  if (mode === undefined)
-    return HttpServerResponse.jsonUnsafe(
-      { error: "Unsupported elicitation_mode." },
-      { status: 400 },
-    );
+  const address = requestedMcpAddress(new URL(request.url, origin));
+  if (address === undefined) return invalidAddress;
   return HttpServerResponse.jsonUnsafe({
-    resource: mcpResource(origin, mode),
+    resource: mcpResource(origin, address),
     authorization_servers: [`${origin}/api/auth`],
     scopes_supported: ["mcp", "offline_access"],
     bearer_methods_supported: ["header"],

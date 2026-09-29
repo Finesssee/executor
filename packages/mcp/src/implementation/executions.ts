@@ -333,7 +333,7 @@ export const makeExecutions = (
         readSkill: (input) => exchange((backend) => backend.readSkill(input)),
         listApps: (input) => exchange((backend) => backend.listApps(input)),
         listTargets: (input) => exchange((backend) => backend.listTargets(input)),
-        listTools: (input) => exchange((backend) => backend.listTools(input)),
+        listTools: (input, options) => exchange((backend) => backend.listTools(input, options)),
         callTool: (input) =>
           Effect.flatMap(Effect.fiberId, (fiber) => {
             const call = run.progress.callFibers.get(fiber);

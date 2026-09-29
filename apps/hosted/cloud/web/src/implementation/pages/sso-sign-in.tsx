@@ -1,5 +1,5 @@
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
-import { LoginFrame, LoginLegalFooter, loginSearch } from "@executor-js/hosted-web/pages/login";
+import { LoginFrame, LoginLegalFooter, type LoginProps } from "@executor-js/hosted-web/pages/login";
 import { AuthFailed } from "@executor-js/hosted-web/contracts/auth";
 import { Button } from "@executor-js/ui/components/button";
 import { Input } from "@executor-js/ui/components/input";
@@ -12,7 +12,7 @@ import { useState } from "react";
 import { ssoSignInAtom } from "../../contracts/sso.ts";
 
 /** Discover the verified company connection from an email, then let its IdP authenticate. */
-export function SsoSignInForm({ redirect, error: callbackError }: ReturnType<typeof loginSearch>) {
+export function SsoSignInForm({ redirect, error: callbackError }: LoginProps) {
   useDocumentTitle(productTitle("Sign in with SSO"));
   const [email, setEmail] = useState("");
   const [error, setError] = useState<string>();

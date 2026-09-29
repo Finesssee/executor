@@ -40,6 +40,7 @@ import {
   HttpServerRequest,
   HttpServerResponse,
 } from "effect/unstable/http";
+import { withHostPipeline } from "@executor-js/dashboard-start/in-process";
 import { selfHostApi } from "./api.ts";
 import { selfHostMcp } from "../mcp.ts";
 import { selfHostAuth } from "../auth.ts";
@@ -82,12 +83,13 @@ export const selfHostRouteMap = <DashboardE, DashboardR>(options: {
     const api = selfHostApi(document).pipe(
       Layer.provide(appUi.dashboard),
       HttpRouter.provideRequest(auth.appSessions),
-      HttpRouter.provideRequest(catalogLive(skills, document.document, egress)),
+      HttpRouter.provideRequest(catalogLive(Effect.succeed(skills), document.document, egress)),
       Layer.provide(requireUserLive),
       Layer.provide(requireOrganizationLive),
       HttpRouter.provideRequest(executorServices),
       Layer.provide(auth.identity),
       Layer.provide(auth.apiIdentity),
+      Layer.provide(auth.mcpIdentity),
     );
     const mcpRoutes = Layer.mergeAll(
       HttpRouter.add("*", "/mcp", mcp.http),
@@ -111,7 +113,7 @@ export const selfHostRouteMap = <DashboardE, DashboardR>(options: {
       Layer.provide(auth.apiIdentity),
     );
     const productRoutes = Layer.mergeAll(
-      publishedSkillRoutes(skills),
+      publishedSkillRoutes(Effect.succeed(skills)),
       authoring,
       api,
       browserTelemetry.pipe(HttpRouter.provideRequest(auth.identity)),
@@ -173,13 +175,16 @@ export const selfHostRouteMap = <DashboardE, DashboardR>(options: {
     const routes = HttpRouter.add(
       "*",
       "*",
-      Effect.gen(function* () {
-        const request = yield* HttpServerRequest.HttpServerRequest;
-        if (Option.isSome(addresses.fromHost(request.headers.host)))
-          return yield* apps.pipe(requestTiming);
-        if (addresses.ownsHost(request.headers.host)) return notFound;
-        return yield* product;
-      }).pipe(recordRequestRejections),
+      // Server-rendered pages read the product API through this same dispatch, in-process.
+      withHostPipeline(
+        Effect.gen(function* () {
+          const request = yield* HttpServerRequest.HttpServerRequest;
+          if (Option.isSome(addresses.fromHost(request.headers.host)))
+            return yield* apps.pipe(requestTiming);
+          if (addresses.ownsHost(request.headers.host)) return notFound;
+          return yield* product;
+        }).pipe(recordRequestRejections),
+      ),
     );
     return routes;
   });

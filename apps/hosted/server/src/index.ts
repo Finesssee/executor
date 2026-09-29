@@ -57,6 +57,7 @@ export * from "./contracts/mcp.ts";
 export {
   mcpAuthenticationError,
   apiAuthenticationError,
+  mcpConnectionStore,
   provisionHostedOAuthResources,
 } from "./implementation/mcp-oauth.ts";
 export {

@@ -1,5 +1,7 @@
+import { refreshOnFocus } from "@executor-js/ui/contracts/refresh";
 import { ssoClient } from "@better-auth/sso/client";
 import { createAuthClient } from "better-auth/client";
+import { dashboardAuthClientOptions } from "@executor-js/ui/contracts/http";
 import { authRequest, AuthFailed } from "@executor-js/hosted-web/contracts/auth";
 import { BrowserAtoms } from "@executor-js/hosted-web/contracts/telemetry";
 import { signInCallback } from "@executor-js/hosted-web/contracts/navigation";
@@ -8,6 +10,7 @@ import { Atom } from "effect/unstable/reactivity";
 import { Effect, Redacted, Schema } from "effect";
 
 const client = createAuthClient({
+  ...dashboardAuthClientOptions,
   plugins: [ssoClient({ domainVerification: { enabled: true } })],
 });
 
@@ -34,7 +37,7 @@ export const ssoConnectionsAtom = Atom.family((organizationId: string) =>
           providers.filter((row) => row.organizationId === organizationId),
         ),
       ),
-    ).pipe(Atom.refreshOnWindowFocus),
+    ).pipe(refreshOnFocus),
   ),
 );
 

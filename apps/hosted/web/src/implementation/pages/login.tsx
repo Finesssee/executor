@@ -18,14 +18,31 @@ const callbackError = (error: unknown): string | null => {
   return "Sign-in could not be completed. Please try again.";
 };
 
-/** Preserve internal return paths and render only known, safe OAuth error messages. */
+/**
+ * Preserve internal return paths and render only known, safe OAuth error messages. A missing
+ * return path stays missing, so the server renders the requested address instead of redirecting
+ * to one with a default added.
+ */
 export const loginSearch = (
   search: Record<string, unknown>,
-): { redirect: string; error?: string } => {
+): { redirect?: string; error?: string } => {
   const error =
     typeof search.error === "string" && search.error !== "" ? { error: search.error } : {};
-  return { redirect: browserReturnTo(search.redirect), ...error };
+  return search.redirect === undefined
+    ? error
+    : { redirect: browserReturnTo(search.redirect), ...error };
 };
+
+/** What a sign-in page receives: where to go afterwards (home when none was given). */
+export interface LoginProps {
+  readonly redirect: string;
+  readonly error?: string;
+}
+
+export const loginProps = (search: ReturnType<typeof loginSearch>): LoginProps => ({
+  ...search,
+  redirect: browserReturnTo(search.redirect),
+});
 
 function GoogleIcon() {
   return (
@@ -100,7 +117,7 @@ export function LoginPage({
   title = "Sign in",
   cardFooter,
   footer,
-}: ReturnType<typeof loginSearch> & {
+}: LoginProps & {
   readonly children?: ReactNode;
   readonly title?: string;
   readonly cardFooter?: ReactNode;

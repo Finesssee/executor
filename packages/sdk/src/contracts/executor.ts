@@ -9,7 +9,7 @@ import type { Credentials } from "./storage.ts";
 import type { ExecutorDatabase } from "../implementation/storage.ts";
 import type { AppRuntime } from "../implementation/runtime.ts";
 import type { OAuthOptions } from "./oauth.ts";
-import type { ToolInvocationOptions } from "./tools.ts";
+import type { ToolInvocationOptions, ToolListOptions } from "./tools.ts";
 import type { App } from "./apps.ts";
 import type { Account } from "./account.ts";
 import type { AccountConnectionId, StorageError } from "./shared.ts";
@@ -50,8 +50,13 @@ export interface ExecutorOptions {
   readonly runtime: AppRuntime;
   readonly credentials: Credentials;
   readonly oauth?: OAuthOptions;
-  /** Evaluated skills, workflows and webhooks, shared per process or isolate. Defaults to this executor. */
+  /**
+   * Evaluated skills, workflows, webhooks and tool listings, shared per process or isolate.
+   * Defaults to this executor.
+   */
   readonly declarations?: import("./declarations.ts").DeclarationCache;
+  /** How long evaluated tool listings are reused. Defaults to `defaultToolListingPolicy`. */
+  readonly toolListings?: import("./declarations.ts").ToolListingPolicy;
   /**
    * Revalidates stale declarations and revokes deleted accounts' OAuth grants after the response.
    * Without it, stale declarations revalidate first and revocation runs inline.
@@ -113,6 +118,9 @@ type Groups<Api> = Api extends HttpApi.HttpApi<infer _Id, infer G> ? G : never;
 type WithInvocationOptions<M> = M extends (input: infer Input) => infer Output
   ? (input: Input, options?: ToolInvocationOptions) => Output
   : M;
+type WithListOptions<M> = M extends (input: infer Input) => infer Output
+  ? (input: Input, options?: ToolListOptions) => Output
+  : M;
 
 /**
  * Effect-native operations exposed by @executor-js/sdk/core, projected from
@@ -127,7 +135,9 @@ type FlatExecutor = {
     ]: HttpApiGroup.Identifier<G> extends "tools"
       ? HttpApiEndpoint.Identifier<E> extends "call" | "resume"
         ? WithInvocationOptions<Method<E>>
-        : Method<E>
+        : HttpApiEndpoint.Identifier<E> extends "list"
+          ? WithListOptions<Method<E>>
+          : Method<E>
       : Method<E>;
   };
 };

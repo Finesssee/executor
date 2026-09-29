@@ -8,6 +8,7 @@ import { Browser } from "../support/browser.ts";
 import { App } from "../support/contracts.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { publishingPreview } from "../support/publishing-preview.ts";
+import { openThroughBrowser } from "../support/in-app-navigation.ts";
 import { holdQuery } from "../support/query-transition.ts";
 import { scenarios } from "../test-plan.ts";
 
@@ -79,8 +80,9 @@ layer(HostedLive, { excludeTestServices: true })("Publishing dialog", (it) => {
                 "continue",
                 { allRequests: true },
               );
-              yield* browser.use("Open the app with this publishing result", (page) =>
-                page.goto(`/org/${actors.organization.slug}/apps/${app.id}`),
+              yield* openThroughBrowser(
+                "Open the app with this publishing result",
+                `/org/${actors.organization.slug}/apps/${app.id}`,
               );
               yield* browser.use("Publish is available without loading source files", (page) =>
                 page.getByRole("button", { name: "Publish", exact: true }).waitFor(),
@@ -145,8 +147,9 @@ layer(HostedLive, { excludeTestServices: true })("Publishing dialog", (it) => {
               status: "ready",
               manifest: { name: suggestedName, description: "A ready app" },
             });
-            yield* browser.use("Open the ready app", (page) =>
-              page.goto(`/org/${actors.organization.slug}/apps/${app.id}?view=source`),
+            yield* openThroughBrowser(
+              "Open the ready app",
+              `/org/${actors.organization.slug}/apps/${app.id}?view=source`,
             );
             yield* browser.use("Preview publication", (page) =>
               page.getByRole("button", { name: "Publish", exact: true }).click(),

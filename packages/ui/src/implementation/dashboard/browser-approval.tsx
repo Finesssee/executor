@@ -1,3 +1,4 @@
+import { LocalTime, timeOfDay } from "../components/local-time.tsx";
 /** A shared review page for tool consent and standard MCP form input. */
 import { useAtomRefresh, useAtomSet, useAtomValue } from "@effect/atom-react";
 import {
@@ -279,7 +280,7 @@ function ApprovalForm({
         </Button>
       </div>
       <p className="text-xs text-muted-foreground">
-        Expires at {new Date(request.expiresAt).toLocaleTimeString()}.
+        Expires at <LocalTime value={request.expiresAt} options={timeOfDay} />.
       </p>
     </form>
   );

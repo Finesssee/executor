@@ -1,5 +1,5 @@
 /** Alchemy owns the R2 binding; the SDK receives only its portable blob contract. */
-import { BlobStore, BlobStoreError } from "@executor-js/sdk/core";
+import { BlobStore, BlobStoreError, type AppCodeId } from "@executor-js/sdk/core";
 import { RuntimeContext } from "alchemy";
 import { retain } from "alchemy/RemovalPolicy";
 import * as Cloudflare from "alchemy/Cloudflare";
@@ -7,6 +7,7 @@ import { Effect, Option } from "effect";
 import { testStage } from "./stage.ts";
 import { providerFailureCode } from "../implementation/provider-failure.ts";
 import { persistR2Object } from "../implementation/r2-write.ts";
+import type { WorkspaceObjects } from "../implementation/workspace-cache.ts";
 
 /** Configured stages keep retained builds; a destroyed test stage leaves nothing behind. */
 export const AppBuilds = Cloudflare.R2.Bucket(
@@ -55,4 +56,44 @@ export const cloudBlobs = Effect.gen(function* () {
         Effect.mapError(() => new BlobStoreError({ operation: "remove" })),
       ),
   });
+}).pipe(Effect.provide(Cloudflare.R2.ReadWriteBucketBinding));
+
+/** One mutable object per app code, beside its immutable initial files. R2 versions fence writers. */
+export const cloudWorkspaceObjects = Effect.gen(function* () {
+  const bucket = yield* Cloudflare.R2.ReadWriteBucket(AppBuilds);
+  const key = (code: AppCodeId) => `app-source/${code}/workspace.json`;
+  const observe =
+    (operation: "get" | "put") =>
+    <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+      effect.pipe(
+        Effect.tapError((error) =>
+          Effect.annotateCurrentSpan({ "storage.blob.failure.code": providerFailureCode(error) }),
+        ),
+        Effect.mapError(() => new BlobStoreError({ operation })),
+      );
+  return {
+    get: (code) =>
+      Effect.gen(function* () {
+        const object = yield* bucket.get(key(code));
+        if (object === null) return Option.none();
+        return Option.some({ etag: object.etag, body: yield* object.bytes() });
+      }).pipe(Effect.provide(RuntimeContext.phantom), observe("get")),
+    put: (code, body) =>
+      bucket.put(key(code), body).pipe(
+        // Only a failed precondition returns null, and this write has none.
+        Effect.flatMap((object) =>
+          object === null
+            ? Effect.fail(new BlobStoreError({ operation: "put" }))
+            : Effect.succeed(object.etag),
+        ),
+        Effect.provide(RuntimeContext.phantom),
+        observe("put"),
+      ),
+    replace: (code, body, etag) =>
+      bucket.put(key(code), body, { onlyIf: { etagMatches: etag } }).pipe(
+        Effect.map((object) => object !== null),
+        Effect.provide(RuntimeContext.phantom),
+        observe("put"),
+      ),
+  } satisfies WorkspaceObjects;
 }).pipe(Effect.provide(Cloudflare.R2.ReadWriteBucketBinding));

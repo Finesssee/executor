@@ -1,3 +1,4 @@
+import { retireMethod } from "@executor-js/app-data/worker-bundle";
 import type { SourceFile } from "../contracts/deployment.ts";
 /** Retain package files in the server entry point and preserve invocation context across isolation. */
 export const appBridge = (files: readonly SourceFile[]) => `
@@ -25,6 +26,7 @@ export default {
 export const appRpcBridge = (module: string) => `
 import bridge from ${JSON.stringify(`./${module}`)};
 import { WorkerEntrypoint, RpcTarget } from "cloudflare:workers";
+import * as workers from "cloudflare:workers";
 class Invocation extends RpcTarget {
   #controller = new AbortController();
   #result;
@@ -48,13 +50,19 @@ class Invocation extends RpcTarget {
 }
 export default class extends WorkerEntrypoint {
   start(body, headers, elicitation, workflow = null, controls = null, cache = null) { return new Invocation(body, headers, elicitation, workflow, controls, cache); }
+  ${retireMethod}
 }`;
 
 /** A dynamic class receives only its own SQLite storage, with no platform bindings. */
 export const appFacetBridge = (module: string) => `
 import bridge from ${JSON.stringify(`./${module}`)};
 import { DurableObject } from "cloudflare:workers";
+import * as workers from "cloudflare:workers";
 import { facetStorage } from "apps/storage/facet";
+/** Only the data supervisor reaches this entrypoint, to unload a facet it replaced. */
+export default class extends workers.WorkerEntrypoint {
+  ${retireMethod}
+}
 export class ExecutorAppData extends DurableObject {
   #storage = facetStorage(this.ctx.storage);
   #calls = new Map();

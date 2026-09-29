@@ -21,6 +21,7 @@ import { hostedToolHandlers } from "./tools.ts";
 import { hostedAppHandlers } from "./apps.ts";
 import { hostedSkillHandlers } from "./skills.ts";
 import { hostedGroupHandlers } from "./groups.ts";
+import { hostedMcpConnectionHandlers } from "./mcp-connections.ts";
 
 const health = HttpApiBuilder.group(HostedApi, "health", (handlers) =>
   handlers.handle("get", () => Effect.succeed({ status: "ok" as const })),
@@ -73,6 +74,7 @@ export const hostedHandlers = Layer.mergeAll(
   hostedAccountHandlers,
   hostedToolHandlers,
   hostedAppDataHandlers,
+  hostedMcpConnectionHandlers,
   HttpApiBuilder.group(HostedApi, "viewer", (handlers) =>
     handlers.handle("get", () =>
       Effect.gen(function* () {

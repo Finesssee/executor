@@ -1,3 +1,4 @@
+import { usePageUrl } from "@executor-js/dashboard-start/page";
 import { useAtomRefresh, useAtomSet, useAtomValue } from "@effect/atom-react";
 import { useOrganizationRoute } from "@executor-js/hosted-web/organization";
 import { Button } from "@executor-js/ui/components/button";
@@ -128,7 +129,8 @@ function SetupValues({
   readonly providerId: string;
   readonly type: "saml" | "oidc";
 }) {
-  const base = `${window.location.origin}/api/auth/sso`;
+  const page = usePageUrl();
+  const base = `${page.origin}/api/auth/sso`;
   return (
     <div className="rounded-md border bg-muted/30 p-3 text-sm space-y-3">
       {type === "saml" && (

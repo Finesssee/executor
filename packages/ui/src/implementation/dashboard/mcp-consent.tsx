@@ -98,11 +98,19 @@ export function McpConsentSummary({
   return (
     <div className="mcp-consent-summary flex flex-col gap-5 p-[22px] border border-border rounded-[10px] [&_h2]:[margin:0_0_6px] [&_h2]:text-[14px] [&_h2]:[font-weight:550] [&_p]:m-0 [&_p]:text-[13px] [&_p]:leading-[1.6] [&_p]:text-muted-foreground">
       <div>
-        <h2>{target.kind === "api" ? "Connect to the Executor API" : "Access to your apps"}</h2>
+        <h2>
+          {target.kind === "api"
+            ? "Connect to the Executor API"
+            : target.connection === undefined
+              ? "Access to your apps"
+              : "Access to one of your connections"}
+        </h2>
         <p>
           {target.kind === "api"
             ? "This app can use the API with your account’s permissions."
-            : "This connection can use all apps available to you. Your account’s permissions still apply."}
+            : target.connection === undefined
+              ? "This connection can use all apps available to you. Your account’s permissions still apply."
+              : "This connection can use only the apps and tools you chose for it in Executor. Changes you make there apply immediately."}
         </p>
       </div>
       {approval !== undefined && (

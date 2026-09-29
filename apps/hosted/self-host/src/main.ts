@@ -48,11 +48,10 @@ export const selfHostRoutes = Effect.gen(function* () {
     yield* Layer.build(selfHostExecutor(skills, egress)),
   );
   const path = yield* Path.Path;
-  const configured = yield* Config.String("DASHBOARD_DIR").pipe(Config.option);
-  const directory = Option.isSome(configured)
-    ? path.resolve(configured.value)
-    : yield* path.fromFileUrl(new URL("../web/dist/", import.meta.url));
-  const dashboard = yield* dashboardFiles(directory);
+  // The renderer is imported from the same package build; see `dashboardFiles`.
+  const dashboard = yield* dashboardFiles(
+    yield* path.fromFileUrl(new URL("../web/dist/", import.meta.url)),
+  );
   return yield* selfHostRouteMap({ skills, egress, executorServices, dashboard });
 });
 

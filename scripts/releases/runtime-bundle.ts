@@ -263,7 +263,11 @@ else process.exitCode = result.status ?? 1;
       yield* fs.chmod(executable, 0o755);
     }
     yield* fs.copy(path.join(alchemy, "dist/core/workers"), path.join(stage, "alchemy-workers"));
-    yield* fs.copy(path.join(root, "apps/local/web/dist"), path.join(stage, "apps/local/web/dist"));
+    // The runtime bundles the document renderer; only browser files are read from disk.
+    yield* fs.copy(
+      path.join(root, "apps/local/web/dist/client"),
+      path.join(stage, "apps/local/web/dist/client"),
+    );
     yield* fs.copy(
       path.join(root, "packages/telemetry/dist/motel"),
       path.join(stage, "packages/telemetry/dist/motel"),

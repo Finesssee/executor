@@ -1,3 +1,4 @@
+import { usePageUrl } from "@executor-js/dashboard-start/page";
 import { type ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
 import { CopyButton } from "@executor-js/ui/dashboard/code";
@@ -18,8 +19,9 @@ export function SetupPageFrame({ children }: { readonly children: ReactNode }) {
 
 /** A reloadable handoff keeps the MCP URL and first prompt available after team creation. */
 export function AgentSetupPage() {
-  const endpoint = `${window.location.origin}/mcp`;
-  const docsUrl = new URL(documentationUrl(), window.location.origin).href;
+  const page = usePageUrl();
+  const endpoint = `${page.origin}/mcp`;
+  const docsUrl = new URL(documentationUrl(), page.origin).href;
   const prompt = `Help me connect to Executor over MCP at ${endpoint}.\n\nRead the docs to understand the product at ${docsUrl}, then help me get my first app set up.`;
   return (
     <SetupPageFrame>

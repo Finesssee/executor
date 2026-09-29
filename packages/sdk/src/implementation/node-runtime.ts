@@ -25,6 +25,7 @@ import {
   type ResolvedAccountsInput,
 } from "apps/contracts";
 import {
+  AppCacheChanges,
   RuntimeBuildFailed,
   RuntimeBuildUnavailable,
   RuntimeProtocolFailed,
@@ -138,9 +139,13 @@ export const nodeRuntime = (options: NodeRuntimeOptions): Runtime<NodeRuntimeSer
     build: BuildId,
   ) =>
     Effect.gen(function* () {
-      const session = yield* nodeCacheSession(options.workDirectory, context.app, build).pipe(
-        Effect.mapError(() => new RuntimeProtocolFailed()),
-      );
+      const changes = yield* AppCacheChanges;
+      const session = yield* nodeCacheSession(
+        options.workDirectory,
+        context.app,
+        build,
+        changes.changed(context.app),
+      ).pipe(Effect.mapError(() => new RuntimeProtocolFailed()));
       return yield* dispatch(
         handler,
         command,

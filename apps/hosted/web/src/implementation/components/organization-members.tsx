@@ -665,7 +665,7 @@ function MemberAvatar({ name, image }: { readonly name: string; readonly image: 
     .toUpperCase();
   return (
     <Avatar size="sm" aria-hidden>
-      <AvatarImage src={image ?? undefined} alt="" />
+      <AvatarImage src={image ?? undefined} alt="" referrerPolicy="no-referrer" />
       <AvatarFallback>{initials || "?"}</AvatarFallback>
     </Avatar>
   );

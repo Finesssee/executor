@@ -1,3 +1,4 @@
+import { usePageUrl } from "@executor-js/dashboard-start/page";
 import { useLocation } from "@tanstack/react-router";
 import { InteractionId } from "@executor-js/mcp/browser";
 import { HostedApprovalQuery } from "@executor-js/hosted-server/mcp/browser";
@@ -9,8 +10,9 @@ const approvals = browserApprovalAtoms(BrowserAtoms);
 const Address = Schema.Struct({ requestId: InteractionId, ...HostedApprovalQuery.fields });
 /** Both hosted products use their existing AuthBoundary and the same browser review page. */
 export function McpApprovePage() {
+  const page = usePageUrl();
   const location = useLocation();
-  const query = new URLSearchParams(window.location.search);
+  const query = new URLSearchParams(page.search);
   const address = Schema.decodeUnknownOption(Address)({
     requestId: location.pathname.split("/").at(-1),
     sessionId: query.get("sessionId"),

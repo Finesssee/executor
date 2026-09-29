@@ -1,0 +1,98 @@
+/** Remote skill catalogs kept in the app cache, through the real app compiler, runtime and HTTP. */
+import { expect, layer } from "@effect/vitest";
+import { Effect, Schema } from "effect";
+import { randomUUID } from "node:crypto";
+import { scenarios } from "../test-plan.ts";
+import { HostedLive, withHostedCase } from "../support/case.ts";
+import { Actors } from "../support/actors.ts";
+import { Api, body } from "../support/api.ts";
+import { App } from "../support/contracts.ts";
+import { skillUpstream } from "../support/skill-upstream.ts";
+
+const Bundle = Schema.Struct({
+  revision: Schema.String,
+  skills: Schema.Array(
+    Schema.Struct({
+      name: Schema.String,
+      files: Schema.Array(Schema.Struct({ path: Schema.String, content: Schema.String })),
+    }),
+  ),
+});
+layer(HostedLive, { excludeTestServices: true })("Cached skills", (it) => {
+  it.effect(scenarios.cachedSkills.title, (context) =>
+    withHostedCase(
+      context,
+      Effect.gen(function* () {
+        const api = yield* Api,
+          actors = yield* Actors;
+        const upstream = yield* skillUpstream;
+        const prefix = `/api/organizations/${actors.organization.id}/apps`;
+        const response = yield* api.request(actors.owner, "POST", `${prefix}/deploy`, {
+          name: `Cached skills ${randomUUID().slice(0, 8)}`,
+          files: [
+            {
+              path: "index.ts",
+              content: `import { defineApp, dynamicSkills, query, object } from "apps";
+import { githubSkills, wellKnownSkills } from "apps/skills";
+export default defineApp({ accounts: {} }, async (ctx) => ({
+  queries: { ping: query({ input: object({}) }, async () => "pong") },
+  dynamicSkills: dynamicSkills({ list: async () => [
+    ...await wellKnownSkills({ url: ${JSON.stringify(upstream.url)}, cache: ctx.cache, freshFor: "1 hour", fetch: ctx.fetch, signal: ctx.signal }),
+    ...await githubSkills({ repo: "synthetic/skills", path: "skills", cache: ctx.cache, freshFor: "1 hour", signal: ctx.signal, fetch: (input, init) => {
+      const url = new URL(input instanceof Request ? input.url : input);
+      return ctx.fetch(${JSON.stringify(upstream.url)} + "/github" + url.pathname + url.search, init);
+    } }),
+  ] }),
+}));`,
+            },
+          ],
+        });
+        expect(response.status, JSON.stringify(response.body)).toBe(200);
+        const app = yield* body(App, response);
+        yield* Effect.addFinalizer(() =>
+          api.request(actors.owner, "DELETE", `${prefix}/${app.id}`).pipe(Effect.orDie),
+        );
+        const base = `${prefix}/${app.id}`;
+        const read = Effect.gen(function* () {
+          const bundle = yield* api.request(actors.owner, "GET", `${base}/skill-bundle`);
+          expect(
+            bundle.status,
+            JSON.stringify({ response: bundle.body, requests: yield* upstream.requests }),
+          ).toBe(200);
+          return yield* body(Bundle, bundle);
+        });
+
+        const first = yield* read;
+        expect(first.skills.map((skill) => skill.name)).toEqual(["github-guide", "remote-guide"]);
+        expect(
+          first.skills.every((skill) =>
+            skill.files.some((file) => file.content.includes("Reference 1")),
+          ),
+        ).toBe(true);
+        const loaded = (yield* upstream.requests).length;
+        expect(loaded).toBeGreaterThan(0);
+
+        // A fresh catalog is served from the app cache without contacting either source.
+        const second = yield* read;
+        expect(second).toEqual(first);
+        expect((yield* upstream.requests).length).toBe(loaded);
+
+        // Within freshFor, a new publication is not fetched; the kept catalog stays current.
+        yield* upstream.publish(2);
+        const third = yield* read;
+        expect(third.revision).toBe(first.revision);
+        expect((yield* upstream.requests).length).toBe(loaded);
+        const file = yield* api.request(
+          actors.owner,
+          "GET",
+          `${base}/skills/remote-guide?revision=${first.revision}&file=references/example.md`,
+        );
+        expect(file.status).toBe(200);
+        expect((yield* body(Schema.Struct({ content: Schema.String }), file)).content).toBe(
+          "# Reference 1",
+        );
+        expect((yield* upstream.requests).length).toBe(loaded);
+      }),
+    ),
+  );
+});

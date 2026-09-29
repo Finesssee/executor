@@ -1,5 +1,6 @@
 import { adminClient } from "better-auth/client/plugins";
 import { createAuthClient } from "better-auth/client";
+import { dashboardAuthClientOptions } from "@executor-js/ui/contracts/http";
 import { Effect, Layer, Schema } from "effect";
 import { Atom } from "effect/unstable/reactivity";
 
@@ -23,7 +24,7 @@ const authRequest = <A>(
         : Effect.fail(new OperatorRequestFailed()),
     ),
   );
-const client = createAuthClient({ plugins: [adminClient()] });
+const client = createAuthClient({ ...dashboardAuthClientOptions, plugins: [adminClient()] });
 const Users = Schema.Struct({
   users: Schema.Array(
     Schema.Struct({

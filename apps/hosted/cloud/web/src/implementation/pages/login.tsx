@@ -2,7 +2,7 @@ import { PasskeyEnrollment } from "../components/passkey-enrollment.tsx";
 import { reportBrowserUsage } from "@executor-js/hosted-web/contracts/product-analytics";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { useAtomRefresh, useAtomSet, useAtomValue } from "@effect/atom-react";
-import { LoginLegalFooter, LoginPage, loginSearch } from "@executor-js/hosted-web/pages/login";
+import { LoginLegalFooter, LoginPage, type LoginProps } from "@executor-js/hosted-web/pages/login";
 import { AuthFailed, sessionAtom } from "@executor-js/hosted-web/contracts/auth";
 import { Button } from "@executor-js/ui/components/button";
 import { Input } from "@executor-js/ui/components/input";
@@ -19,7 +19,7 @@ import {
 
 /** Cloud adds passkeys and verified email codes to the social sign-in choices. */
 export function CloudLoginPage(
-  props: ReturnType<typeof loginSearch> & {
+  props: LoginProps & {
     readonly method?: "sso";
     readonly mode?: "signin" | "signup";
   },
@@ -86,9 +86,7 @@ function CompleteSignIn({
   return null;
 }
 
-function CloudSignInForm(
-  props: ReturnType<typeof loginSearch> & { readonly mode?: "signin" | "signup" },
-) {
+function CloudSignInForm(props: LoginProps & { readonly mode?: "signin" | "signup" }) {
   const signingUp = props.mode === "signup";
   const begin = useAtomSet(beginEmailSignInAtom, { mode: "promiseExit" });
   const verify = useAtomSet(verifyCodeAtom, { mode: "promiseExit" });

@@ -75,28 +75,30 @@ export const resolveCloudEntry = (
     });
   });
 
-/** Embed escaped, uncached bootstrap data so the selected page can render on its first React commit. */
+/**
+ * Redirect before any HTML, or render the selected page with its resolved setup data. A page
+ * resolved for another address, such as team setup after sign-in, is opened at that address.
+ */
 export const cloudEntryDocument = <E, R, E2, R2>(
   entry: Effect.Effect<CloudEntry, E, R>,
-  document: Effect.Effect<HttpServerResponse.HttpServerResponse, E2, R2>,
+  render: (entry: CloudEntryPage) => Effect.Effect<HttpServerResponse.HttpServerResponse, E2, R2>,
 ) =>
   Effect.gen(function* () {
     const resolved = yield* entry;
-    if (resolved.kind === "redirect")
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const requested = new URL(request.url, "https://entry.invalid").pathname.replace(
+      /(.)\/$/,
+      "$1",
+    );
+    if (resolved.kind === "redirect" || resolved.path !== requested)
       return HttpServerResponse.empty({
         status: 302,
-        headers: { ...privateHeaders, location: resolved.location },
+        headers: {
+          ...privateHeaders,
+          location: resolved.kind === "redirect" ? resolved.location : resolved.path,
+        },
       });
-    const response = yield* document;
-    if (response.status !== 200) return response;
-    const html = yield* Effect.tryPromise(() => HttpServerResponse.toWeb(response).text());
-    const data = JSON.stringify(resolved).replaceAll("<", "\\u003c");
-    return HttpServerResponse.html(
-      html.replace(
-        "</head>",
-        `<script id="executor-entry" type="application/json">${data}</script></head>`,
-      ),
-    ).pipe(HttpServerResponse.setHeaders(privateHeaders));
+    return yield* render(resolved);
   }).pipe(
     Effect.tapCause(reportCloudFailure),
     Effect.catch(() =>

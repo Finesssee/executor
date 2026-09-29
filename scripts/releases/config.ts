@@ -60,6 +60,9 @@ const version = Schema.decodeUnknownSync(ReleaseVersion)(manifest.version);
 const channel = version.includes("-beta.") ? "beta" : "latest";
 const repository = "UsefulSoftwareCo/executor";
 const tag = `executor@${version}`;
+const nodeEngine = Schema.decodeUnknownSync(
+  Schema.String.check(Schema.isPattern(/^>=\d+\.\d+\.\d+$/)),
+)(manifest.engines.node);
 
 /** Durable v2 identities stay fixed when the version moves from beta to stable. */
 export const release = {
@@ -68,6 +71,7 @@ export const release = {
   repository,
   tag,
   npmPackage: "executor",
+  minimumNodeVersion: nodeEngine.slice(2),
   npmInstall: `npm i -g executor${channel === "beta" ? "@beta" : ""}`,
   image: "ghcr.io/usefulsoftwareco/executor-selfhost",
   imageTag: version,

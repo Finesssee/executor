@@ -1,3 +1,4 @@
+import { LocalTime } from "../components/local-time.tsx";
 import { EmptyState } from "./empty-state.tsx";
 import { Skeleton } from "../components/skeleton.tsx";
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
@@ -276,7 +277,7 @@ function ScheduleList<E>({
                   <p className="text-xs text-muted-foreground">{timingText(row.timing)}</p>
                   {row.settings?.enabled && row.settings.nextAt && (
                     <p className="text-xs text-muted-foreground">
-                      Next: {row.settings.nextAt.toLocaleString()}
+                      Next: <LocalTime value={row.settings.nextAt} />
                     </p>
                   )}
                 </div>

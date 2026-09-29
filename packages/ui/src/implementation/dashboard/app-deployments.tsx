@@ -1,6 +1,6 @@
+import { LocalTime, shortMoment } from "../components/local-time.tsx";
 import { QueryResult, useQuery } from "./context.tsx";
 import type { AppDeploymentsProps } from "../../contracts/dashboard.ts";
-import { displayDate } from "../../contracts/dashboard.ts";
 import { DeploymentSourceLoading } from "./app-loading.tsx";
 import { SourceBrowser } from "./source-browser.tsx";
 import { cn } from "../lib/utils.ts";
@@ -47,7 +47,7 @@ export function AppDeployments<E>({
                 )}
               </span>
               <span className="mt-1 block text-xs text-muted-foreground">
-                {displayDate(item.createdAt)}
+                <LocalTime value={item.createdAt} options={shortMoment} />
               </span>
             </button>
           ))}
@@ -70,7 +70,9 @@ export function AppDeployments<E>({
                 <dl className="flex shrink-0 flex-wrap gap-x-8 gap-y-3 border-b px-5 py-3 text-xs max-[740px]:px-4">
                   <div className="flex items-center gap-2">
                     <dt className="text-muted-foreground">Deployed</dt>
-                    <dd>{displayDate(source.createdAt)}</dd>
+                    <dd>
+                      <LocalTime value={source.createdAt} options={shortMoment} />
+                    </dd>
                   </div>
                   <div className="flex items-center gap-2">
                     <dt className="text-muted-foreground">Source</dt>

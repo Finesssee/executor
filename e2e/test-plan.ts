@@ -8,8 +8,14 @@ export const TargetPlan = Schema.Union([
     status: Schema.Literal("scheduled"),
     runtime: Schema.optional(Schema.Literals(["managed", "attached"])),
   }),
-  Schema.Struct({ status: Schema.Literal("not-applicable"), reason: Schema.NonEmptyString }),
-  Schema.Struct({ status: Schema.Literal("not-run"), reason: Schema.NonEmptyString }),
+  Schema.Struct({
+    status: Schema.Literal("not-applicable"),
+    reason: Schema.NonEmptyString,
+  }),
+  Schema.Struct({
+    status: Schema.Literal("not-run"),
+    reason: Schema.NonEmptyString,
+  }),
 ]);
 /** Snapshot this plan in a report so later configuration changes cannot rewrite its meaning. */
 export const TestPlan = Schema.Struct({
@@ -18,7 +24,13 @@ export const TestPlan = Schema.Struct({
   fixtures: Schema.optional(Schema.Literals(["actors", "cli"])),
   appOrigin: Schema.optional(Schema.Literal(true)),
   managementProfiles: Schema.optional(Schema.Array(Schema.Literals(["owner", "admin", "member"]))),
-  targets: Schema.Struct({ "self-host": TargetPlan, local: TargetPlan, cloud: TargetPlan }),
+  /** Operator settings the scenario's own product process starts with. */
+  serverEnvironment: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+  targets: Schema.Struct({
+    "self-host": TargetPlan,
+    local: TargetPlan,
+    cloud: TargetPlan,
+  }),
 });
 const scheduled = { status: "scheduled" } as const;
 const managedCloud = { status: "scheduled", runtime: "managed" } as const;
@@ -33,6 +45,60 @@ const cloudOnboarding = {
 
 /** Scenario names and applicability used by both test declarations and test selection. */
 export const scenarios = {
+  appWorkerBudget: {
+    fixtures: "actors",
+    file: "app-worker-budget.spec.ts",
+    title:
+      "at most the configured number of app Workers stay loaded as apps and account selections grow",
+    serverEnvironment: { EXECUTOR_APP_WORKERS: "2" },
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Cloudflare unloads Cloud's app Workers itself."),
+      local: na("Local is covered by the local app Worker budget scenario."),
+    },
+  },
+  appWorkerBudgetInFlight: {
+    fixtures: "actors",
+    file: "app-worker-budget.spec.ts",
+    title: "an app Worker with a call in flight is never unloaded above the configured limit",
+    serverEnvironment: { EXECUTOR_APP_WORKERS: "1" },
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Cloudflare unloads Cloud's app Workers itself."),
+      local: na("Local is covered by the local in-flight budget scenario."),
+    },
+  },
+  appDataFacetUnloaded: {
+    fixtures: "actors",
+    file: "app-worker-budget.spec.ts",
+    title: "a data facet replaced for other accounts is unloaded, not kept for the process",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Cloudflare unloads Cloud's facet Workers itself."),
+      local: na("Local is covered by the local replaced facet scenario."),
+    },
+  },
+  localAppWorkerBudget: {
+    file: "app-worker-budget.spec.ts",
+    title:
+      "local keeps at most the configured number of app Workers loaded as apps and account selections grow",
+    serverEnvironment: { EXECUTOR_APP_WORKERS: "2" },
+    targets: {
+      local: scheduled,
+      "self-host": na("Hosted budgets are covered through organization routes."),
+      cloud: na("Cloudflare unloads Cloud's app Workers itself."),
+    },
+  },
+  localAppWorkerBudgetInFlight: {
+    file: "app-worker-budget.spec.ts",
+    title: "local never unloads an app Worker with a call in flight above the configured limit",
+    serverEnvironment: { EXECUTOR_APP_WORKERS: "1" },
+    targets: {
+      local: scheduled,
+      "self-host": na("Hosted budgets are covered through organization routes."),
+      cloud: na("Cloudflare unloads Cloud's app Workers itself."),
+    },
+  },
   workflowReplayAccess: {
     fixtures: "actors",
     file: "workflow-replay-access.spec.ts",
@@ -47,13 +113,21 @@ export const scenarios = {
     fixtures: "actors",
     file: "active-deployment-tools.spec.ts",
     title: "Hosted new tool calls reject retired deployments and preserve active approval policy",
-    targets: { "self-host": scheduled, cloud: scheduled, local: na("Hosted authorization policy") },
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("Hosted authorization policy"),
+    },
   },
   activeDeploymentResume: {
     fixtures: "actors",
     file: "active-deployment-tools.spec.ts",
     title: "Hosted MCP resumes pinned approvals after promotion with current authorization",
-    targets: { "self-host": scheduled, cloud: scheduled, local: na("Hosted authorization policy") },
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("Hosted authorization policy"),
+    },
   },
   graphqlPublicCache: {
     fixtures: "actors",
@@ -83,6 +157,70 @@ export const scenarios = {
     targets: {
       "self-host": scheduled,
       cloud: na("Loopback default; external emulators.dev fixture used for remote measurement"),
+      local: na("Hosted deployment API scenario"),
+    },
+  },
+  mcpCatalogScale: {
+    fixtures: "actors",
+    file: "mcp-catalog-scale.spec.ts",
+    title:
+      "MCP execute over 7,000 tools loads only the apps a program uses and isolates stalled apps",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Loopback stalled MCP server; the shared execute path is covered on self-host"),
+      local: na("Hosted deployment API scenario"),
+    },
+  },
+  mcpListingCacheChanges: {
+    fixtures: "actors",
+    file: "mcp-catalog.spec.ts",
+    title:
+      "MCP execute lists an app's tools again after its cached catalog is refreshed or its server announces changed tools",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Loopback MCP fixture; the shared execute path is covered on self-host"),
+      local: na("Hosted deployment API scenario"),
+    },
+  },
+  mcpSlowListing: {
+    fixtures: "actors",
+    file: "mcp-catalog-scale.spec.ts",
+    title: "MCP execute pays for a slow app's tool listing once and reuses it",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Loopback slow upstream; the shared execute path is covered on self-host"),
+      local: na("Hosted deployment API scenario"),
+    },
+  },
+  mcpRememberedListingFailure: {
+    fixtures: "actors",
+    file: "mcp-catalog-scale.spec.ts",
+    title:
+      "MCP execute remembers a stalled tool listing's timeout, retries it once in the background and recovers",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Loopback held upstream; the shared execute path is covered on self-host"),
+      local: na("Hosted deployment API scenario"),
+    },
+  },
+  mcpListingInputs: {
+    fixtures: "actors",
+    file: "mcp-catalog-scale.spec.ts",
+    title:
+      "MCP execute lists tools again for a new deployment, profile revision, selection or credential, never across profiles or revoked access",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Shared execute path; covered on self-host"),
+      local: na("Hosted deployment API scenario"),
+    },
+  },
+  mcpExecuteReach: {
+    fixtures: "actors",
+    file: "mcp-execute-reach.spec.ts",
+    title: "MCP execute discovers every app a program reaches through dynamic access to tools",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Shared execute path; covered on self-host"),
       local: na("Hosted deployment API scenario"),
     },
   },
@@ -126,6 +264,17 @@ export const scenarios = {
       local: na("Hosted profile API fixture; Node adapter exercised by self-host"),
     },
   },
+  importedJsonSchemaDocuments: {
+    fixtures: "actors",
+    file: "imported-json-schema-documents.spec.ts",
+    title:
+      "Apps build imported JSON Schemas with shared or deeply nested parts on every evaluation",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("Hosted profile API fixture; Node adapter exercised by self-host"),
+    },
+  },
   appCacheAccounts: {
     fixtures: "actors",
     file: "app-cache-accounts.spec.ts",
@@ -140,6 +289,27 @@ export const scenarios = {
     fixtures: "actors",
     file: "app-cache.spec.ts",
     title: "App cache shares values, coalesces loads and retains values after refresh failure",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("Hosted profile API fixture; Node adapter exercised by self-host"),
+    },
+  },
+  toolsIndexCache: {
+    fixtures: "actors",
+    file: "tools-index-cache.spec.ts",
+    managementProfiles: ["owner", "admin"],
+    title: "A new organization's first Tools index loads its catalog without redundant cache trips",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("Hosted management app catalog; the Node cache adapter shares the SQLite store"),
+    },
+  },
+  appCacheStalledLoader: {
+    fixtures: "actors",
+    file: "app-cache-stalled-loader.spec.ts",
+    title: "App cache callers outlast a stalled loader and the cache recovers after it",
     targets: {
       "self-host": scheduled,
       cloud: scheduled,
@@ -280,6 +450,24 @@ export const scenarios = {
       local: na("Local has no organization member roles."),
     },
   },
+  localWorkflowEngineMemory: {
+    file: "local-workflow-engine-memory.spec.ts",
+    title: "local releases finished workflow runs' engines from memory",
+    targets: {
+      local: scheduled,
+      "self-host": na("The self-host image's engines are covered by the Docker release suite."),
+      cloud: na("Cloudflare runs Cloud's workflow engines."),
+    },
+  },
+  localWorkflowEngineSteps: {
+    file: "local-workflow-engine-steps.spec.ts",
+    title: "local's evictable workflow engine finishes long steps on runs no caller holds",
+    targets: {
+      local: scheduled,
+      "self-host": na("The self-host image's engine is covered by the Docker release suite."),
+      cloud: na("Cloudflare runs Cloud's workflow engines."),
+    },
+  },
   localStartupObservability: {
     file: "local-startup-observability.spec.ts",
     title: "local startup failures retain their resource phase and safe system code",
@@ -368,6 +556,16 @@ export const scenarios = {
       local: na("Shared picker exercised through hosted connections."),
     },
   },
+  emptyAccountTools: {
+    fixtures: "actors",
+    file: "empty-state-recovery.spec.ts",
+    title: "Apps that list tools per account ask for an account instead of reporting no tools",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("Shared tool browser exercised through hosted profiles."),
+    },
+  },
   emptyStateMcp: {
     fixtures: "actors",
     file: "empty-state-mcp.spec.ts",
@@ -402,6 +600,8 @@ export const scenarios = {
     fixtures: "actors",
     file: "empty-states.spec.ts",
     title: "Empty states guide first use and recover from filters",
+    // Account searches filter the provisioned Executor account.
+    managementProfiles: ["owner"],
     targets: {
       "self-host": scheduled,
       cloud: scheduled,
@@ -801,6 +1001,29 @@ export const scenarios = {
       local: na("Exercises the shared OAuth lifecycle through hosted APIs."),
     },
   },
+  oauthPlanetscale: {
+    fixtures: "actors",
+    file: "oauth-planetscale.spec.ts",
+    title: "A registered PlanetScale client completes sign-in and reaches PlanetScale's MCP server",
+    targets: {
+      "self-host": na(
+        "PlanetScale accepts only HTTPS or bare loopback redirects; self-host tests a named loopback callback.",
+      ),
+      cloud: scheduled,
+      local: na("Exercises the shared OAuth lifecycle through hosted APIs."),
+    },
+  },
+  oauthSavedClientRejection: {
+    fixtures: "actors",
+    file: "oauth-saved-client-rejection.spec.ts",
+    title:
+      "A rejected client Executor registered is discarded only in the version the sign-in used, and entered clients are kept",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Uses a scoped loopback issuer with controlled wire responses."),
+      local: na("Exercises the shared OAuth lifecycle through hosted APIs."),
+    },
+  },
   oauthErrorResponses: {
     fixtures: "actors",
     file: "oauth-error-responses.spec.ts",
@@ -812,6 +1035,153 @@ export const scenarios = {
       local: na("Exercises the shared OAuth lifecycle through hosted APIs."),
     },
   },
+  appWorkerCredentialRotation: {
+    fixtures: "actors",
+    file: "app-worker-reuse.spec.ts",
+    title:
+      "app Workers stay loaded across credential rotation without sharing one account's state with another",
+    targets: {
+      "self-host": scheduled,
+      cloud: managedCloud,
+      local: na("Local key replacement is covered by the local app Worker reuse scenario."),
+    },
+  },
+  appWorkerWorkflowRuns: {
+    fixtures: "actors",
+    file: "app-worker-reuse.spec.ts",
+    title: "workflow runs reuse the app Worker and deliver their own run context",
+    targets: {
+      "self-host": scheduled,
+      cloud: managedCloud,
+      local: na("Local workflow runs are covered by the local app Worker reuse scenario."),
+    },
+  },
+  appWorkerSharedContexts: {
+    fixtures: "actors",
+    file: "app-worker-reuse.spec.ts",
+    title:
+      "tool calls and workflow runs share one account's app Worker, its outbound fetch and no other account's state",
+    targets: {
+      "self-host": scheduled,
+      cloud: na(
+        "Uses a loopback resource; Cloud app Workers fetch through one fixed service binding.",
+      ),
+      local: na("Local calls and runs are covered by the local app Worker reuse scenario."),
+    },
+  },
+  localAppWorkerReuse: {
+    file: "local-app-worker-reuse.spec.ts",
+    title:
+      "local key replacement, tool calls and workflow runs reuse one account's app Worker and its outbound fetch",
+    targets: {
+      local: scheduled,
+      "self-host": na("Hosted Worker reuse is covered through organization routes."),
+      cloud: na("Hosted Worker reuse is covered through organization routes."),
+    },
+  },
+  appWorkerColdStartFailure: {
+    fixtures: "actors",
+    file: "app-worker-reuse.spec.ts",
+    title:
+      "an app Worker whose cold start failed loads on the next call once its build is readable",
+    targets: {
+      "self-host": scheduled,
+      cloud: na(
+        "Cloud builds are read from R2 through the Cache API, which a scenario cannot make unreadable; the shared runner's recovery is covered on self-host and local.",
+      ),
+      local: na("Local cold start failures are covered by the local cold start failure scenario."),
+    },
+  },
+  localAppColdStartFailure: {
+    file: "local-app-worker-reuse.spec.ts",
+    title:
+      "a local app Worker whose cold start failed loads on the next call once its build is readable",
+    targets: {
+      local: scheduled,
+      "self-host": na("Hosted cold start failures are covered through organization routes."),
+      cloud: na("Hosted cold start failures are covered through organization routes."),
+    },
+  },
+  appBuildLoads: {
+    fixtures: "actors",
+    file: "app-worker-reuse.spec.ts",
+    title:
+      "warm app calls load no build, and accounts sharing or neighbouring a Worker keep their own credentials",
+    targets: {
+      "self-host": scheduled,
+      cloud: managedCloud,
+      local: na("Local build loads are covered by the local build load scenario."),
+    },
+  },
+  localAppBuildLoads: {
+    file: "local-app-worker-reuse.spec.ts",
+    title:
+      "local warm app calls load no build, and accounts sharing or neighbouring a Worker keep their own credentials",
+    targets: {
+      local: scheduled,
+      "self-host": na("Hosted build loads are covered through organization routes."),
+      cloud: na("Hosted build loads are covered through organization routes."),
+    },
+  },
+  appWorkerOAuthRefresh: {
+    fixtures: "actors",
+    file: "app-worker-reuse.spec.ts",
+    title: "OAuth token renewal reuses the app Worker and delivers each renewed token",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Uses a scoped loopback OAuth issuer."),
+      local: na("Exercises the shared OAuth lifecycle through hosted APIs."),
+    },
+  },
+  appWorkerReleaseHeld: {
+    fixtures: "actors",
+    file: "app-worker-budget.spec.ts",
+    title: "an app Worker whose release outlives its limit stays loaded until the release settles",
+    serverEnvironment: { EXECUTOR_APP_WORKERS: "1" },
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Cloudflare unloads Cloud's app Workers itself."),
+      local: na("Local is covered by the local release scenario."),
+    },
+  },
+  localAppWorkerReleaseHeld: {
+    file: "app-worker-budget.spec.ts",
+    title: "local keeps an app Worker whose release outlives its limit loaded until it settles",
+    serverEnvironment: { EXECUTOR_APP_WORKERS: "1" },
+    targets: {
+      local: scheduled,
+      "self-host": na("Hosted budgets are covered through organization routes."),
+      cloud: na("Cloudflare unloads Cloud's app Workers itself."),
+    },
+  },
+  appDataFacetUnloadedAfterEviction: {
+    fixtures: "actors",
+    file: "app-worker-budget.spec.ts",
+    title: "a data facet replaced after its supervisor was evicted is still unloaded",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Cloudflare unloads Cloud's facet Workers itself."),
+      local: na("Local is covered by the local evicted supervisor scenario."),
+    },
+  },
+  localAppDataFacetUnloadedAfterEviction: {
+    file: "app-worker-budget.spec.ts",
+    title: "local unloads a data facet replaced after its supervisor was evicted",
+    targets: {
+      local: scheduled,
+      "self-host": na("Hosted facets are covered through organization routes."),
+      cloud: na("Cloudflare unloads Cloud's facet Workers itself."),
+    },
+  },
+  localAppDataFacetUnloaded: {
+    file: "app-worker-budget.spec.ts",
+    title: "local unloads a data facet replaced for other accounts",
+    targets: {
+      local: scheduled,
+      "self-host": na("Hosted facets are covered through organization routes."),
+      cloud: na("Cloudflare unloads Cloud's facet Workers itself."),
+    },
+  },
   oauthRefreshResilience: {
     fixtures: "actors",
     file: "oauth-refresh-resilience.spec.ts",
@@ -820,6 +1190,89 @@ export const scenarios = {
     targets: {
       "self-host": scheduled,
       cloud: na("Uses a scoped loopback issuer with controlled token endpoint failures."),
+      local: na("Exercises the shared OAuth lifecycle through hosted APIs."),
+    },
+  },
+  oauthCacheScope: {
+    fixtures: "actors",
+    file: "oauth-cache-scope.spec.ts",
+    title: "Account cache scopes survive OAuth renewal and start empty after a reconnect",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Uses a scoped loopback issuer that renews tokens on every use."),
+      local: na("Exercises the shared OAuth lifecycle through hosted APIs."),
+    },
+  },
+  oauthRenewalKilledBeforeProvider: {
+    fixtures: "actors",
+    file: "oauth-renewal-interruption.spec.ts",
+    title:
+      "OAuth renewal recovers within an execute deadline after the process dies before the service processes it",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Kills and restarts a runner-owned product process."),
+      local: na("Exercises the shared OAuth lifecycle through hosted APIs."),
+    },
+  },
+  oauthRenewalKilledAfterRotation: {
+    fixtures: "actors",
+    file: "oauth-renewal-interruption.spec.ts",
+    title:
+      "OAuth renewal reports an interruption after the process dies holding a rotated token it never saved",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Kills and restarts a runner-owned product process."),
+      local: na("Exercises the shared OAuth lifecycle through hosted APIs."),
+    },
+  },
+  oauthRenewalKilledInReuseWindow: {
+    fixtures: "actors",
+    file: "oauth-renewal-interruption.spec.ts",
+    title:
+      "OAuth renewal recovers after the process dies holding a rotated token while the service still accepts the replaced one",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Kills and restarts a runner-owned product process."),
+      local: na("Exercises the shared OAuth lifecycle through hosted APIs."),
+    },
+  },
+  oauthRenewalKilledAfterSave: {
+    fixtures: "actors",
+    file: "oauth-renewal-interruption.spec.ts",
+    title: "OAuth renewal keeps a saved rotated token after the process dies",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Kills and restarts a runner-owned product process."),
+      local: na("Exercises the shared OAuth lifecycle through hosted APIs."),
+    },
+  },
+  oauthRenewalSlowLiveHolder: {
+    fixtures: "actors",
+    file: "oauth-renewal-interruption.spec.ts",
+    title: "OAuth renewal keeps its claim through a slow token response while other calls wait",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Holds a runner-owned token endpoint response for longer than a lease."),
+      local: na("Exercises the shared OAuth lifecycle through hosted APIs."),
+    },
+  },
+  oauthRenewalCallerDisconnects: {
+    fixtures: "actors",
+    file: "oauth-renewal-interruption.spec.ts",
+    title: "OAuth renewal saves a rotated token after its caller disconnects",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Holds a runner-owned token endpoint response while its caller disconnects."),
+      local: na("Exercises the shared OAuth lifecycle through hosted APIs."),
+    },
+  },
+  oauthRenewalRepeatedCrashes: {
+    fixtures: "actors",
+    file: "oauth-renewal-interruption.spec.ts",
+    title: "OAuth renewal converges after the process dies again during each recovery",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Kills and restarts a runner-owned product process."),
       local: na("Exercises the shared OAuth lifecycle through hosted APIs."),
     },
   },
@@ -917,7 +1370,8 @@ export const scenarios = {
   appDeclarationsOAuth: {
     fixtures: "actors",
     file: "app-declarations-oauth.spec.ts",
-    title: "kept app declarations are refused once an OAuth grant needs reconnecting",
+    title:
+      "kept app declarations and tool listings are refused once an OAuth grant needs reconnecting",
     targets: {
       "self-host": scheduled,
       cloud: na("Uses a scoped loopback token service; the grant check is shared SDK code."),
@@ -938,6 +1392,16 @@ export const scenarios = {
     fixtures: "actors",
     file: "workspace-source.spec.ts",
     title: "Workspace reads reuse confirmed source and preserve concurrent writes",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("The shared source contract is exercised through hosted organization routes."),
+    },
+  },
+  workspaceSourceWrites: {
+    fixtures: "actors",
+    file: "workspace-source-writes.spec.ts",
+    title: "Workspace reads return source saved by Git pushes and commits",
     targets: {
       "self-host": scheduled,
       cloud: scheduled,
@@ -967,6 +1431,11 @@ export const scenarios = {
   lastOrganization: {
     file: "last-organization.spec.ts",
     title: "Last active organization survives entry and rename while stale destinations recover",
+    targets: cloudOnboarding,
+  },
+  providerPhoto: {
+    file: "provider-photo.spec.ts",
+    title: "Linking Google adds its photo to the account menu and members list",
     targets: cloudOnboarding,
   },
   heroExperiments: {
@@ -1152,6 +1621,15 @@ export const scenarios = {
       local: scheduled,
     },
   },
+  localOAuthRenewalInterrupted: {
+    file: "local-oauth-renewal-interruption.spec.ts",
+    title: "Local dashboard keeps an account signed in after the app stops mid-renewal",
+    targets: {
+      "self-host": na("Local dashboard sign-in state."),
+      cloud: na("Local dashboard sign-in state."),
+      local: scheduled,
+    },
+  },
   oauthPermissionsLayout: {
     fixtures: "actors",
     file: "oauth-permissions-layout.spec.ts",
@@ -1248,6 +1726,16 @@ export const scenarios = {
       local: na("Hosted browser sign-in and callback recovery."),
     },
   },
+  dashboardRequestVolume: {
+    fixtures: "actors",
+    file: "dashboard-request-volume.spec.ts",
+    title: "App tabs reconcile shared reads periodically only while the page is visible",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("Local streams its overview; this bound covers hosted organization reads."),
+    },
+  },
   queryRefresh: {
     fixtures: "actors",
     file: "query-refresh.spec.ts",
@@ -1268,14 +1756,38 @@ export const scenarios = {
       local: na("Local has no hosted organization membership."),
     },
   },
-  sessionHint: {
+  earlyFormSubmission: {
     fixtures: "actors",
-    file: "session-hint.spec.ts",
-    title: "Session hints paint early without granting access and clear on sign-out or expiry",
+    file: "early-form-submission.spec.ts",
+    title:
+      "A form submitted before the page is interactive is held, never sent natively, and completes after hydration",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Cloud sign-in has no password form; the guard is shared and runs on self-host."),
+      local: na("Local has no sign-in form."),
+    },
+  },
+  documentRateLimit: {
+    fixtures: "actors",
+    file: "document-rate-limit.spec.ts",
+    title: "Pages render beyond the per-address auth limit while credential routes stay limited",
+    targets: {
+      "self-host": scheduled,
+      cloud: na("Automated Cloud stages disable auth rate limiting to isolate scenarios."),
+      local: na("Local has no auth rate limit."),
+    },
+  },
+  serverRenderedDashboard: {
+    fixtures: "actors",
+    file: "server-rendered-dashboard.spec.ts",
+    title:
+      "Dashboard pages render on the server behind sign-in, keep their framing protections and hydrate without repeating reads",
     targets: {
       "self-host": scheduled,
       cloud: scheduled,
-      local: na("Local uses pairing rather than hosted session cookies."),
+      local: na(
+        "Local pairs through a URL fragment; the local server-rendered scenario covers it.",
+      ),
     },
   },
   localAppDetailLoading: {
@@ -1329,7 +1841,7 @@ export const scenarios = {
   settingsLoading: {
     fixtures: "actors",
     file: "settings-loading.spec.ts",
-    title: "Settings loading keeps static labels and controls around unknown values",
+    title: "Settings render on the server and keep their layout while members load in the browser",
     targets: {
       "self-host": scheduled,
       cloud: scheduled,
@@ -1339,7 +1851,7 @@ export const scenarios = {
   apiKeysLoading: {
     fixtures: "actors",
     file: "settings-loading.spec.ts",
-    title: "API keys loading keeps its page identity and reads tokens before metadata",
+    title: "API keys loading keeps its page identity while tokens load",
     targets: {
       "self-host": scheduled,
       cloud: scheduled,
@@ -1394,7 +1906,7 @@ export const scenarios = {
     fixtures: "actors",
     file: "deferred-server-paths.spec.ts",
     title:
-      "Hosted API document is identical across concurrent reads and matches the installed Executor app",
+      "Hosted API document and authoring skills load on demand and match the installed Executor app",
     targets: {
       "self-host": scheduled,
       cloud: scheduled,
@@ -1470,6 +1982,16 @@ export const scenarios = {
       local: na("This scenario uses hosted deployment and app authentication."),
     },
   },
+  cloudBuildReuse: {
+    fixtures: "actors",
+    file: "cloud-build-reuse.spec.ts",
+    title: "Cold app Workers reuse a build already decoded in the isolate",
+    targets: {
+      cloud: managedCloud,
+      "self-host": na("Self-host loads retained builds without the Cloud isolate cache."),
+      local: na("Local loads retained builds without the Cloud isolate cache."),
+    },
+  },
   appWarmQueries: {
     fixtures: "actors",
     file: "app-observability.spec.ts",
@@ -1510,6 +2032,18 @@ export const scenarios = {
       cloud: managedCloud,
       "self-host": na("Cloud social sign-in instrumentation."),
       local: na("Cloud social sign-in instrumentation."),
+    },
+  },
+  authInvocations: {
+    fixtures: "actors",
+    file: "auth-invocations.spec.ts",
+    title: "Concurrent users read their own sessions and trace auth SQL to their own requests",
+    targets: {
+      cloud: scheduled,
+      "self-host": na(
+        "Self-host serves Better Auth from one process with its own database; Cloud binds each Worker invocation's connection.",
+      ),
+      local: na("Local has no hosted sign-in sessions."),
     },
   },
   clientRejectionReporting: {
@@ -1640,7 +2174,11 @@ export const scenarios = {
     fixtures: "actors",
     file: "api-grant-restrictions.spec.ts",
     title: "API grants retain exact selections through deployment, refresh and live narrowing",
-    targets: { "self-host": scheduled, cloud: scheduled, local: na("Hosted OAuth grant scenario") },
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("Hosted OAuth grant scenario"),
+    },
   },
   liveGrantRestrictions: {
     fixtures: "actors",
@@ -1650,6 +2188,57 @@ export const scenarios = {
       "self-host": scheduled,
       cloud: scheduled,
       local: na("This scenario checks hosted API and MCP parity."),
+    },
+  },
+  scopedConnectionAccess: {
+    fixtures: "actors",
+    file: "mcp-connections.spec.ts",
+    title:
+      "Scoped connections issue their own MCP URL and follow live edits, read-only rules and revocation",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("Local connections are covered by the local scoped connection scenario."),
+    },
+  },
+  scopedConnectionProfiles: {
+    fixtures: "actors",
+    file: "mcp-connections.spec.ts",
+    title:
+      "Scoped connections run apps only as selected profiles and save bare accounts as profiles",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("Hosted profile ownership and account sharing."),
+    },
+  },
+  scopedConnectionConsent: {
+    fixtures: "actors",
+    file: "mcp-connections.spec.ts",
+    title: "Scoped connection consent rejects other users and other organizations",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("Local has one operator and no organizations."),
+    },
+  },
+  scopedConnectionDashboard: {
+    fixtures: "actors",
+    file: "mcp-connections.spec.ts",
+    title: "Members create and revoke a scoped connection from the dashboard",
+    targets: {
+      "self-host": scheduled,
+      cloud: scheduled,
+      local: na("The shared connections page is exercised through the hosted dashboard."),
+    },
+  },
+  localScopedConnections: {
+    file: "local-mcp-connections.spec.ts",
+    title: "Local scoped connections limit an OAuth client to their tools and revoke it",
+    targets: {
+      local: scheduled,
+      "self-host": na("Hosted connections are covered by the hosted scoped connection scenarios."),
+      cloud: na("Hosted connections are covered by the hosted scoped connection scenarios."),
     },
   },
   patMcp: {
@@ -1949,7 +2538,11 @@ export const scenarios = {
     fixtures: "actors",
     file: "hosted-profiles.spec.ts",
     title: "hosted profiles isolate subjects and preserve disabled account selections",
-    targets: { local: na("Hosted membership only."), "self-host": scheduled, cloud: scheduled },
+    targets: {
+      local: na("Hosted membership only."),
+      "self-host": scheduled,
+      cloud: scheduled,
+    },
   },
   hostedProfileScheduling: {
     fixtures: "actors",
@@ -1975,7 +2568,11 @@ export const scenarios = {
     fixtures: "actors",
     file: "hosted-profiles.spec.ts",
     title: "hosted profiles recheck shared accounts after deletion and revocation",
-    targets: { local: na("Hosted membership only."), "self-host": scheduled, cloud: scheduled },
+    targets: {
+      local: na("Hosted membership only."),
+      "self-host": scheduled,
+      cloud: scheduled,
+    },
   },
   profiles: {
     file: "profiles.spec.ts",
@@ -2181,6 +2778,18 @@ export const scenarios = {
     fixtures: "actors",
     file: "dynamic-skills.spec.ts",
     title: "dynamic skills refresh remote publications without redeployment",
+    targets: {
+      "self-host": scheduled,
+      cloud: managedCloud,
+      local: na(
+        "Shared runtime and HTTP behavior are covered on hosted targets; local MCP has its own skill scenario.",
+      ),
+    },
+  },
+  cachedSkills: {
+    fixtures: "actors",
+    file: "cached-skills.spec.ts",
+    title: "remote skill catalogs are served from the app cache",
     targets: {
       "self-host": scheduled,
       cloud: managedCloud,

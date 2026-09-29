@@ -1,3 +1,4 @@
+import { openThroughBrowser } from "../support/in-app-navigation.ts";
 /** The same dashboard controls and browser approval, driven through the hosted product. */
 import { expect, layer } from "@effect/vitest";
 import { Effect, Schedule, Schema } from "effect";
@@ -81,8 +82,9 @@ layer(HostedLive, { excludeTestServices: true })("Hosted schedule dashboard", (i
                 "continue",
                 { allRequests: true },
               );
-              yield* browser.use("Open Schedules with its reads held", (page) =>
-                page.goto(`/org/${actors.organization.slug}/apps/${app.id}?view=schedules`),
+              yield* openThroughBrowser(
+                "Open Schedules with its reads held",
+                `/org/${actors.organization.slug}/apps/${app.id}?view=schedules`,
               );
               yield* metadata.requested;
               expect(
@@ -227,8 +229,9 @@ layer(HostedLive, { excludeTestServices: true })("Hosted schedule dashboard", (i
           });
         yield* browser.login(actors.owner);
         const failed = yield* holdQuery(paths, "fail");
-        yield* browser.use("Open schedules with definition discovery held", (page) =>
-          page.goto(`/org/${actors.organization.slug}/apps/${app.id}?view=schedules`),
+        yield* openThroughBrowser(
+          "Open schedules with definition discovery held",
+          `/org/${actors.organization.slug}/apps/${app.id}?view=schedules`,
         );
         yield* failed.requested;
         yield* browser.use("Definition discovery is loading", (page) =>
@@ -275,8 +278,9 @@ export default defineApp({ accounts: {} }, async () => ({  }));`,
         yield* Effect.addFinalizer(() =>
           api.request(actors.owner, "DELETE", `${prefix}/apps/${emptyApp.id}`).pipe(Effect.orDie),
         );
-        yield* browser.use("Open the app without schedules", (page) =>
-          page.goto(`/org/${actors.organization.slug}/apps/${emptyApp.id}?view=schedules`),
+        yield* openThroughBrowser(
+          "Open the app without schedules",
+          `/org/${actors.organization.slug}/apps/${emptyApp.id}?view=schedules`,
         );
         yield* browser.use("Successful discovery can report an empty list", (page) =>
           page.getByRole("heading", { name: "No schedules yet", exact: true }).waitFor(),
@@ -328,8 +332,9 @@ export default defineApp({ accounts: { service } }, async () => ({  }));`,
           )).status,
         ).toBe(409);
         yield* browser.login(actors.owner);
-        yield* browser.use("Open schedules without a selected account", (page) =>
-          page.goto(`/org/${actors.organization.slug}/apps/${app.id}?view=schedules`),
+        yield* openThroughBrowser(
+          "Open schedules without a selected account",
+          `/org/${actors.organization.slug}/apps/${app.id}?view=schedules`,
         );
         yield* browser.use("Account setup explains the blocked discovery", (page) =>
           page

@@ -3,7 +3,7 @@ import {
   GrantForbidden,
   permitsDelivery,
   restrictMcpBackend,
-  requestedMcpMode,
+  requestedMcpAddress,
 } from "@executor-js/mcp-auth";
 import { localRequest } from "./auth.ts";
 import type { ServerConfig } from "../contracts/config.ts";
@@ -35,7 +35,7 @@ export const localMcpBackend = (executor: Executor) =>
           yield* executor.accounts.list({ owner: app.owner }),
         );
       }),
-    listTools: (input) => executor.tools.list(input),
+    listTools: (input, options) => executor.tools.list(input, options),
     callTool: (input, options?: ToolInvocationOptions) => executor.tools.call(input, options),
     resumeInvocation: (request, response, options?: ToolInvocationOptions) =>
       executor.tools.resume({ requestId: request.requestId, response }, options),
@@ -79,7 +79,8 @@ export const localMcp = (
         readSkill: (input) => Effect.flatMap(RequestBackend, (b) => b.readSkill(input)),
         listApps: (input) => Effect.flatMap(RequestBackend, (b) => b.listApps(input)),
         listTargets: (input) => Effect.flatMap(RequestBackend, (b) => b.listTargets(input)),
-        listTools: (input) => Effect.flatMap(RequestBackend, (b) => b.listTools(input)),
+        listTools: (input, options) =>
+          Effect.flatMap(RequestBackend, (b) => b.listTools(input, options)),
         callTool: (input, options) =>
           Effect.flatMap(RequestBackend, (b) => b.callTool(input, options)),
         resumeInvocation: (request, response, options) =>
@@ -93,18 +94,19 @@ export const localMcp = (
     });
     const http = Effect.gen(function* () {
       const request = yield* localRequest(config.port, config.browserOrigin);
-      const mode = requestedMcpMode(new URL(request.url, oauth.origin));
-      if (mode === undefined) return yield* new GrantForbidden();
+      const address = requestedMcpAddress(new URL(request.url, oauth.origin));
+      if (address === undefined) return yield* new GrantForbidden();
       const current = Effect.gen(function* () {
+        // The administrative key is full access on the plain URL only; it never enters a connection.
         const grant =
           request.headers.authorization === `Bearer ${Redacted.value(config.apiKey)}`
             ? {
                 id: GrantId.make("local-administrator"),
                 policy: { kind: "all" as const },
-                target: { kind: "mcp" as const, mode },
+                target: { kind: "mcp" as const, mode: address.mode },
               }
             : (yield* oauth.authenticate(new Headers(request.headers))).grant;
-        if (!permitsDelivery(grant, mode)) return yield* new GrantForbidden();
+        if (!permitsDelivery(grant, address)) return yield* new GrantForbidden();
         return grant;
       });
       const grant = yield* current;

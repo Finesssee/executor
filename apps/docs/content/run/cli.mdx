@@ -14,6 +14,16 @@ accounts, runs your apps, and serves an MCP endpoint for your agents.
 package includes its runtime and dashboard; no source checkout or Bun install
 is needed.
 
+If npm prints `EBADENGINE`, upgrade Node before installing again. npm can report
+a successful install while skipping the native runtime on an unsupported Node
+version. After upgrading, repeat the install command with `--include=optional`.
+
+If `executor --version` still shows v1, your shell is finding an older install.
+Run `type -a executor` on macOS or Linux, or `where.exe executor` on Windows,
+to see which executable takes priority. Remove the old install with the package
+manager that installed it, then open a new terminal. For example, use
+`bun remove -g executor` for an old Bun install. This does not delete your data.
+
 On first launch, Executor saves its API and encryption keys in macOS Keychain,
 Windows Credential Manager, or Linux Secret Service. Linux needs a persistent
 Secret Service such as GNOME Keyring. Unlock the credential store and allow

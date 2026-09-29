@@ -36,6 +36,8 @@ class ServerFailed extends Schema.TaggedError<ServerFailed>()("ServerFailed", {
 export const startManagedServer = (
   target: typeof Target.Service,
   mode: "product" | "development" = "product",
+  /** Operator settings for this process, applied over the runner's own. */
+  environment: Readonly<Record<string, string>> = {},
 ) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem,
@@ -66,6 +68,8 @@ export const startManagedServer = (
 
     const gate = yield* Semaphore.make(1);
     let current: Scope.Closeable | undefined;
+    /** The running product process, for an abrupt kill that runs none of its shutdown. */
+    let running: ChildProcessSpawner.ChildProcessHandle | undefined;
     const env = {
       PATH: runtimePath,
       NODE_ENV: "test",
@@ -90,6 +94,7 @@ export const startManagedServer = (
       EXECUTOR_BUILD_VERSION: target.metadata.commit,
       EXECUTOR_WORKER_BUNDLE: path.resolve(".local/test-runtime/host.json"),
       EXECUTOR_TEST_CLOCK_OFFSET_MS: "0",
+      ...environment,
     };
     const stop = Effect.suspend(() =>
       current === undefined
@@ -112,9 +117,9 @@ export const startManagedServer = (
           ChildProcess.make(
             target.metadata.target === "local" ? "node" : "bun",
             [
-              ...(target.metadata.target === "local"
-                ? ["--import", new URL("./wall-clock.mjs", import.meta.url).href]
-                : []),
+              // Bun accepts Node's --import preload, so self-host can advance wall time too.
+              "--import",
+              new URL("./wall-clock.mjs", import.meta.url).href,
               ...entry.command,
             ],
             {
@@ -127,6 +132,13 @@ export const startManagedServer = (
               forceKillAfter: "15 seconds",
             },
           ),
+        );
+        running = child;
+        yield* Scope.addFinalizer(
+          scope,
+          Effect.sync(() => {
+            if (running === child) running = undefined;
+          }),
         );
         const ready = yield* Deferred.make<void>();
         const output = yield* Stream.merge(child.stdout, child.stderr).pipe(
@@ -198,15 +210,18 @@ export const startManagedServer = (
         ),
       );
     });
-    const control = (action: "start" | "stop" | "restart") =>
+    const control = (action: "start" | "stop" | "restart" | "kill") =>
       Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest;
         if (request.headers.authorization !== `Bearer ${Redacted.value(target.apiKey)}`)
           return HttpServerResponse.empty({ status: 401 });
         yield* gate.withPermits(1)(
           Effect.gen(function* () {
+            // A kill models a crash or out-of-memory stop: the whole process group ends at once.
+            if (action === "kill" && running !== undefined)
+              yield* running.kill({ killSignal: "SIGKILL" });
             if (action !== "start") yield* stop;
-            if (action !== "stop") yield* start;
+            if (action === "start" || action === "restart") yield* start;
           }),
         );
         return HttpServerResponse.jsonUnsafe({ ok: true });
@@ -232,8 +247,7 @@ export const startManagedServer = (
           );
           return yield* gate.withPermits(1)(
             Effect.gen(function* () {
-              if (target.metadata.target !== "local" || current !== undefined)
-                return HttpServerResponse.empty({ status: 409 });
+              if (current !== undefined) return HttpServerResponse.empty({ status: 409 });
               const offset = Number(env.EXECUTOR_TEST_CLOCK_OFFSET_MS) + body.milliseconds;
               if (offset > 86_400_000) return HttpServerResponse.empty({ status: 400 });
               env.EXECUTOR_TEST_CLOCK_OFFSET_MS = String(offset);
@@ -245,6 +259,7 @@ export const startManagedServer = (
       HttpRouter.add("POST", "/start", control("start")),
       HttpRouter.add("POST", "/stop", control("stop")),
       HttpRouter.add("POST", "/restart", control("restart")),
+      HttpRouter.add("POST", "/kill", control("kill")),
     );
     const services = yield* Layer.build(
       Layer.fresh(

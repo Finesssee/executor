@@ -1,4 +1,5 @@
 /** Typed product calls for catalog import and reusable account setup. */
+import { browserOnly } from "@executor-js/ui/contracts/http";
 import type { Provider, AppId, AccountFieldsInput, ProviderId } from "@executor-js/sdk";
 import type { DashboardOverview } from "@executor-js/local-server/contracts";
 import { DashboardClient, appAtom, overviewAtom, toolsAtom } from "./api.ts";
@@ -9,7 +10,11 @@ import { accountAtom, accountCredentialsChanged } from "./accounts.ts";
 import { selectedIds } from "@executor-js/ui/contracts/dashboard";
 
 /** Catalog metadata is loaded independently of installed apps. */
-export const catalogAtom = DashboardClient.query("dashboard", "catalog", {});
+/**
+ * The full catalog is large and only decorates icons and the add-app page, so the browser loads
+ * it after the page is interactive instead of the server embedding it in every document.
+ */
+export const catalogAtom = browserOnly(DashboardClient.query("dashboard", "catalog", {}));
 /** Generate ordinary app source from a user-supplied endpoint or API definition. */
 export const importCustomAppAtom = DashboardClient.mutation("dashboard", "importCustomApp");
 /** Fields travel through the redacted API contract and are absent from successful responses. */

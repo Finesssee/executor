@@ -56,6 +56,11 @@ export class Telemetry extends Context.Service<
   Telemetry,
   {
     readonly query: (traceId: string) => Effect.Effect<typeof SpanQuery.Type, TelemetryUnavailable>;
+    /** The tags of delivered spans of one operation whose attributes match exactly, in any trace. */
+    readonly spans: (
+      operation: string,
+      attributes: Readonly<Record<string, string>>,
+    ) => Effect.Effect<ReadonlyArray<Readonly<Record<string, string>>>, TelemetryUnavailable>;
     readonly export: (
       spans: ReadonlyArray<ClientSpan>,
     ) => Effect.Effect<number, TelemetryUnavailable>;
@@ -90,6 +95,39 @@ export class Telemetry extends Context.Service<
                     return yield* response.json.pipe(
                       Effect.flatMap(Schema.decodeUnknownEffect(SpanQuery)),
                     );
+                  }),
+                ),
+              ),
+        spans: (operation, attributes) =>
+          target.metadata.target === "cloud" && target.metadata.mode === "attached"
+            ? Effect.fail(new TelemetryUnavailable())
+            : safe(
+                Effect.scoped(
+                  Effect.gen(function* () {
+                    const url = new URL("/api/spans/search", yield* origin);
+                    url.searchParams.set("operation", operation);
+                    url.searchParams.set("lookback", "1d");
+                    url.searchParams.set("limit", "10000");
+                    for (const [key, value] of Object.entries(attributes))
+                      url.searchParams.set(`attr.${key}`, value);
+                    const response = yield* http.get(url.href);
+                    if (response.status !== 200) return yield* new TelemetryUnavailable();
+                    const found = yield* response.json.pipe(
+                      Effect.flatMap(
+                        Schema.decodeUnknownEffect(
+                          Schema.Struct({
+                            data: Schema.Array(
+                              Schema.Struct({
+                                span: Schema.Struct({
+                                  tags: Schema.Record(Schema.String, Schema.String),
+                                }),
+                              }),
+                            ),
+                          }),
+                        ),
+                      ),
+                    );
+                    return found.data.map(({ span }) => span.tags);
                   }),
                 ),
               ),

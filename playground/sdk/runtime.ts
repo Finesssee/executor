@@ -62,6 +62,7 @@ export async function runtimeWalkthrough(directory: string) {
             id: AccountId.make(`acc_${suffix}`),
             provider: declaration.definition,
             method: "apiKey",
+            generation: 0,
             fields: { endpoint, token: `fixture-${suffix}` },
           },
           extras: [],

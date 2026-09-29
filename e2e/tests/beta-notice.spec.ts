@@ -210,7 +210,12 @@ layer(HostedLive, { excludeTestServices: true })("Beta notice", (it) => {
             page.locator('aside[aria-label="Beta notice"]').count(),
           ),
         ).toBe(0);
-        yield* browser.use("Reload the dashboard", (page) => page.reload());
+        const reloaded = yield* browser.use("Reload the dashboard", (page) => page.reload());
+        if (reloaded === null) throw new Error("The dashboard did not return a document");
+        // The server reads the dismissal, so the page never renders the banner to hide it.
+        expect(
+          yield* browser.use("Read the dashboard document", () => reloaded.text()),
+        ).not.toContain('aria-label="Beta notice"');
         expect(
           yield* browser.use("Check dashboard dismissal survives reload", (page) =>
             page.locator('aside[aria-label="Beta notice"]').count(),
@@ -226,7 +231,7 @@ layer(HostedLive, { excludeTestServices: true })("Beta notice", (it) => {
         ).toBe(0);
 
         yield* browser.use("Clear the dismissal", (page) =>
-          page.evaluate(() => localStorage.removeItem("executor-beta-notice-dismissed")),
+          page.context().clearCookies({ name: "executor-beta-notice" }),
         );
         yield* browser.use("Reload the homepage with the banner restored", (page) => page.reload());
         yield* browser.use("Dismiss the homepage banner", (page) =>

@@ -1,9 +1,15 @@
 /** Scoped Vite adapter shared by browser and desktop development hosts. */
 import { createServer as createHttpServer } from "node:http";
 import * as NodeHttpServerRequest from "@effect/platform-node/NodeHttpServerRequest";
+import {
+  dashboardDocument,
+  withSameSiteReload,
+  type DashboardServer,
+} from "@executor-js/dashboard-start/document";
+import type { LocalDocumentContext } from "@executor-js/local-web/document";
 import { Effect, Path } from "effect";
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
-import { createServer } from "vite";
+import { createServer, isRunnableDevEnvironment } from "vite";
 import type { ServerConfig } from "../contracts/config.ts";
 import { StartupFailed } from "../contracts/startup.ts";
 import type { LocalWeb } from "../node.ts";
@@ -48,14 +54,14 @@ export const developmentWeb = (settings: ServerConfig, options: DevelopmentWebOp
           createServer({
             root,
             logLevel: "error",
-            appType: "mpa",
+            appType: "custom",
             ...(options.cacheDir === undefined
               ? {}
               : { cacheDir: path.join(root, "../../..", options.cacheDir) }),
             server: {
               middlewareMode: true,
               // T3 Code warms the entry graph before the first Electron request.
-              warmup: { clientFiles: ["./src/main.tsx"] },
+              warmup: { clientFiles: ["./src/client.tsx"] },
               allowedHosts:
                 settings.browserOrigin === undefined
                   ? []
@@ -73,42 +79,55 @@ export const developmentWeb = (settings: ServerConfig, options: DevelopmentWebOp
       }),
       (server) => Effect.promise(() => server.close()),
     );
-    const serve = (url?: string) =>
-      Effect.gen(function* () {
-        const request = yield* HttpServerRequest.HttpServerRequest;
-        const incoming = NodeHttpServerRequest.toIncomingMessage(request);
-        const response = NodeHttpServerRequest.toServerResponse(request);
-        const originalUrl = incoming.url;
-        if (url !== undefined) incoming.url = url;
-        return yield* Effect.callback<HttpServerResponse.HttpServerResponse>((resume) => {
-          const cleanup = () => {
-            incoming.url = originalUrl;
-            response.off("finish", done);
-            response.off("close", done);
-          };
-          const done = () => {
-            cleanup();
+    const assets = Effect.gen(function* () {
+      const request = yield* HttpServerRequest.HttpServerRequest;
+      const incoming = NodeHttpServerRequest.toIncomingMessage(request);
+      const response = NodeHttpServerRequest.toServerResponse(request);
+      return yield* Effect.callback<HttpServerResponse.HttpServerResponse>((resume) => {
+        const cleanup = () => {
+          response.off("finish", done);
+          response.off("close", done);
+        };
+        const done = () => {
+          cleanup();
+          resume(Effect.succeed(HttpServerResponse.empty({ status: response.statusCode })));
+        };
+        response.once("finish", done);
+        response.once("close", done);
+        vite.middlewares(incoming, response, (error?: unknown) => {
+          cleanup();
+          if (error !== undefined) {
+            response.statusCode = 500;
+            response.end("The development UI could not be loaded.");
             resume(Effect.succeed(HttpServerResponse.empty({ status: response.statusCode })));
-          };
-          response.once("finish", done);
-          response.once("close", done);
-          vite.middlewares(incoming, response, (error?: unknown) => {
-            cleanup();
-            if (error !== undefined) {
-              response.statusCode = 500;
-              response.end("The development UI could not be loaded.");
-              resume(Effect.succeed(HttpServerResponse.empty({ status: response.statusCode })));
-            } else {
-              resume(Effect.succeed(HttpServerResponse.empty({ status: 404 })));
-            }
-          });
-          return Effect.sync(cleanup);
+          } else {
+            resume(Effect.succeed(HttpServerResponse.empty({ status: 404 })));
+          }
         });
+        return Effect.sync(cleanup);
       });
-    // Only a document route rewrites to index.html. Vite owns HTML transforms and bundled-dev output.
-    const assets = serve();
+    });
+    const ssr = vite.environments.ssr;
+    if (ssr === undefined || !isRunnableDevEnvironment(ssr))
+      return yield* new StartupFailed({ stage: "dev-server" });
+    // The same document handler the built server uses, reloaded by Vite when its modules change.
+    // The local session cookie is strict; see `withSameSiteReload`.
+    const document = withSameSiteReload(
+      dashboardDocument({
+        server: Effect.tryPromise({
+          try: () =>
+            ssr.runner.import<{ default: DashboardServer<LocalDocumentContext> }>(
+              path.join(root, "src/server.ts"),
+            ),
+          catch: () => new StartupFailed({ stage: "dev-server" }),
+        }).pipe(Effect.map((module) => module.default)),
+        // Local pages read their session through the same in-process API as their data.
+        context: () => Effect.succeed({}),
+        headers: { "referrer-policy": "no-referrer" },
+      }),
+    );
     return {
-      document: serve("/index.html"),
+      document,
       favicon: assets,
       asset: assets,
       fallback: assets,

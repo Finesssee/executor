@@ -1,16 +1,14 @@
 import { sentryVitePlugin } from "@sentry/vite-plugin";
 import { dashboardViteConfig } from "@executor-js/hosted-web/vite";
 import { mergeConfig } from "vite-plus";
-import { cloudflareRedirects } from "./cloudflare-redirects.ts";
+import { cloudflareRoutes } from "./cloudflare-routes.ts";
 
-const redirects = cloudflareRedirects();
 const apiUrl = process.env.HOSTED_API_URL ?? "http://127.0.0.1:4411";
 
 export default mergeConfig(
   dashboardViteConfig({
     apiUrl,
     port: 4412,
-    routePlugins: [redirects.routes],
   }),
   {
     // Cloud's IaC serves documentation beside the dashboard on every stage.
@@ -19,7 +17,7 @@ export default mergeConfig(
     server: { proxy: { "/docs": apiUrl } },
     build: { sourcemap: "hidden" },
     plugins: [
-      redirects.assets,
+      cloudflareRoutes(),
       ...(process.env.SENTRY_AUTH_TOKEN
         ? [
             sentryVitePlugin({

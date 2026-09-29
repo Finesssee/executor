@@ -29,11 +29,11 @@ Docs: ${siteOrigin}/docs`;
 export const GITHUB_URL = "https://github.com/UsefulSoftwareCo/executor";
 
 /** One-line description of the product, used as the Markdown tagline. */
-export const tagline = "Built by your agents. Run by Executor.";
+export const tagline = "Your agents' cloud.";
 
 /** Shared introduction for the landing page and its Markdown representation. */
 export const introduction =
-  "Bring your own agents. Build tools, automations, and apps once. Run them on Executor and use them across all your agents.";
+  "Your connectors, skills, automations, and personal software, all in one place.";
 
 /** Introduce personal software through a familiar starting point and a growing app. */
 export const homepageStory = {

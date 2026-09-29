@@ -1,4 +1,5 @@
-import { Schema } from "effect";
+import { Option, Schema } from "effect";
+import { OrganizationId } from "./organization.ts";
 
 /** Display identity only; session tokens and organization preferences never cross this boundary. */
 export const BrowserSession = Schema.NullOr(
@@ -46,4 +47,38 @@ export const browserReturnTo = (value: unknown): string => {
   // Re-assert the single-slash invariant on the result, not only on the input.
   const path = target.pathname + target.search + target.hash;
   return path.startsWith("/") && !path.startsWith("//") ? path : "/";
+};
+
+/** Server context for a hosted dashboard document, resolved before rendering starts. */
+export interface HostedDocumentContext {
+  /** The verified display identity; `null` is a confirmed missing or expired session. */
+  readonly session: BrowserSession;
+  /** Where this person last worked in this browser, when the saved memory is theirs. */
+  readonly lastOrganization: LastOrganization | null;
+}
+
+/**
+ * The organization a person last opened in this browser, used only to choose where `/` goes.
+ * It is navigation memory, never authority: every request still checks membership.
+ */
+export const LastOrganization = Schema.Struct({
+  user: Schema.String,
+  organization: OrganizationId,
+});
+export type LastOrganization = typeof LastOrganization.Type;
+
+/** Cookies do not distinguish ports, so local cloud and self-host keep separate memories. */
+export const lastOrganizationCookie = (host: string) => {
+  const port = new URL(`http://${host}`).port;
+  return `executor-org${port === "" ? "" : `-${port}`}`;
+};
+
+/** Parse the saved memory for this signed-in person; anything else is ignored. */
+export const readLastOrganization = (
+  value: string | undefined,
+  session: BrowserSession,
+): LastOrganization | null => {
+  if (value === undefined || session === null) return null;
+  const parsed = Schema.decodeUnknownOption(Schema.fromJsonString(LastOrganization))(value);
+  return Option.isSome(parsed) && parsed.value.user === session.user.id ? parsed.value : null;
 };

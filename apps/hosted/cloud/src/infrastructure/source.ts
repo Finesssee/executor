@@ -2,7 +2,9 @@
 import { gitSourceStorage } from "@executor-js/app-source";
 import { cloudflareRepositories, type ArtifactsTokens } from "@executor-js/app-source/cloudflare";
 import { Config, Effect, Schema } from "effect";
+import { cachedWorkspaces } from "../implementation/workspace-cache.ts";
 import { cloudSourceNamespace } from "./artifacts-tokens.ts";
+import { cloudWorkspaceObjects } from "./blobs.ts";
 
 /** Resolve bindings during composition; each Git operation remains scoped to its invocation. */
 export const cloudAppSources = (tokens: ArtifactsTokens) =>
@@ -13,6 +15,11 @@ export const cloudAppSources = (tokens: ArtifactsTokens) =>
       ),
     );
     const namespace = yield* cloudSourceNamespace;
-    const repositories = cloudflareRepositories(tokens, { accountId, namespace });
-    return { repositories, sources: gitSourceStorage(repositories) };
+    const git = cloudflareRepositories(tokens, { accountId, namespace });
+    const workspaces = yield* cloudWorkspaceObjects;
+    /** Every caller in an execution shares one cache view, so all working-branch writes invalidate it. */
+    return (background: (work: Effect.Effect<void>) => Effect.Effect<boolean>) => {
+      const repositories = cachedWorkspaces(git, workspaces, background);
+      return { repositories, sources: gitSourceStorage(repositories) };
+    };
   }).pipe(Effect.orDie);

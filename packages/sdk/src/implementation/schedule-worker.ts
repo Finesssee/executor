@@ -34,8 +34,15 @@ export const startScheduleWorker = (
       yield* Effect.flatten(ScheduleHostReady);
       yield* Effect.forever(
         executor[ProfileHost].tick(config.concurrency).pipe(
-          Effect.catch(() => Effect.logError("Profile setup dispatch failed")),
-          Effect.andThen(Queue.take(profilesChanged).pipe(Effect.timeoutOption("5 seconds"))),
+          Effect.catch(() =>
+            Effect.logError("Profile setup dispatch failed").pipe(Effect.as(false)),
+          ),
+          // A full batch of saved intent runs again at once; otherwise wait for a change.
+          Effect.flatMap((more) =>
+            more
+              ? Effect.void
+              : Queue.take(profilesChanged).pipe(Effect.timeoutOption("5 seconds")),
+          ),
         ),
       );
     }).pipe(Effect.forkIn(scope));

@@ -1,0 +1,33 @@
+{
+  "name": "@executor-js/dashboard-start",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./vite": "./vite.ts",
+    "./document": "./src/implementation/document.ts",
+    "./shell": "./src/implementation/shell.tsx",
+    "./api": "./src/contracts/api.ts",
+    "./registry": "./src/implementation/registry.tsx",
+    "./in-process": "./src/implementation/in-process.ts",
+    "./page": "./src/implementation/page.ts",
+    "./document-api": "./src/contracts/document.ts",
+    "./complete-document": "./src/implementation/complete-document.tsx"
+  },
+  "dependencies": {
+    "@effect/atom-react": "https://pkg.pr.new/Effect-TS/effect/@effect/atom-react@c7d1ffff31a3e2ae0b0b0796b742bddeb797269d",
+    "@executor-js/ui": "workspace:*",
+    "@tanstack/react-router": "1.170.40",
+    "@tanstack/react-start": "1.168.59",
+    "effect": "https://pkg.pr.new/Effect-TS/effect/effect@c7d1ffff31a3e2ae0b0b0796b742bddeb797269d",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.2.1",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^6.0.0",
+    "vite": "npm:@voidzero-dev/vite-plus-core@0.3.3",
+    "vite-plus": "0.3.3"
+  }
+}

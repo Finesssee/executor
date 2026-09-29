@@ -20,6 +20,8 @@ const makeProviderErrorUpstream = Effect.fn(function* (healthyUpstream: typeof t
     readonly headers?: Record<string, string>;
     readonly code?: string;
     readonly accounts?: "all";
+    /** Answer the failure only after this long, as a slow or distant service does. */
+    readonly delayMs?: number;
   };
   const state = yield* Ref.make<Failure | undefined>(undefined);
   const routes = Layer.mergeAll(
@@ -70,7 +72,8 @@ const makeProviderErrorUpstream = Effect.fn(function* (healthyUpstream: typeof t
             (failure.accounts === "all" ||
               request.headers.authorization === "Bearer synthetic-personal") &&
             (failure.phase === undefined || failure.phase === phase)
-          )
+          ) {
+            if (failure.delayMs !== undefined) yield* Effect.sleep(failure.delayMs);
             return yield* HttpServerResponse.json(
               {
                 message: providerSecretMarker,
@@ -78,6 +81,7 @@ const makeProviderErrorUpstream = Effect.fn(function* (healthyUpstream: typeof t
               },
               { status: failure.status, headers: failure.headers },
             );
+          }
           if (path.startsWith("/custom/")) return yield* HttpServerResponse.json({ ok: true });
           const response = yield* Effect.tryPromise((signal) =>
             fetch(`${healthy}${path}`, {

@@ -252,6 +252,15 @@ const make = Effect.gen(function* () {
         });
         return { login, email, companyName: provider === "google" ? "Example Company" : null };
       }),
+    /** Seed a Google profile for an address that may already have an Executor account. */
+    googleUser: (user: {
+      readonly email: string;
+      readonly name: string;
+      readonly picture: string;
+    }) =>
+      emulatorRequest(value.services.google.baseUrl, "/_emulate/seed", {
+        users: [{ ...user, email_verified: true }],
+      }).pipe(Effect.asVoid),
     received: (email: string) =>
       messages(email).pipe(Effect.map((rows) => rows.map((row) => row.id))),
     mail: (email: string, previouslyReceived: ReadonlyArray<string>) =>

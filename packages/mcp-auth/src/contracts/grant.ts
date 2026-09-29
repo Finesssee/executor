@@ -3,11 +3,8 @@ import {
   AppPermission,
   fullAuthority,
   selectedAuthority,
-  selectsApp,
-  selectsTool,
   type AuthorizationPolicy,
 } from "@executor-js/authorization";
-import type { AppId, ToolName } from "@executor-js/sdk/core";
 export { AppPermission } from "@executor-js/authorization";
 import { Schema } from "effect";
 
@@ -27,9 +24,20 @@ export type GrantPolicy = typeof GrantPolicy.Type;
 /** Revoked grants are absent from authentication, not converted to empty or unrestricted policies. */
 export const ApprovalMode = Schema.Literals(["model", "native", "browser"]);
 export type ApprovalMode = typeof ApprovalMode.Type;
+/** A user's named MCP access boundary. URL-safe because it appears in the MCP URL and OAuth resource. */
+export const ConnectionId = Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_-]{1,64}$/)).pipe(
+  Schema.brand("McpConnectionId"),
+);
+export type ConnectionId = typeof ConnectionId.Type;
+/** What an MCP URL selects: its approval mode and, for a scoped connection, that connection. */
+export const McpAddress = Schema.Struct({
+  mode: ApprovalMode,
+  connection: Schema.optionalKey(ConnectionId),
+});
+export type McpAddress = typeof McpAddress.Type;
 /** The OAuth resource approved for this grant, preserved through refresh. */
 export const GrantTarget = Schema.Union([
-  Schema.Struct({ kind: Schema.Literal("mcp"), mode: ApprovalMode }),
+  Schema.Struct({ kind: Schema.Literal("mcp"), ...McpAddress.fields }),
   Schema.Struct({ kind: Schema.Literal("api") }),
 ]);
 export type GrantTarget = typeof GrantTarget.Type;
@@ -49,30 +57,44 @@ export const grantAuthorization = (policy: GrantPolicy): AuthorizationPolicy =>
   policy.kind === "all"
     ? fullAuthority
     : selectedAuthority(["discover", "run"], { kind: "tools", apps: policy.apps });
-/** Protocol callers share the same exact app-selection rule as HTTP authorization. */
-export const permitsApp = (policy: GrantPolicy, app: AppId) => selectsApp(policy, app);
-/** Protocol callers share the same exact tool-selection rule as HTTP authorization. */
-export const permitsTool = (policy: GrantPolicy, app: AppId, tool: ToolName) =>
-  selectsTool(policy, app, tool);
-/** An issued MCP grant cannot change mode by changing the request URL. */
-export const permitsDelivery = (grant: Grant, mode: ApprovalMode) =>
+/** An issued MCP grant cannot change mode or connection by changing the request URL. */
+export const permitsDelivery = (grant: Grant, address: McpAddress) =>
   grant.target.kind === "mcp" &&
-  grant.target.mode === mode &&
-  (grant.policy.kind === "all" || grant.policy.approval === "client" || mode === "browser");
+  grant.target.mode === address.mode &&
+  grant.target.connection === address.connection &&
+  (grant.policy.kind === "all" || grant.policy.approval === "client" || address.mode === "browser");
+/** Browser approval pages answer only grants issued for a browser-mode URL. */
+export const permitsBrowserApproval = (grant: Grant) =>
+  grant.target.kind === "mcp" && permitsDelivery(grant, { ...grant.target, mode: "browser" });
 
-/** Missing URL mode retains the original model-mode default; duplicates and unknown modes are invalid. */
-export const requestedMcpMode = (url: URL): ApprovalMode | undefined => {
+/**
+ * Missing URL mode retains the original model-mode default. A connection is optional;
+ * duplicates and malformed values of either parameter are invalid.
+ */
+export const requestedMcpAddress = (url: URL): McpAddress | undefined => {
   const modes = url.searchParams.getAll("elicitation_mode");
-  if (modes.length === 0) return "model";
-  return modes.length === 1 && Schema.is(ApprovalMode)(modes[0]) ? modes[0] : undefined;
+  const connections = url.searchParams.getAll("connection");
+  if (modes.length > 1 || connections.length > 1) return undefined;
+  const mode = modes.length === 0 ? "model" : modes[0];
+  if (!Schema.is(ApprovalMode)(mode)) return undefined;
+  if (connections.length === 0) return { mode };
+  const connection = connections[0];
+  return Schema.is(ConnectionId)(connection) ? { mode, connection } : undefined;
 };
-/** Canonical OAuth audience for each MCP mode. Query parameters are valid RFC 8707 resource URIs. */
-export const mcpResource = (origin: string, mode: ApprovalMode) =>
-  mode === "model" ? `${origin}/mcp` : `${origin}/mcp?elicitation_mode=${mode}`;
-/** All mode-specific resources use the same OAuth issuer and ordinary MCP scope. */
-export const mcpOAuthResources = (origin: string) =>
-  (["model", "native", "browser"] as const).map((mode) => ({
-    identifier: mcpResource(origin, mode),
+const mcpQuery = (address: McpAddress) => {
+  const query = new URLSearchParams();
+  if (address.connection !== undefined) query.set("connection", address.connection);
+  if (address.mode !== "model") query.set("elicitation_mode", address.mode);
+  const encoded = query.toString();
+  return encoded === "" ? "" : `?${encoded}`;
+};
+/** Canonical OAuth audience for each MCP address. Query parameters are valid RFC 8707 resource URIs. */
+export const mcpResource = (origin: string, address: McpAddress) =>
+  `${origin}/mcp${mcpQuery(address)}`;
+/** Every approval mode for the full-access URL, or for one connection's URL. */
+export const mcpOAuthResources = (origin: string, connection?: ConnectionId) =>
+  ApprovalMode.literals.map((mode) => ({
+    identifier: mcpResource(origin, connection === undefined ? { mode } : { mode, connection }),
     allowedScopes: ["mcp", "offline_access"],
   }));
 /** Select exactly one known resource. Multi-resource consent must not combine approval modes. */
@@ -82,11 +104,20 @@ export const grantTarget = (
 ): GrantTarget | undefined => {
   if (resources.length !== 1) return undefined;
   const resource = resources[0];
+  if (resource === undefined) return undefined;
   if (resource === `${origin}/api`) return { kind: "api" };
-  for (const mode of ["model", "native", "browser"] as const)
-    if (resource === mcpResource(origin, mode)) return { kind: "mcp", mode };
-  return undefined;
+  const url = URL.parse(resource);
+  if (url === null || `${url.origin}${url.pathname}` !== `${origin}/mcp`) return undefined;
+  const address = requestedMcpAddress(url);
+  // Only the canonical spelling is a resource; reordered or extra parameters are not.
+  return address !== undefined && mcpResource(origin, address) === resource
+    ? { kind: "mcp", ...address }
+    : undefined;
 };
-/** Discovery and the authentication challenge carry the requested mode into standard OAuth. */
-export const mcpResourceMetadataUrl = (origin: string, mode: ApprovalMode) =>
-  `${origin}/.well-known/oauth-protected-resource/mcp?elicitation_mode=${mode}`;
+/** Discovery and the authentication challenge carry the requested address into standard OAuth. */
+export const mcpResourceMetadataUrl = (origin: string, address: McpAddress) => {
+  const query = new URLSearchParams();
+  if (address.connection !== undefined) query.set("connection", address.connection);
+  query.set("elicitation_mode", address.mode);
+  return `${origin}/.well-known/oauth-protected-resource/mcp?${query.toString()}`;
+};

@@ -67,11 +67,23 @@ export const catalogCache = <A extends { readonly name: string }, S>(
         let summaryBytes = 0;
         let batch: { key: JsonValue; value: JsonValue }[] = [];
         let batchBytes = 0;
+        let flushes = 0;
         const flush = () =>
-          invoke(async () => {
-            if (batch.length) await context.cache.write(batch, retention);
+          Effect.suspend(() => {
+            const entries = batch;
+            const bytes = batchBytes;
             batch = [];
             batchBytes = 0;
+            if (!entries.length) return Effect.void;
+            return invoke(() => context.cache.write(entries, retention)).pipe(
+              Effect.withSpan("app.cache.flush", {
+                attributes: {
+                  "cache.flush.index": flushes++,
+                  "cache.flush.entries": entries.length,
+                  "cache.flush.bytes": bytes,
+                },
+              }),
+            );
           });
         const append = (entry: { key: JsonValue; value: JsonValue }) =>
           Effect.gen(function* () {

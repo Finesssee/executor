@@ -23,6 +23,7 @@ export const ProvisioningJob = Schema.Union([
     organization_id: OrganizationId,
   }),
 ]);
+const Manager = Schema.Struct({ userId: Schema.String, name: Schema.String });
 /** A safe failure projection for background logs and workflow retries. */
 export class ProvisioningFailed extends Schema.TaggedError<ProvisioningFailed>()(
   "ProvisioningFailed",
@@ -52,13 +53,31 @@ export const provision = (id: string, services: ProvisioningServices) =>
     const job = yield* Schema.decodeUnknownEffect(ProvisioningJob)(rows[0]);
     const initialize = yield* OrganizationDefaults;
     yield* sql`update hosted_provisioning set status = 'running', attempts = attempts + 1, updated_at = now() where id = ${id}`;
+    /** Owners and admins whose default profile member setup provides; read live. */
+    const managers = (organization: string, user?: string) =>
+      sql`select "user".id as "userId", "user".name from member join "user" on "user".id = member."userId"
+        where member."organizationId" = ${organization}
+        and (${user ?? null}::text is null or member."userId" = ${user ?? null}::text)
+        and member.role in ('owner', 'admin') and (${services.requireVerifiedEmail} = false or "user"."emailVerified" = true)`.pipe(
+        Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(Manager))),
+      );
     switch (job.kind) {
       case "user":
         yield* services.user(job.user_id);
         break;
-      case "team":
+      case "team": {
         yield* initialize(job.organization_id);
+        // Member jobs that ran before installation finished wait for their retry delay. Set up
+        // those members now, so their default profile follows the installation at once. Their
+        // own jobs still own member setup and find it done.
+        for (const member of yield* managers(job.organization_id))
+          yield* initialize(job.organization_id, member).pipe(
+            Effect.catch(() =>
+              Effect.logWarning("Member setup after team installation failed", { job: id }),
+            ),
+          );
         break;
+      }
       case "billing":
         yield* services.billing(job.organization_id);
         break;
@@ -66,16 +85,8 @@ export const provision = (id: string, services: ProvisioningServices) =>
         yield* services.domain;
         break;
       case "member": {
-        const members =
-          yield* sql`select "user".name from member join "user" on "user".id = member."userId"
-        where member."organizationId" = ${job.organization_id} and member."userId" = ${job.user_id}
-        and member.role in ('owner', 'admin') and (${services.requireVerifiedEmail} = false or "user"."emailVerified" = true)`;
-        if (members.length > 0) {
-          const member = yield* Schema.decodeUnknownEffect(Schema.Struct({ name: Schema.String }))(
-            members[0],
-          );
-          yield* initialize(job.organization_id, { userId: job.user_id, name: member.name });
-        }
+        const [member] = yield* managers(job.organization_id, job.user_id);
+        if (member !== undefined) yield* initialize(job.organization_id, member);
         break;
       }
     }

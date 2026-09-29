@@ -3,6 +3,7 @@ import { expect } from "@effect/vitest";
 import { Effect } from "effect";
 import type { Page } from "playwright";
 import { Browser } from "./browser.ts";
+import { openThroughBrowser } from "./in-app-navigation.ts";
 import { holdQuery, refreshVisiblePage } from "./query-transition.ts";
 
 /** A small deployed app exposes static documents, dynamic workflows, data and a private page. */
@@ -61,8 +62,9 @@ export const checkAppBrowser = (input: {
       "continue",
       { allRequests: true },
     );
-    yield* browser.use("Open Skills while its catalog is loading", (page) =>
-      page.goto(`${input.url}?view=skills`),
+    yield* openThroughBrowser(
+      "Open Skills while its catalog is loading",
+      `${input.url}?view=skills`,
     );
     yield* catalog.requested;
     expect(

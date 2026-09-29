@@ -5,6 +5,9 @@ services:
     build:
       context: ../../..
       dockerfile: apps/hosted/self-host/Dockerfile
+      args:
+        # Required. Set it in the environment or pass --build-arg.
+        - EXECUTOR_BUILD_VERSION
     environment:
       BETTER_AUTH_URL:
       BETTER_AUTH_SECRET:
@@ -18,6 +21,9 @@ services:
       EXECUTOR_URL_ALLOW_LOOPBACK_HTTP:
       EXECUTOR_URL_ALLOW_HTTP_ORIGINS:
       EXECUTOR_APPS_ALLOW_PRIVATE_FETCH:
+      # Most app Workers kept loaded. Idle ones above it unload and reload on their next call.
+      # Each app with a database also keeps one data Worker, which this does not count.
+      EXECUTOR_APP_WORKERS:
       EXECUTOR_OAUTH_CALLBACK_URL:
       EXECUTOR_OAUTH_CLIENT_METADATA_URL:
       # Public app registry origin. The default is https://v2.executor.sh.

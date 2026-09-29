@@ -156,6 +156,30 @@ export const cloudAuthOptions = (
       },
     },
     trustedOrigins: [...base.trustedOrigins, ...settings.trustedOrigins],
+    user: {
+      // Better Auth stores a provider photo only when it creates the user. This is the one
+      // hook that sees a returning or newly linked provider's verified profile, so keep the
+      // photo current here. Name and email stay as they are, and a provider without a photo
+      // never clears one. Accepts every identity; a failed write must not block sign-in.
+      validateUserInfo: ({ user, source }, context) =>
+        Effect.runPromise(
+          Effect.gen(function* () {
+            const { id, image } = user;
+            if (source.method !== "oauth" || source.action === "create-user") return;
+            if (typeof id !== "string" || typeof image !== "string" || image.length === 0) return;
+            const adapter = context.context.internalAdapter;
+            const current = yield* Effect.tryPromise(() => adapter.findUserById(id));
+            if (!current || current.image === image) return;
+            yield* Effect.tryPromise(() => adapter.updateUser(id, { image }));
+          }).pipe(
+            Effect.catch((error) =>
+              Effect.sync(() =>
+                context.context.logger.warn("Unable to refresh the provider photo", error),
+              ),
+            ),
+          ),
+        ),
+    } satisfies BetterAuthOptions["user"],
     databaseHooks: {
       user: {
         create: {

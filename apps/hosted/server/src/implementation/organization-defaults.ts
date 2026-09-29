@@ -93,8 +93,34 @@ export const organizationDefaults = (
                 .pipe(Effect.catchTag("AppNotFound", () => Effect.succeed(undefined)));
         if (app === undefined) return;
         let current = app;
-        // The recorded deployment is immutable. Recheck source only after it changes.
-        if (state.deployment !== app.activeDeployment) {
+        // The recorded deployment is the one Executor installed or verified. While it is still
+        // active nobody has deployed over it, so the current template may replace it.
+        if (state.deployment !== null && state.deployment === app.activeDeployment) {
+          const deployment = yield* executor.apps.source({ owner, app: app.id });
+          if (deployment.id !== app.activeDeployment) return;
+          const { defaultExecutorAppSource } = yield* executorApp;
+          const source = yield* defaultExecutorAppSource(origin, skills, yield* document);
+          if (!sourceFilesEqual(deployment.files, source.files)) {
+            // A failed upgrade keeps the working installation, and member setup continues.
+            const upgraded = yield* Effect.gen(function* () {
+              const workspace = yield* executor.apps.workspace({ owner, app: app.id });
+              // Unsaved edits mean someone is changing this copy; leave it to them.
+              if (!sourceFilesEqual(workspace.files, deployment.files)) return undefined;
+              return (yield* executor.apps.deploy({ owner, app: app.id, files: source.files })).app;
+            }).pipe(
+              Effect.catch(() =>
+                Effect.logWarning("Executor app upgrade failed").pipe(Effect.as(undefined)),
+              ),
+            );
+            if (upgraded !== undefined) {
+              current = upgraded;
+              yield* sql`update "organization" set metadata = jsonb_set(
+                coalesce(metadata::jsonb, '{}'::jsonb), '{executorDefaults,deployment}',
+                to_jsonb(${upgraded.activeDeployment}::text)
+              )::text where id = ${organization}`.pipe(Effect.mapError(() => new StorageError()));
+            }
+          }
+        } else if (state.deployment !== app.activeDeployment) {
           const deployment = yield* executor.apps.source({ owner, app: app.id });
           if (deployment.id !== app.activeDeployment) return;
           const { defaultExecutorAppSource, executorAppSource } = yield* executorApp;
@@ -123,7 +149,7 @@ export const organizationDefaults = (
                 .pipe(Effect.catchTag("AccountNotFound", () => Effect.succeed(undefined)));
         };
         const existingProfile = yield* storage
-          .orm("4.0.0")
+          .orm("4.0.2")
           .findFirst("profiles", {
             where: (b) =>
               b.and(
@@ -152,12 +178,15 @@ export const organizationDefaults = (
           return;
         // Build/network work finished above. Only account creation or selection repair needs the lock.
         yield* storage
-          .orm("4.0.0")
+          .orm("4.0.2")
           .transaction(
             Effect.gen(function* () {
+              // Only metadata changes, so take the non-key lock. It still serializes member
+              // setup, but not a role change whose trigger checks the organization key; with
+              // `for update` that check and this setup's member lock deadlocked.
               const rows =
                 yield* sql`select coalesce(metadata::jsonb -> 'executorKeyAccounts', '{}'::jsonb) as accounts
-            from "organization" where id = ${organization} for update`.pipe(
+            from "organization" where id = ${organization} for no key update`.pipe(
                   Effect.mapError(() => new StorageError()),
                 );
               if (rows.length !== 1) return;

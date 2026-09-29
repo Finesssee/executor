@@ -1,16 +1,12 @@
 /** Shared browser approval data access. Products provide the route and their page-owned Atom runtime. */
+import { dashboardHttpClient } from "./http.ts";
 import {
   BrowserApprovalAcknowledgement,
   BrowserApprovalView,
   type ElicitationResponse,
 } from "@executor-js/mcp/browser";
 import { Effect, Schema } from "effect";
-import {
-  FetchHttpClient,
-  HttpClient,
-  HttpClientRequest,
-  HttpClientResponse,
-} from "effect/unstable/http";
+import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 import { Atom } from "effect/unstable/reactivity";
 
 /** Safe HTTP outcomes shared by the local and hosted browser approval endpoints. */
@@ -53,7 +49,7 @@ const request = <A>(endpoint: string, schema: Schema.Decoder<A>, answer?: Elicit
       return yield* HttpClientResponse.schemaBodyJson(schema)(response);
     }),
   ).pipe(
-    Effect.provide(FetchHttpClient.layer),
+    Effect.provide(dashboardHttpClient),
     Effect.catchTags({
       HttpClientError: () => Effect.fail(new BrowserApprovalFailed({ reason: "network" })),
       HttpBodyError: () => Effect.fail(new BrowserApprovalFailed({ reason: "invalid-answer" })),

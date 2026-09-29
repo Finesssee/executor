@@ -30,6 +30,7 @@ import {
   ToolName,
   ToolIndex,
   ToolNotFound,
+  ToolListingTimedOut,
   ToolPage,
   Tool,
 } from "@executor-js/sdk/core";
@@ -50,6 +51,7 @@ const discoveryErrors = [
   AppNotDeployed,
   DeploymentNotFound,
   AppEvaluationFailed,
+  ToolListingTimedOut,
   AppProviderFailed,
   AccountNotFound,
   AccountRequired,

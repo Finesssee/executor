@@ -357,6 +357,8 @@ export const OAuthCompletionReason = Schema.Literals([
   "authorization_rejected",
   // The token exchange.
   "authorization_code_rejected",
+  "registered_client_rejected",
+  "registered_client_incompatible",
   "exchange_failed",
   "destination_blocked",
   "service_unavailable",
@@ -490,6 +492,24 @@ export const OAuthCompletionFailed = UserFacingError.define({
                 "The service returned an authorization error other than access_denied, invalid_scope or a client rejection. Compare the app's declared authorization parameters, response type and endpoints with the service's documentation, then start a fresh sign-in.",
             },
           },
+          registered_client_rejected: restart({
+            title: "Service rejected Executor’s client",
+            description:
+              "The service no longer accepts the OAuth client Executor registered with it earlier, so Executor discarded that client. A new sign-in registers a fresh one.",
+            instructions:
+              "The token endpoint answered invalid_client for a client Executor registered in an earlier sign-in and reused. Executor removed that saved registration, so the next sign-in registers a fresh client. If the fresh client is rejected too, the failure is reported as registered_client_incompatible.",
+          }),
+          registered_client_incompatible: {
+            title: "Service rejected a new Executor client",
+            description:
+              "The service rejected the OAuth client Executor had just registered with it, so trying again would fail the same way.",
+            recovery: {
+              action:
+                "Copy the fix prompt into your agent to find why the service refuses Executor’s client.",
+              instructions:
+                "The token endpoint answered invalid_client for a client Executor registered moments earlier in the same sign-in. Executor discarded it. Compare the client authentication method Executor registered, and how it sends the client ID and secret, with what the service's token endpoint accepts. Check the service's registration response for a different token_endpoint_auth_method. Do not ask the user for client details; the client was never theirs.",
+            },
+          },
           authorization_code_rejected: restart({
             title: "Service rejected the sign-in code",
             description:
@@ -581,6 +601,8 @@ export const oauthCompletionRecovery = {
   invalid_client: "client",
   authorization_rejected: "configuration",
   authorization_code_rejected: "restart",
+  registered_client_rejected: "restart",
+  registered_client_incompatible: "configuration",
   exchange_failed: "configuration",
   destination_blocked: "configuration",
   service_unavailable: "restart",
@@ -598,12 +620,24 @@ export type OAuthCompletionFailed = typeof OAuthCompletionFailed.Type;
 export const OAuthReconnectRequired = UserFacingError.define({
   tag: "OAuthReconnectRequired",
   status: 409,
-  fields: { account: AccountId, cause: Schema.optional(OAuthFailureCause) },
-  presentation: ({ cause }) =>
+  fields: {
+    account: AccountId,
+    /**
+     * `renewal_interrupted`: an earlier renewal stopped with its process before saving a result,
+     * and the service refused the saved refresh token when it was retried, most likely because
+     * the lost renewal had already replaced it.
+     */
+    reason: Schema.optional(Schema.Literals(["renewal_interrupted"])),
+    cause: Schema.optional(OAuthFailureCause),
+  },
+  presentation: ({ reason, cause }) =>
     withCause(
       {
         title: "An account needs to reconnect",
-        description: "The saved sign-in can no longer be used for this account.",
+        description:
+          reason === "renewal_interrupted"
+            ? "Executor stopped while renewing this account’s access, before it could save the result. The service no longer accepts the saved sign-in, most likely because that renewal had already replaced it."
+            : "The saved sign-in can no longer be used for this account.",
         recovery: {
           action: "Open Accounts and reconnect the affected account, then return to Tools.",
           instructions:
@@ -714,6 +748,27 @@ export const OAuthRegistration = Schema.Union([
   OAuthConfidentialRegistration,
 ]);
 export type OAuthRegistration = typeof OAuthRegistration.Type;
+/**
+ * How a saved client came to exist. Only a `registered` client is Executor's to discard and
+ * replace; saved records written before sources were recorded have none.
+ */
+export const OAuthClientSource = Schema.Literals(["registered", "metadata", "manual"]);
+export type OAuthClientSource = typeof OAuthClientSource.Type;
+/** Read beside the registration from the same encrypted saved-client record. */
+export const OAuthSavedClientMetadata = Schema.Struct({
+  executor_source: Schema.optionalKey(OAuthClientSource),
+});
+/**
+ * A saved client as one attempt used it. `version` is the stored ciphertext in base64; every
+ * save re-encrypts, so a conditional delete removes only the record this attempt saw.
+ */
+export const OAuthSavedClientRef = Schema.Struct({
+  key: OAuthClientId,
+  version: Schema.NonEmptyString,
+  source: Schema.optionalKey(OAuthClientSource),
+  /** Registered by this attempt's own start, rather than reused from an earlier one. */
+  fresh: Schema.Boolean,
+});
 /** Protocol context frozen when authorization starts, preventing callback-supplied identity changes. */
 export const OAuthAttempt = Schema.Struct({
   connection: AccountConnectionId,
@@ -731,6 +786,8 @@ export const OAuthAttempt = Schema.Struct({
   client: OAuthRegistration,
   /** User-entered clients become reusable only when this attempt completes successfully. */
   clientKey: Schema.optionalKey(OAuthClientId),
+  /** The saved client this attempt used, so a rejection can discard exactly that version. */
+  savedClient: Schema.optionalKey(OAuthSavedClientRef),
   resource: Schema.optional(HttpUrl),
   /** The protected resource advertised Bearer tokens; see `grantFields.bearerResource`. */
   bearerResource: Schema.optional(Schema.Literal(true)),

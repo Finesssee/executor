@@ -1,5 +1,13 @@
 /** Author schema facade. Internals use the native decoder retained by each value. */
-import { Effect, Schema as EffectSchema, SchemaGetter, SchemaIssue, SchemaParser } from "effect";
+import {
+  Cause,
+  Effect,
+  Exit,
+  Schema as EffectSchema,
+  SchemaGetter,
+  SchemaIssue,
+  SchemaParser,
+} from "effect";
 import { dereference, validate } from "@cfworker/json-schema";
 import { ValidationError, type JsonObject, type JsonValue } from "../contracts/schema.ts";
 
@@ -415,36 +423,82 @@ export const compileJsonSchemaDecoder = (document: JsonObject) =>
 /**
  * Build the document only when a value is first decoded or the schema is described, then
  * compile its validator once. Imported apps can share definitions between many schemas
- * without making each one self-contained up front.
+ * without making each one self-contained up front. Construction runs no Effect: an app
+ * evaluation constructs one of these for every imported schema.
  */
-export const lazyJsonSchemaDecoder = (document: () => JsonObject) =>
-  Effect.gen(function* () {
-    const read = once(document);
-    // Reuse only this tool's compiled decoder. Every app evaluation still obtains
-    // fresh account-specific metadata; no catalog or credentials are cached here.
-    const compiled = yield* Effect.cached(Effect.suspend(() => compileJsonSchemaDecoder(read())));
-    const decoder = EffectSchema.declareConstructor<EffectSchema.Json>()(
-      [],
-      () => (input, _ast, options) =>
-        compiled.pipe(
-          Effect.mapError(
-            () => new SchemaIssue.InvalidValue({ message: "Unsupported JSON Schema" }),
-          ),
-          Effect.flatMap((schema) => SchemaParser.decodeUnknownEffect(schema)(input, options)),
+const lazyDecoder = (document: () => JsonObject) => {
+  const read = once(document);
+  // Reuse only this tool's compiled decoder. Every app evaluation still obtains
+  // fresh account-specific metadata; no catalog or credentials are cached here.
+  let compiled: Exit.Exit<EffectSchema.Decoder<EffectSchema.Json>, ValidationError> | undefined;
+  const compile = Effect.suspend(
+    () =>
+      compiled ??
+      compileJsonSchemaDecoder(read()).pipe(
+        // An interrupted compilation is not a result; the next decode compiles again.
+        Effect.onExit((exit) =>
+          Effect.sync(() => {
+            if (Exit.isSuccess(exit) || !Cause.hasInterrupts(exit.cause)) compiled = exit;
+          }),
         ),
-    );
-    return withLazyJsonSchemaDocument(decoder, read);
-  });
+      ),
+  );
+  const decoder = EffectSchema.declareConstructor<EffectSchema.Json>()(
+    [],
+    () => (input, _ast, options) =>
+      compile.pipe(
+        Effect.mapError(() => new SchemaIssue.InvalidValue({ message: "Unsupported JSON Schema" })),
+        Effect.flatMap((schema) => SchemaParser.decodeUnknownEffect(schema)(input, options)),
+      ),
+  );
+  return withLazyJsonSchemaDocument(decoder, read);
+};
+export const lazyJsonSchemaDecoder = (document: () => JsonObject) =>
+  Effect.sync(() => lazyDecoder(document));
+
+const isJsonValue = EffectSchema.is(EffectSchema.Json);
+
+/**
+ * A JSON Schema document: an object whose own string-keyed fields are JSON, as
+ * `Schema.Record(Schema.String, Schema.Json)` accepts. Its values are checked by one
+ * `Schema.Json` walk, which is iterative and visits a shared subtree once, instead of a
+ * decode that builds a result per field. Only the top level is copied, as that decode did.
+ */
+const jsonDocument = (input: unknown): JsonObject | undefined => {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) return undefined;
+  const keys = Object.keys(input);
+  const values = keys.map((key) => Reflect.get(input, key));
+  if (!isJsonValue(values)) return undefined;
+  const document: Record<string, EffectSchema.Json> = {};
+  keys.forEach((key, index) =>
+    Object.defineProperty(document, key, {
+      value: values[index],
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    }),
+  );
+  return document;
+};
 
 /** Preserve the JSON document; compile its validator only when a value is first decoded. */
 export const jsonSchemaDecoder = (input: unknown) =>
-  parse(EffectSchema.Record(EffectSchema.String, EffectSchema.Json), input).pipe(
-    Effect.flatMap((document) => lazyJsonSchemaDecoder(() => document)),
-  );
+  Effect.suspend(() => {
+    const document = jsonDocument(input);
+    return document === undefined
+      ? Effect.fail(new ValidationError())
+      : lazyJsonSchemaDecoder(() => document);
+  });
 
 /** Import JSON metadata now; unsupported schemas and invalid values fail when parsed. */
-export const jsonSchema = (input: unknown): Schema<EffectSchema.Json> =>
-  wrap(Effect.runSync(jsonSchemaDecoder(input)), false);
+export const jsonSchema = (input: unknown): Schema<EffectSchema.Json> => {
+  const document = jsonDocument(input);
+  if (document === undefined) throw new ValidationError();
+  return wrap(
+    lazyDecoder(() => document),
+    false,
+  );
+};
 
 /** Database declaration retained by primitive constructors; nested payload schemas are not database fields. */
 export const storageFieldOf = (schema: Schema<unknown, boolean>): Field | undefined =>

@@ -19,7 +19,8 @@
     "./organization-icon": "./src/contracts/organization-icon.ts",
     "./browser": "./src/browser.ts",
     "./browser/contracts": "./src/contracts/browser.ts",
-    "./app-management": "./src/app-management.ts"
+    "./app-management": "./src/app-management.ts",
+    "./document": "./src/implementation/document.ts"
   },
   "dependencies": {
     "@better-auth/api-key": "1.7.5",
@@ -30,6 +31,7 @@
     "@executor-js/app-templates": "workspace:*",
     "@executor-js/authorization": "workspace:*",
     "@executor-js/catalog": "workspace:*",
+    "@executor-js/dashboard-start": "workspace:*",
     "@executor-js/mcp": "workspace:*",
     "@executor-js/mcp-auth": "workspace:*",
     "@executor-js/sdk": "workspace:*",

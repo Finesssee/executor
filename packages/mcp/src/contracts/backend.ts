@@ -7,6 +7,7 @@ import type {
   ToolResumeResult,
   ToolPage,
   ToolInvocationOptions,
+  ToolListOptions,
   ElicitationFailed,
   AppSkillCatalog,
   AppSkillDocument,
@@ -48,6 +49,7 @@ export interface McpBackend<E extends Error> {
   /** Authorize the app and its selected accounts before evaluating each catalog page. */
   readonly listTools: (
     input: Parameters<Executor["tools"]["list"]>[0],
+    options?: ToolListOptions,
   ) => Effect.Effect<ToolPage, E>;
   /** Check execution permission again; prior discovery does not authorize this call. */
   readonly callTool: (

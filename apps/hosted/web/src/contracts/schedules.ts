@@ -1,3 +1,5 @@
+import { hydrated } from "@executor-js/ui/contracts/http";
+import { refreshOnFocus } from "@executor-js/ui/contracts/refresh";
 import { protectedQuery } from "./protected-query.ts";
 import { browserApproval } from "@executor-js/ui/contracts/browser-approval";
 import { BrowserAtoms } from "./telemetry.ts";
@@ -6,7 +8,7 @@ import type { AppId, ProfileId, ScheduleSettings } from "@executor-js/sdk";
 import { Data, Effect } from "effect";
 import { Atom } from "effect/unstable/reactivity";
 import { acknowledge, upsert } from "@executor-js/ui/contracts/mutations";
-import { pollingQuery } from "@executor-js/ui/contracts/polling";
+import { pollingQuery, runningSchedules, steadyPolling } from "@executor-js/ui/contracts/polling";
 import type { ApprovalListItem } from "@executor-js/ui/contracts/schedules";
 import { HostedClient } from "./api.ts";
 import { OrganizationReference } from "@executor-js/hosted-server/organization";
@@ -24,17 +26,27 @@ class ScheduleKey extends Data.Class<{
   readonly name: string;
 }> {}
 const settings = Atom.family((key: AppKey) =>
-  HostedClient.query("schedules", "list", {
-    params: key,
-    query: { profile: key.profile },
-  }).pipe(Atom.refreshOnWindowFocus, protectedQuery),
+  HostedClient.query(
+    "schedules",
+    "list",
+    hydrated({
+      params: key,
+      query: { profile: key.profile },
+    }),
+  ).pipe(refreshOnFocus, protectedQuery),
 );
-const polledSettings = Atom.family((key: AppKey) => pollingQuery(settings(key)));
+const polledSettings = Atom.family((key: AppKey) =>
+  pollingQuery(settings(key), { active: runningSchedules }),
+);
 const definitions = Atom.family((key: AppKey) =>
-  HostedClient.query("schedules", "definitions", {
-    params: key,
-    query: { profile: key.profile },
-  }).pipe(Atom.refreshOnWindowFocus),
+  HostedClient.query(
+    "schedules",
+    "definitions",
+    hydrated({
+      params: key,
+      query: { profile: key.profile },
+    }),
+  ).pipe(refreshOnFocus),
 );
 const controls = Atom.family((key: ScheduleKey) => {
   const saved = (get: Atom.FnContext, value: ScheduleSettings) =>
@@ -83,13 +95,18 @@ export const scheduleBindings = (
   ...(editable ? { controls: (name: string) => controls(new ScheduleKey({ ...key, name })) } : {}),
 });
 const runsSource = Atom.family((organization: OrganizationReference) =>
-  HostedClient.query("schedules", "runs", {
-    params: { organization },
-    query: { pending: true },
-  }).pipe(Atom.refreshOnWindowFocus, protectedQuery),
+  HostedClient.query(
+    "schedules",
+    "runs",
+    hydrated({
+      params: { organization },
+      query: { pending: true },
+    }),
+  ).pipe(refreshOnFocus, protectedQuery),
 );
 const runsQuery = Atom.family((organization: OrganizationReference) =>
-  pollingQuery(runsSource(organization)),
+  // Approval requests expire, and this queue exists to receive them.
+  pollingQuery(runsSource(organization), steadyPolling),
 );
 /** Join safe run metadata with app names; keep either read failure visible. */
 export const pendingApprovalsAtom = Atom.family((organization: OrganizationReference) =>

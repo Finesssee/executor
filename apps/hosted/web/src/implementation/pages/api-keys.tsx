@@ -1,3 +1,5 @@
+import { LocalTime } from "@executor-js/ui/components/local-time";
+import { usePageUrl } from "@executor-js/dashboard-start/page";
 import { EmptyState } from "@executor-js/ui/dashboard/empty-state";
 import { PageFrame, PageHeader } from "@executor-js/ui/dashboard/page";
 import { useAtomRefresh, useAtomSet, useAtomValue } from "@effect/atom-react";
@@ -43,8 +45,6 @@ import { documentationUrl } from "../../contracts/documentation.ts";
 
 const tokenDocsUrl = documentationUrl("api-keys/#personal-access-tokens");
 
-const date = (value: string | null) =>
-  value === null ? "Never" : new Date(value).toLocaleString();
 /** The organization select value: one organization id, or the whole account. */
 const fullAccount = "account";
 const errorMessage = (cause: Cause.Cause<ApiKeyFailed>) => {
@@ -54,6 +54,8 @@ const errorMessage = (cause: Cause.Cause<ApiKeyFailed>) => {
 
 /** Personal tokens; the selected organization supplies only the example request URL. */
 export function ApiKeysPage() {
+  const date = (value: string | null) => (value === null ? "Never" : <LocalTime value={value} />);
+  const page = usePageUrl();
   const route = useOrganizationRoute();
   const organization = useOrganizationDetails();
   const organizations = useAtomValue(organizationsAtom);
@@ -92,13 +94,13 @@ export function ApiKeysPage() {
   const [showKey, setShowKey] = useState(false);
   const pending = creating || revoking;
   const empty = AsyncResult.isSuccess(keys) && keys.value.apiKeys.length === 0;
-  const example = `curl '${window.location.origin}/api/organizations/${encodeURIComponent(route.id ?? route.organization)}/inventory' \\\n  --header 'Authorization: Bearer <YOUR_API_KEY>'`;
+  const example = `curl '${page.origin}/api/organizations/${encodeURIComponent(route.id ?? route.organization)}/inventory' \\\n  --header 'Authorization: Bearer <YOUR_API_KEY>'`;
   const mcpExample = JSON.stringify(
     {
       mcpServers: {
         executor: {
           type: "http",
-          url: `${window.location.origin}/org/${encodeURIComponent(route.slug)}/mcp`,
+          url: `${page.origin}/org/${encodeURIComponent(route.slug)}/mcp`,
           headers: { Authorization: "Bearer <YOUR_PAT>" },
         },
       },

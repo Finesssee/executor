@@ -1,3 +1,4 @@
+import { openThroughBrowser } from "../support/in-app-navigation.ts";
 import { expect, layer } from "@effect/vitest";
 import { Effect, Schema } from "effect";
 import { randomUUID } from "node:crypto";
@@ -143,7 +144,7 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
         );
         const loading = yield* holdQuery(paths(`/apps/${app.id}`), "continue");
         const setup = yield* holdQuery(setupPaths, "continue");
-        yield* browser.use("Enter the app", (page) => page.goto(appUrl));
+        yield* openThroughBrowser("Enter the app", appUrl);
         yield* loading.requested;
         yield* capture("App-loading");
         yield* loading.release;
@@ -383,7 +384,7 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
           paths(`/connections/${reconnect.id}`),
           "continue",
         );
-        yield* browser.use("Open a reconnect link", (page) => page.goto(connectionUrl));
+        yield* openThroughBrowser("Open a reconnect link", connectionUrl);
         yield* connectionLoading.requested;
         expect(
           yield* browser.use("Connection links load in a modal", (page) =>

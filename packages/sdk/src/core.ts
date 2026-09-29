@@ -2,6 +2,7 @@
 export * from "./contracts/index.ts";
 export { createExecutor, createRemoteExecutor } from "./implementation/create.ts";
 export { makeDeclarationCache } from "./implementation/declarations.ts";
+export { declarationConfig } from "./implementation/declaration-config.ts";
 export { executorHandlers } from "./implementation/handlers.ts";
 export { probeOAuthChallenge } from "./implementation/oauth-probe.ts";
 export { discoversResourceOAuth } from "./implementation/oauth-protocol.ts";

@@ -335,32 +335,48 @@ export const makeProfileSetup = (
     tick: (limit: number) =>
       Effect.gen(function* () {
         const time = new Date(yield* now);
-        const rows = yield* query(() =>
+        // New saved intent must run immediately, ahead of retries: a backlog of failed or
+        // waiting setup never delays a profile someone just changed.
+        const intent = yield* query(() =>
           db.findMany("profiles", {
-            where: (b) =>
-              b.and(
-                b("status", "!=", "removed"),
-                b("status", "!=", "ready"),
-                b("status", "!=", "disabled"),
-                // New saved intent must run immediately. An active worker keeps
-                // its lease; failed unchanged intent keeps its retry delay.
-                b.or(
-                  b("leaseUntil", "<=", time),
-                  b.and(b("status", "=", "pending"), b("lease", "is", null)),
-                ),
-              ),
+            where: (b) => b.and(b("status", "=", "pending"), b("lease", "is", null)),
             orderBy: ["leaseUntil", "asc"],
             limit,
           }),
         );
-        yield* Effect.forEach(
-          rows,
+        // An active worker keeps its lease; failed unchanged intent keeps its retry delay.
+        const retries =
+          intent.length >= limit
+            ? []
+            : yield* query(() =>
+                db.findMany("profiles", {
+                  where: (b) =>
+                    b.and(
+                      b("status", "!=", "removed"),
+                      b("status", "!=", "ready"),
+                      b("status", "!=", "disabled"),
+                      b("leaseUntil", "<=", time),
+                      b.or(b("status", "!=", "pending"), b("lease", "is not", null)),
+                    ),
+                  orderBy: ["leaseUntil", "asc"],
+                  limit: limit - intent.length,
+                }),
+              );
+        const reconciled = yield* Effect.forEach(
+          [...intent, ...retries],
           (row) =>
             reconcile({ app: row.app, profile: row.id }, true).pipe(
-              Effect.catch(() => Effect.logError("Profile reconciliation failed")),
+              Effect.as(true),
+              Effect.catch(() =>
+                Effect.logError("Profile reconciliation failed").pipe(Effect.as(false)),
+              ),
             ),
           { concurrency: 4 },
         );
+        // A full batch of saved intent may have left more behind. Continue while it makes
+        // progress; a batch whose intent all failed waits for the host's next wake, so intent
+        // that keeps failing never keeps the host busy.
+        return intent.length >= limit && reconciled.slice(0, intent.length).some(Boolean);
       }),
   };
 };

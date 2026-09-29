@@ -1,3 +1,4 @@
+import { usePageUrl } from "@executor-js/dashboard-start/page";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { ArrowLeft02Icon } from "@hugeicons/core-free-icons";
@@ -7,6 +8,7 @@ import { useOrganizationRoute } from "../components/organization.tsx";
 
 /** Member-owned MCP imports use organization-bound mutations on both hosted products. */
 export function CustomAppPage() {
+  const page = usePageUrl();
   const { organization, slug: organizationSlug } = useOrganizationRoute();
   const atoms = useDashboardAtoms();
   const navigate = useNavigate();
@@ -27,7 +29,7 @@ export function CustomAppPage() {
       </div>
       <CustomAppForm
         key={organization}
-        endpoint={`${window.location.origin}/mcp`}
+        endpoint={`${page.origin}/mcp`}
         mutation={atoms.importCustom}
         Failure={HostedFailure}
         onInstalled={(app) =>

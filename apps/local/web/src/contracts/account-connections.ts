@@ -1,14 +1,15 @@
 /** Typed browser handoff. Submitted credentials remain redacted in mutation state. */
+import { dashboardHttpClient, hydrated } from "@executor-js/ui/contracts/http";
+import { refreshOnFocus } from "@executor-js/ui/contracts/refresh";
 import { AccountConnectApi, ConnectionGrant } from "@executor-js/local-server/account-connections";
 import { HttpUrl } from "@executor-js/sdk";
 import { Data, Effect, Schema } from "effect";
-import { FetchHttpClient } from "effect/unstable/http";
 import { Atom, AtomHttpApi } from "effect/unstable/reactivity";
 
 /** Only a connection grant authenticates these calls; no dashboard session is needed. */
 export class ConnectionClient extends AtomHttpApi.Service<ConnectionClient>()("ConnectionClient", {
   api: AccountConnectApi,
-  httpClient: FetchHttpClient.layer,
+  httpClient: dashboardHttpClient,
 }) {}
 /** OAuth callback URLs exist in memory only and are removed from the address bar at startup. */
 export const ConnectionEntry = Schema.Struct({
@@ -44,9 +45,9 @@ export const submitConnectionAtom = ConnectionClient.mutation("accountConnect", 
 export const cancelConnectionAtom = ConnectionClient.mutation("accountConnect", "cancel");
 class ConnectionSetupKey extends Data.Class<ConnectionGrant & { readonly method: string }> {}
 const connectionSetup = Atom.family((key: ConnectionSetupKey) =>
-  ConnectionClient.query("accountConnect", "oauthSetup", { payload: key }).pipe(
+  ConnectionClient.query("accountConnect", "oauthSetup", hydrated({ payload: key })).pipe(
     Atom.setIdleTTL("5 minutes"),
-    Atom.refreshOnWindowFocus,
+    refreshOnFocus,
   ),
 );
 /** Setup metadata is limited to the exact connection grant supplied by this page. */

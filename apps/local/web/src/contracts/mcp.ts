@@ -1,7 +1,12 @@
+import { hydrated } from "@executor-js/ui/contracts/http";
 import { DashboardClient } from "./api.ts";
 
 /** OAuth endpoint and management app IDs; this response contains no administrative credential. */
-export const mcpInstallationAtom = DashboardClient.query("dashboard", "mcpInstallation", {});
+export const mcpInstallationAtom = DashboardClient.query(
+  "dashboard",
+  "mcpInstallation",
+  hydrated({}),
+);
 
 import { Effect, Schema } from "effect";
 import { Atom } from "effect/unstable/reactivity";

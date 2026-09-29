@@ -52,6 +52,20 @@ const errorMessage = Match.type<DashboardError>().pipe(
       ),
     ProfileNotFound: () =>
       message("Profile unavailable", "This profile is no longer available for this app."),
+    ConnectionNotFound: () =>
+      message("Connection unavailable", "This connection was revoked or no longer exists."),
+    ConnectionIdTaken: () =>
+      message("Connection not created", "Close the form and create the connection again."),
+    ConnectionAccessInvalid: ({ reason }) =>
+      message(
+        "Connection not saved",
+        {
+          app: "An included app is no longer available. Remove it and try again.",
+          profile: "A selected profile is no longer available. Choose how the app runs again.",
+          account: "A selected account is no longer available for this app. Choose another one.",
+          target: "Choose how each included app runs.",
+        }[reason],
+      ),
     ProfileConflict: () =>
       message("Profile changed", "Reload the current account selection before trying again."),
     ScheduleNotFound: () =>
@@ -141,6 +155,11 @@ const errorMessage = Match.type<DashboardError>().pipe(
       ),
     ToolDiscoveryTimedOut: () =>
       message("The app took too long", "Its live tool catalog did not finish loading. Try again."),
+    ToolListingTimedOut: () =>
+      message(
+        "The app took too long",
+        "Its tool catalog is still loading in the background. Try again shortly.",
+      ),
     ToolCatalogChanged: () =>
       message("The tool catalog changed", "Try again to load the current tool catalog."),
     AppWorkflowsActive: () =>

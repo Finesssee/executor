@@ -78,10 +78,9 @@ export const installScenarioLifecycle = () =>
           );
           // The CLI test exercises creation and removal itself. An unused outer
           // server would compete with the server whose lifecycle it verifies.
-          const target = yield* (plan?.fixtures === "cli" ? prepareScenario : startScenario)(
-            base,
-            context.task.name,
-          );
+          const target = yield* plan?.fixtures === "cli"
+            ? prepareScenario(base, context.task.name)
+            : startScenario(base, context.task.name, undefined, plan?.serverEnvironment);
           let actors: typeof Actors.Service | undefined;
           if (plan?.fixtures === "actors") {
             const fixtures = yield* Layer.buildWithScope(

@@ -101,14 +101,14 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
           );
           expect(response.status).toBe(422);
           expect((yield* body(Failure, response)).reason).toBe(reason);
+          // The page responds to input once hydrated; the harness waits between steps.
           yield* browser.use(`Open account setup with ${discovery} metadata`, (page) =>
+            page.goto(`/org/${actors.organization.slug}/apps/${app.id}?view=accounts`),
+          );
+          yield* browser.use("Add an account", (page) =>
             page
-              .goto(`/org/${actors.organization.slug}/apps/${app.id}?view=accounts`)
-              .then(() =>
-                page
-                  .getByRole("button", { name: "Add Sample service account", exact: true })
-                  .click(),
-              )
+              .getByRole("button", { name: "Add Sample service account", exact: true })
+              .click()
               .then(() => page.getByRole("alert").getByText(title, { exact: true }).waitFor())
               .then(() => page.getByLabel("Account name", { exact: true }).fill("Work reports")),
           );
@@ -240,14 +240,14 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
           ],
         ] as const) {
           yield* issuer.configure({ malformedRegistration: false, ...registration });
+          // The page responds to input once hydrated; the harness waits between steps.
           yield* browser.use(`Start sign-in when registration is ${name}`, (page) =>
+            page.goto(`/org/${actors.organization.slug}/apps/${app.id}?view=accounts`),
+          );
+          yield* browser.use("Add an account", (page) =>
             page
-              .goto(`/org/${actors.organization.slug}/apps/${app.id}?view=accounts`)
-              .then(() =>
-                page
-                  .getByRole("button", { name: "Add Sample service account", exact: true })
-                  .click(),
-              )
+              .getByRole("button", { name: "Add Sample service account", exact: true })
+              .click()
               .then(() => page.getByLabel("Account name", { exact: true }).fill("Work reports"))
               .then(() =>
                 page.getByRole("button", { name: "Connect Sample service", exact: true }).click(),

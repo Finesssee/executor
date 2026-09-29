@@ -10,11 +10,11 @@ import { executorCatalogEntry } from "./executor-catalog-entry.ts";
 
 /**
  * Fetch the public integrations.sh feed on request. Layer construction performs no network I/O.
- * The API document and the Executor app source are only needed to prepare the Executor app, so
- * both load on that request instead of during server startup.
+ * The API document, authoring skills and Executor app source are only needed to prepare the
+ * Executor app, so they load on that request instead of during server startup.
  */
 export const catalogLive = (
-  skills: readonly SourceFile[],
+  skills: Effect.Effect<readonly SourceFile[]>,
   document: Effect.Effect<HostedApiDocument>,
   egress: HostEgress,
 ) =>
@@ -34,8 +34,12 @@ export const catalogLive = (
         custom: published.custom,
         prepare: (input) =>
           input.entry === executor.id
-            ? Effect.all([Effect.promise(() => import("./executor-app.ts")), document]).pipe(
-                Effect.flatMap(([{ executorAppSource }, document]) =>
+            ? Effect.all([
+                Effect.promise(() => import("./executor-app.ts")),
+                skills,
+                document,
+              ]).pipe(
+                Effect.flatMap(([{ executorAppSource }, skills, document]) =>
                   executorAppSource(origin, skills, document),
                 ),
                 Effect.map(({ files }) => ({ files })),

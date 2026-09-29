@@ -1,4 +1,5 @@
 import { dashboardLoadingProbe } from "../support/dashboard-loading.ts";
+import { openInApp } from "../support/in-app-navigation.ts";
 import { expect, layer } from "@effect/vitest";
 import { Effect } from "effect";
 import { Api, body } from "../support/api.ts";
@@ -31,7 +32,7 @@ layer(HostedLive, { excludeTestServices: true })("Dashboard loading", (it) => {
         expect(inventory.apps.length).toBeGreaterThan(0);
         expect(inventory.accounts.length).toBeGreaterThan(0);
         yield* browser.login(actors.owner);
-        yield* browser.use("Confirm the session and save its display hint", (page) =>
+        yield* browser.use("Open the dashboard", (page) =>
           page.goto(`/org/${actors.organization.slug}/apps`),
         );
         yield* browser.use("The first session is confirmed", (page) =>
@@ -42,17 +43,18 @@ layer(HostedLive, { excludeTestServices: true })("Dashboard loading", (it) => {
           { name: "Mobile", width: 390, height: 844 },
         ]) {
           for (const section of ["apps", "accounts"] as const) {
+            yield* browser.use("Open a page that reads neither section", (page) =>
+              page.goto(`/org/${actors.organization.slug}/connect`),
+            );
             yield* Effect.scoped(
               Effect.gen(function* () {
                 const probe = yield* dashboardLoadingProbe;
                 yield* browser.use(`${viewport.name}: set the viewport`, (page) =>
                   page.setViewportSize({ width: viewport.width, height: viewport.height }),
                 );
-                yield* browser.use(`Open ${section}`, (page) =>
-                  page.goto(`/org/${actors.organization.slug}/${section}`),
-                );
+                // The document arrives with its data; the browser reads when it navigates itself.
+                yield* openInApp(`Open ${section}`, `/org/${actors.organization.slug}/${section}`);
                 yield* probe.resourcesRequested;
-                yield* probe.sessionRequested;
                 yield* browser.use("The destination heading is visible", (page) =>
                   page
                     .getByRole("heading", {
@@ -67,8 +69,9 @@ layer(HostedLive, { excludeTestServices: true })("Dashboard loading", (it) => {
                     .waitFor({ state: "visible" }),
                 );
                 const requests = probe.requests;
+                // The running page already verified the organization, so it reads by that ID.
                 expect(requests).toContain(
-                  `/api/organizations/${actors.organization.slug}/resources`,
+                  `/api/organizations/${actors.organization.id}/resources`,
                 );
                 expect(requests.some((path) => path.includes("passkey"))).toBe(false);
                 expect(

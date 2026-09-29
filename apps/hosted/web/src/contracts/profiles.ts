@@ -1,3 +1,5 @@
+import { hydrated } from "@executor-js/ui/contracts/http";
+import { refreshOnFocus } from "@executor-js/ui/contracts/refresh";
 import { inventoryAtom } from "./organization.ts";
 /** Personal setup metadata is acknowledged before navigation; catalogs key on saved revisions. */
 import { Data, Effect } from "effect";
@@ -5,7 +7,11 @@ import { Atom } from "effect/unstable/reactivity";
 import type { AppId, ProfileId, ProfileInputs, Profile } from "@executor-js/sdk";
 import type { OrganizationReference } from "@executor-js/hosted-server/organization";
 import { acknowledge, upsert, invalidate } from "@executor-js/ui/contracts/mutations";
-import { pollingQuery } from "@executor-js/ui/contracts/polling";
+import {
+  pollingQuery,
+  unsettledProfiles,
+  unsettledWebhooks,
+} from "@executor-js/ui/contracts/polling";
 import { HostedClient } from "./api.ts";
 import { protectedQuery } from "./protected-query.ts";
 import { acknowledgeResourceProfile } from "./resource-access.ts";
@@ -19,12 +25,14 @@ class Target extends Data.Class<{
   readonly profile: ProfileId;
 }> {}
 const source = Atom.family((key: AppKey) =>
-  HostedClient.query("profiles", "list", { params: key }).pipe(
-    Atom.refreshOnWindowFocus,
+  HostedClient.query("profiles", "list", hydrated({ params: key })).pipe(
+    refreshOnFocus,
     protectedQuery,
   ),
 );
-const query = Atom.family((key: AppKey) => pollingQuery(source(key)));
+const query = Atom.family((key: AppKey) =>
+  pollingQuery(source(key), { active: unsettledProfiles }),
+);
 /** Shared per-app metadata for the picker and setup form. */
 export const profilesAtom = (key: { organization: OrganizationReference; app: AppId }) =>
   query(new AppKey({ organization: key.organization, app: key.app }));
@@ -109,12 +117,18 @@ export const accountSelectionAtom = (key: ConstructorParameters<typeof Selection
   selection(new SelectionKey(key));
 
 const hooksSource = Atom.family((key: Target) =>
-  HostedClient.query("webhooks", "list", {
-    params: key,
-    query: { profile: key.profile },
-  }).pipe(Atom.refreshOnWindowFocus),
+  HostedClient.query(
+    "webhooks",
+    "list",
+    hydrated({
+      params: key,
+      query: { profile: key.profile },
+    }),
+  ).pipe(refreshOnFocus),
 );
-const hooks = Atom.family((key: Target) => pollingQuery(hooksSource(key)));
+const hooks = Atom.family((key: Target) =>
+  pollingQuery(hooksSource(key), { active: unsettledWebhooks }),
+);
 /** Lifecycle metadata never includes signing secrets. */
 export const profileWebhooksAtom = (key: ConstructorParameters<typeof Target>[0]) =>
   hooks(new Target(key));

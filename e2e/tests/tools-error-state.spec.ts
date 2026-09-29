@@ -4,6 +4,7 @@ import { Actors } from "../support/actors.ts";
 import { Api, body } from "../support/api.ts";
 import { Browser } from "../support/browser.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
+import { openThroughBrowser } from "../support/in-app-navigation.ts";
 import { holdQuery } from "../support/query-transition.ts";
 import { scenarios } from "../test-plan.ts";
 
@@ -142,9 +143,7 @@ export default defineApp({ accounts: {} }, async () => ({
         yield* Effect.scoped(
           Effect.gen(function* () {
             const unavailable = yield* holdQuery(paths, "fail", { allRequests: true });
-            yield* browser.use("Reopen Tools with a failed network read", (page) =>
-              page.goto(pageUrl),
-            );
+            yield* openThroughBrowser("Reopen Tools with a failed network read", pageUrl);
             yield* unavailable.requested;
             yield* unavailable.release;
             yield* browser.use("Unclassified failures still have a safe recovery", (page) =>

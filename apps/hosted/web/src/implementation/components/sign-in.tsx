@@ -1,3 +1,4 @@
+import { usePageUrl } from "@executor-js/dashboard-start/page";
 import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { useEffect, useState, type ReactNode } from "react";
@@ -7,9 +8,8 @@ import { Skeleton } from "@executor-js/ui/components/skeleton";
 import { DashboardEntryPending, OrganizationLookupError } from "./entry.tsx";
 import { PagePending } from "./page-pending.tsx";
 import { Spinner } from "@executor-js/ui/components/spinner";
-import { sessionAtom } from "../../contracts/auth.ts";
+import { lastOrganizationAtom, sessionAtom } from "../../contracts/auth.ts";
 import { organizationsAtom } from "../../contracts/organization.ts";
-import { readLastOrganization } from "../session-hint.ts";
 
 function SignInPending() {
   return (
@@ -33,12 +33,13 @@ function ReplaceAfterSignIn({
   readonly verified: boolean;
   readonly children?: ReactNode;
 }) {
+  const page = usePageUrl();
   // A fresh document drops prior session state and preserves signed return URLs verbatim.
   useEffect(() => {
     if (verified) window.location.replace(destination);
   }, [destination, verified]);
   if (children !== undefined) return children;
-  const pathname = new URL(destination, window.location.origin).pathname;
+  const pathname = new URL(destination, page.origin).pathname;
   if (pathname.startsWith("/org/"))
     return (
       <DashboardEntryPending pathname={pathname}>
@@ -90,7 +91,8 @@ export function ContinueAfterSignIn({
   readonly redirect: string;
   readonly userId: string;
 }) {
-  const [recent] = useState(() => readLastOrganization(userId));
+  const saved = useAtomValue(lastOrganizationAtom);
+  const [recent] = useState(() => (saved?.user === userId ? saved.organization : undefined));
   const session = useAtomValue(sessionAtom);
   const verified =
     AsyncResult.isSuccess(session) && !session.waiting && session.value?.user.id === userId;

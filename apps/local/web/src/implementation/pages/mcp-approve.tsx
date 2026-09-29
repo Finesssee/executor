@@ -1,3 +1,4 @@
+import { usePageUrl } from "@executor-js/dashboard-start/page";
 import { GrantId } from "@executor-js/mcp-auth";
 import { useLocation } from "@tanstack/react-router";
 import { BrowserApprovalAddress } from "@executor-js/mcp/browser";
@@ -9,12 +10,13 @@ import { AuthenticationGate } from "../app.tsx";
 const approvals = browserApprovalAtoms(BrowserAtoms);
 function Review() {
   const location = useLocation();
+  const page = usePageUrl();
   const address = Schema.decodeUnknownOption(
     Schema.Struct({ ...BrowserApprovalAddress.fields, grantId: GrantId }),
   )({
     requestId: location.pathname.split("/").at(-1),
-    grantId: new URLSearchParams(window.location.search).get("grantId"),
-    sessionId: new URLSearchParams(window.location.search).get("sessionId"),
+    grantId: new URLSearchParams(page.search).get("grantId"),
+    sessionId: new URLSearchParams(page.search).get("sessionId"),
   });
   if (Option.isNone(address))
     return (

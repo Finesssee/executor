@@ -7,6 +7,7 @@ import { Actors } from "../support/actors.ts";
 import { Api, body, type Session } from "../support/api.ts";
 import { Browser } from "../support/browser.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
+import { advanceToReconciliation, installBrowserClock } from "../support/query-transition.ts";
 const App = Schema.Struct({
   id: Schema.String,
   name: Schema.String,
@@ -185,6 +186,7 @@ layer(HostedLive, { excludeTestServices: true })("Executor API-key account", (it
               ),
               directory,
             );
+            yield* installBrowserClock;
             yield* browser.use("Open Apps during team installation", (page) =>
               page.goto(`/org/${actors.organization.slug}/apps`),
             );
@@ -211,6 +213,8 @@ layer(HostedLive, { excludeTestServices: true })("Executor API-key account", (it
               ),
             ).toBe(0);
             yield* held.resume;
+            // A settled directory learns about the retry at its next idle reconciliation.
+            yield* advanceToReconciliation;
             yield* browser.use("Retried installation shows the skeleton again", (page) =>
               page.getByRole("status", { name: "Installing app", exact: true }).waitFor(),
             );

@@ -3,7 +3,7 @@ import { Effect, Schema, Duration } from "effect";
 import { parse } from "yaml";
 import type { AppCache, CacheLoadContext } from "../contracts/cache.ts";
 import { OpenapiOperation, OpenapiError, type OpenapiToolsOptions } from "../contracts/openapi.ts";
-import { JsonObject, type JsonValue } from "../contracts/schema.ts";
+import { JsonObject, JsonValue } from "../contracts/schema.ts";
 import type { DynamicTools } from "../contracts/dynamic-tools.ts";
 import type { HostedTool, HostedToolSummary } from "../contracts/host.ts";
 import { compileOpenApiDocument } from "./openapi-compile.ts";
@@ -23,6 +23,7 @@ import { createRequest } from "./openapi-request.ts";
 
 const Manifest = Schema.Struct({ revision: Schema.String, pages: Schema.Number });
 const Names = Schema.Array(Schema.String);
+const StoredEntry = Schema.fromJsonString(Schema.Struct({ value: JsonValue }));
 const schema = <A>(decoder: Schema.Decoder<A>) => wrap(decoder, false);
 const invoke = <A>(work: () => Promise<A>) =>
   Effect.tryPromise({ try: work, catch: (error) => error });
@@ -71,6 +72,28 @@ const remember = (
   }
   resolved.set(key, { ...entry, bytes });
   resolvedBytes += bytes;
+};
+
+// Parts this isolate just stored, by content-addressed revision. They equal the stored values,
+// so listing right after a load, or again in the same warm Worker, does not read them back.
+const stored = new Map<string, { parts: ReadonlyMap<string, JsonValue>; bytes: number }>();
+let storedBytes = 0;
+const storedPart = (kind: string, name: string | number) => JSON.stringify([kind, name]);
+const retain = (revision: string, parts: ReadonlyMap<string, JsonValue>, bytes: number) => {
+  if (bytes > 8_000_000) return;
+  const previous = stored.get(revision);
+  if (previous !== undefined) {
+    storedBytes -= previous.bytes;
+    stored.delete(revision);
+  }
+  while (stored.size >= 4 || storedBytes + bytes > 8_000_000) {
+    const oldest = stored.keys().next().value;
+    if (oldest === undefined) break;
+    storedBytes -= stored.get(oldest)?.bytes ?? 0;
+    stored.delete(oldest);
+  }
+  stored.set(revision, { parts, bytes });
+  storedBytes += bytes;
 };
 
 /** Static credential placement and destination are reviewed when the app is authored/imported. */
@@ -239,47 +262,72 @@ export const liveOpenapiOperations = (
       // same parts and renews their retention instead of storing another copy.
       const revision = yield* sha256(JSON.stringify([yield* sourceId, document]));
       const names = compiled.operations.map((operation) => operation.name);
-      const entries: { key: JsonValue; value: JsonValue }[] = [
+      const parts: { kind: string; name: string | number; value: JsonValue }[] = [
         ...compiled.operations.map((operation) => ({
-          key: partKey(revision, "operation", operation.name),
+          kind: "operation",
+          name: operation.name,
           value: operation,
         })),
         ...Object.entries(compiled.definitions).map(([name, value]) => ({
-          key: partKey(revision, "definition", name),
+          kind: "definition",
+          name,
           value,
         })),
       ];
       const pages = Math.ceil(names.length / pageSize);
       for (let page = 0; page < pages; page++)
-        entries.push({
-          key: partKey(revision, "names", page),
+        parts.push({
+          kind: "names",
+          name: page,
           value: names.slice(page * pageSize, (page + 1) * pageSize),
         });
       // Byte and count bounds apply to each RPC. Publication is last, under the cache loader lease.
-      const batches: (typeof entries)[] = [];
-      let batch: typeof entries = [];
+      const batches: { entries: { key: JsonValue; value: JsonValue }[]; bytes: number }[] = [];
+      let batch: { key: JsonValue; value: JsonValue }[] = [];
       let size = 0;
-      for (const entry of entries) {
-        const bytes = new TextEncoder().encode(JSON.stringify(entry)).byteLength;
+      // The retained copy holds the exact stored JSON; reading it decodes like a cache hit.
+      const retained = new Map<string, JsonValue>();
+      let retainedBytes = 0;
+      for (const part of parts) {
+        const entry = { key: partKey(revision, part.kind, part.name), value: part.value };
+        const text = JSON.stringify(entry);
+        const bytes = new TextEncoder().encode(text).byteLength;
         if (batch.length && (batch.length >= 64 || size + bytes > 4_000_000)) {
-          batches.push(batch);
+          batches.push({ entries: batch, bytes: size });
           batch = [];
           size = 0;
         }
         batch.push(entry);
         size += bytes;
+        retainedBytes += bytes;
+        if (retainedBytes <= 8_000_000)
+          retained.set(
+            storedPart(part.kind, part.name),
+            Schema.decodeUnknownSync(StoredEntry)(text).value,
+          );
       }
-      if (batch.length) batches.push(batch);
+      if (batch.length) batches.push({ entries: batch, bytes: size });
       // Revision keys are immutable and independent. Await every write before
       // publishing the manifest, without serializing their network round trips.
       yield* Effect.forEach(
         batches,
-        (entries) => fromPromise(context.cache.write)(entries, retention),
+        ({ entries, bytes }, index) =>
+          fromPromise(context.cache.write)(entries, retention).pipe(
+            Effect.withSpan("app.cache.flush", {
+              attributes: {
+                "cache.flush.index": index,
+                "cache.flush.count": batches.length,
+                "cache.flush.entries": entries.length,
+                "cache.flush.bytes": bytes,
+              },
+            }),
+          ),
         {
           concurrency: partConcurrency,
           discard: true,
         },
       );
+      retain(revision, retained, retainedBytes);
       return { revision, pages };
     });
   const current = Effect.gen(function* () {
@@ -297,11 +345,20 @@ export const liveOpenapiOperations = (
     kind: string,
     names: readonly (string | number)[],
     decoder: Schema.Decoder<A>,
-  ) =>
-    fromPromise(options.cache.readMany)(
-      names.map((name) => partKey(revision, kind, name)),
-      schema(decoder),
-    );
+  ) => {
+    const retained = stored.get(revision);
+    return retained === undefined
+      ? fromPromise(options.cache.readMany)(
+          names.map((name) => partKey(revision, kind, name)),
+          schema(decoder),
+        )
+      : Effect.forEach(names, (name) => {
+          const value = retained.parts.get(storedPart(kind, name));
+          return value === undefined
+            ? Effect.succeed(undefined)
+            : Schema.decodeUnknownEffect(decoder)(value);
+        });
+  };
   const namesFor = (manifest: typeof Manifest.Type) =>
     Effect.gen(function* () {
       const names: string[] = [];

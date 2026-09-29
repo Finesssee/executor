@@ -1,3 +1,4 @@
+import { LocalTime, shortMoment } from "../components/local-time.tsx";
 import { PageFrame, PageHeader } from "./page.tsx";
 import { Option } from "effect";
 import { AccountRowsSkeleton } from "./loading.tsx";
@@ -6,7 +7,7 @@ import { QueryResult, useQuery, useDashboard } from "./context.tsx";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { ArrowUpRight01Icon } from "@hugeicons/core-free-icons";
 import type { Inventory, AccountSummary, QueryProps } from "../../contracts/dashboard.ts";
-import { selectedIds, displayDate, accountNeedsSignIn } from "../../contracts/dashboard.ts";
+import { selectedIds, accountNeedsSignIn } from "../../contracts/dashboard.ts";
 
 import { Empty, ProviderIcon, SearchInput } from "./common.tsx";
 import { Button } from "../components/button.tsx";
@@ -151,7 +152,7 @@ function AccountsList({
                   </div>
                 </div>
                 <div className="account-date text-[12px] text-muted-foreground wrap-anywhere max-[1000px]:hidden max-[740px]:hidden">
-                  {displayDate(account.createdAt)}
+                  <LocalTime value={account.createdAt} options={shortMoment} />
                 </div>
                 <div className="app-references flex flex-wrap gap-1.75 text-[12px] [&_>_a]:inline-flex [&_>_a]:items-center [&_>_a]:gap-1.25 [&_>_a]:border [&_>_a]:border-border [&_>_a]:rounded-[5px] [&_>_a]:py-[3px] [&_>_a]:px-[7px] [&_>_a:hover]:bg-accent max-[740px]:[.inventory-row_&]:pl-11.5 max-[740px]:[&_>_a]:min-h-11 max-[740px]:[&_>_a]:wrap-anywhere max-[740px]:[&_>_a_svg]:shrink-0">
                   {apps.length === 0 ? (

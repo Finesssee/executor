@@ -1,3 +1,4 @@
+import { usePageUrl } from "@executor-js/dashboard-start/page";
 import { McpConsentLoading } from "@executor-js/ui/dashboard/mcp-consent";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { Avatar, AvatarFallback, AvatarImage } from "@executor-js/ui/components/avatar";
@@ -16,6 +17,7 @@ export function AuthBoundary({ children }: { readonly children: ReactNode }) {
   const session = useAtomValue(sessionAtom);
   const refresh = useAtomRefresh(sessionAtom);
   const location = useLocation();
+  const page = usePageUrl();
   const pathname = location.pathname;
   const current = Option.getOrUndefined(AsyncResult.value(session));
   const [firstUser, setFirstUser] = useState(current?.user.id);
@@ -60,7 +62,7 @@ export function AuthBoundary({ children }: { readonly children: ReactNode }) {
       <Navigate
         to="/login"
         search={{
-          redirect: window.location.pathname + window.location.search + window.location.hash,
+          redirect: page.pathname + page.search + page.hash,
         }}
         replace
       />

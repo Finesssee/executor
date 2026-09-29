@@ -36,7 +36,7 @@
     "hosted:cloud:dev:1password": "bun run with:cloud:dev bun run --cwd apps/hosted/cloud dev --stage development",
     "hosted:cloud:deploy": "bun run with:cloud bun run --cwd apps/hosted/cloud deploy",
     "hosted:cloud:test-stage": "bun run with:test-stage bun run --cwd apps/hosted/cloud test-stage",
-    "hosted:docker": "bun run with:self-host env BETTER_AUTH_URL=http://localhost:4400 docker compose -f apps/hosted/self-host/compose.yaml up --build -d",
+    "hosted:docker": "bun run with:self-host env BETTER_AUTH_URL=http://localhost:4400 EXECUTOR_BUILD_VERSION=$(git rev-parse HEAD) docker compose -f apps/hosted/self-host/compose.yaml up --build -d",
     "hosted:docker:down": "bun run with:self-host docker compose -f apps/hosted/self-host/compose.yaml down",
     "typecheck": "bun run --cwd apps/hosted/cloud framework:build && tsc --noEmit && tsc --noEmit -p apps/local/web && tsc --noEmit -p apps/hosted/web && tsc --noEmit -p apps/hosted/cloud/web && tsc --noEmit -p apps/hosted/self-host/web && tsc --noEmit -p apps/marketing && tsc --noEmit -p apps/docs && tsc --noEmit -p scripts/releases",
     "web:build": "bun run --cwd apps/local/web build",
@@ -85,6 +85,7 @@
     "ci:plan": "op run --env-file=.env.ci.op -- bun run --cwd apps/hosted/cloud alchemy deploy alchemy.github.ts --dry-run --detect-drift --no-input",
     "ci:deploy": "op run --env-file=.env.ci.op -- bun run --cwd apps/hosted/cloud alchemy deploy alchemy.github.ts",
     "e2e:billing": "vitest run --config e2e/billing.config.ts",
+    "e2e:pglite": "vitest run --config e2e/pglite.config.ts",
     "changeset": "changeset",
     "changeset:version": "changeset version && bun install --lockfile-only && oxfmt .",
     "release:version": "bun run changeset:version",
@@ -146,7 +147,9 @@
     "bun@1.4.2": "patches/bun@1.4.2.patch",
     "tree-sitter@0.21.1": "patches/tree-sitter@0.21.1.patch",
     "tree-sitter@0.22.4": "patches/tree-sitter@0.22.4.patch",
-    "pg-cloudflare@1.4.0": "patches/pg-cloudflare@1.4.0.patch"
+    "pg-cloudflare@1.4.0": "patches/pg-cloudflare@1.4.0.patch",
+    "@better-auth/passkey@1.7.5": "patches/@better-auth%2Fpasskey@1.7.5.patch",
+    "@electric-sql/pglite@0.5.8": "patches/@electric-sql%2Fpglite@0.5.8.patch"
   },
   "trustedDependencies": [
     "bun",

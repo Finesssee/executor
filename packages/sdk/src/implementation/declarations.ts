@@ -1,10 +1,13 @@
 /** Stale-while-revalidate reads of evaluated app declarations (skills, workflows, webhooks). */
-import { Clock, Effect, Encoding, Option, Redacted, Schema, type Crypto } from "effect";
+import { Clock, Deferred, Effect, Encoding, Option, Schema, type Crypto } from "effect";
 import {
   declarationFreshness,
   declarationLimits,
   type BackgroundWork,
   type DeclarationCache,
+  type DeclarationLimits,
+  type KeptEntry,
+  type PendingLoad,
 } from "../contracts/declarations.ts";
 import type { ResourceLifecycle } from "../contracts/executor.ts";
 import { CurrentProfile } from "../contracts/profiles.ts";
@@ -13,16 +16,20 @@ import type { makeOAuth } from "./oauth.ts";
 import { resolve, type InvocationSnapshot } from "./tools.ts";
 
 /** One store per process or isolate. Least recently used entries leave first. */
-export const makeDeclarationCache = (): DeclarationCache => {
-  const entries = new Map<string, { readonly json: string; readonly at: number }>();
-  const refreshing = new Map<string, number>();
+export const makeDeclarationCache = (
+  limits: DeclarationLimits = declarationLimits,
+): DeclarationCache => {
+  const entries = new Map<string, KeptEntry>();
+  const loads = new Map<string, PendingLoad>();
+  /** When each app's cached upstream data last changed. */
+  const changes = new Map<string, number>();
   let bytes = 0;
-  const size = (json: string) => json.length * 2;
+  const size = (entry: KeptEntry) => (entry.kind === "json" ? entry.json.length * 2 : entry.bytes);
   const remove = (key: string) => {
     const entry = entries.get(key);
     if (entry === undefined) return;
     entries.delete(key);
-    bytes -= size(entry.json);
+    bytes -= size(entry);
   };
   return {
     get: (key) =>
@@ -33,26 +40,29 @@ export const makeDeclarationCache = (): DeclarationCache => {
         entries.set(key, entry);
         return entry;
       }),
-    set: (key, json, at) =>
+    set: (key, entry) =>
       Effect.sync(() => {
         remove(key);
-        if (size(json) > declarationLimits.entryBytes) return;
-        entries.set(key, { json, at });
-        bytes += size(json);
+        // Started no later than the app's cached data changed: it may reflect the replaced data.
+        if (entry.at <= (changes.get(entry.app) ?? -Infinity)) return;
+        if (size(entry) > limits.entryBytes) return;
+        entries.set(key, entry);
+        bytes += size(entry);
         for (const oldest of entries.keys()) {
-          if (entries.size <= declarationLimits.entries && bytes <= declarationLimits.bytes) break;
+          if (entries.size <= limits.entries && bytes <= limits.bytes) break;
           remove(oldest);
         }
       }),
-    claim: (key, now) => {
-      const started = refreshing.get(key);
-      if (started !== undefined && now - started < declarationFreshness.maxStaleMillis)
-        return false;
-      refreshing.set(key, now);
-      return true;
+    pending: (key) => loads.get(key),
+    begin: (key, load) => {
+      loads.set(key, load);
     },
-    release: (key) => {
-      refreshing.delete(key);
+    end: (key, load) => {
+      if (loads.get(key) === load) loads.delete(key);
+    },
+    changed: (app, at) => {
+      changes.set(app, Math.max(at, changes.get(app) ?? at));
+      for (const [key, entry] of entries) if (entry.app === app && entry.at <= at) remove(key);
     },
   };
 };
@@ -61,7 +71,7 @@ const JsonText = Schema.fromJsonString(Schema.Unknown);
 
 /**
  * Evaluated declarations depend on the build, the profile revision, the selected accounts and
- * their stored credentials. Every read reruns the invocation snapshot; a kept result is served
+ * their credential generations. Token renewal keeps a result; reconnecting replaces it. Every read reruns the invocation snapshot; a kept result is served
  * only after the same lifecycle checks that precede credential release in an evaluation.
  */
 export const makeDeclarations = (options: {
@@ -79,18 +89,15 @@ export const makeDeclarations = (options: {
     );
   const key = (command: string, state: InvocationSnapshot) =>
     Effect.gen(function* () {
-      const selections = yield* Effect.forEach(state.selections, ({ slot, accounts }) =>
-        Effect.forEach(accounts, (account) =>
-          digest(Redacted.value(account.encryptedCredentials)).pipe(
-            Effect.map((credentials) => [
-              account.id,
-              account.provider,
-              account.method,
-              credentials,
-            ]),
-          ),
-        ).pipe(Effect.map((accounts) => [slot, accounts])),
-      );
+      const selections = state.selections.map(({ slot, accounts }) => [
+        slot,
+        accounts.map((account) => [
+          account.id,
+          account.provider,
+          account.method,
+          account.credentialGeneration,
+        ]),
+      ]);
       return yield* digest(
         new TextEncoder().encode(
           JSON.stringify([
@@ -133,6 +140,8 @@ export const makeDeclarations = (options: {
       );
     }).pipe(Effect.provideService(CurrentProfile, state.profile));
   return {
+    key,
+    authorize,
     /**
      * Read `command` for this invocation state. `retain` keeps only results determined by these
      * inputs; a result that reflects a live publisher is never reused. `current` rejects a cached
@@ -168,10 +177,11 @@ export const makeDeclarations = (options: {
           const json = yield* Schema.encodeEffect(JsonText)(value).pipe(
             Effect.mapError(() => new StorageError()),
           );
-          yield* options.cache.set(id, json, started);
+          yield* options.cache.set(id, { kind: "json", app: state.app.id, at: started, json });
           return value;
         });
-        const cached = yield* options.cache.get(id);
+        const kept = yield* options.cache.get(id);
+        const cached = kept?.kind === "json" ? kept : undefined;
         const age = cached === undefined ? Infinity : (yield* Clock.currentTimeMillis) - cached.at;
         if (cached === undefined || age >= declarationFreshness.maxStaleMillis) {
           yield* Effect.annotateCurrentSpan("executor.declarations.cache", "miss");
@@ -200,22 +210,34 @@ export const makeDeclarations = (options: {
           "executor.declarations.age_ms": age,
         });
         if (stale && background !== undefined)
-          // Claiming and handing over the refresh happen together, so an interrupted request
-          // cannot leave a claim that no refresh will release.
+          // Registering and handing over the refresh happen together, so an interrupted request
+          // cannot leave a registration that no refresh will end.
           yield* Effect.uninterruptible(
             Effect.gen(function* () {
-              if (!options.cache.claim(id, yield* Clock.currentTimeMillis)) return;
-              const release = Effect.sync(() => options.cache.release(id));
+              if (options.cache.pending(id) !== undefined) return;
+              const refresh: PendingLoad = {
+                started: yield* Clock.currentTimeMillis,
+                waiters: 0,
+                overdue: false,
+                unwatched: Deferred.makeUnsafe(),
+                done: Deferred.makeUnsafe(),
+              };
+              options.cache.begin(id, refresh);
               const accepted = yield* background(
                 load.pipe(
                   Effect.timeout(declarationFreshness.refreshMillis),
                   Effect.catchCause(() => Effect.logWarning("Declaration refresh failed")),
                   Effect.asVoid,
-                  Effect.ensuring(release),
+                  Effect.onExit(() =>
+                    Effect.suspend(() => {
+                      options.cache.end(id, refresh);
+                      return Deferred.succeed(refresh.done, undefined);
+                    }),
+                  ),
                   Effect.withSpan("sdk.declarations.refresh"),
                 ),
               );
-              if (!accepted) yield* release;
+              if (!accepted) options.cache.end(id, refresh);
             }),
           );
         return value;

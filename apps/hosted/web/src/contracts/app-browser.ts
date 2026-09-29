@@ -1,3 +1,5 @@
+import { hydrated } from "@executor-js/ui/contracts/http";
+import { refreshOnFocus } from "@executor-js/ui/contracts/refresh";
 import { workflowBindings } from "./resources.ts";
 import type { HostedError } from "./errors.ts";
 import type { SkillBindings, WorkflowBindings } from "@executor-js/ui/contracts/app-browser";
@@ -17,24 +19,32 @@ class AppKey extends Data.Class<{
   readonly expectedProfileRevision: number | undefined;
 }> {}
 const skills = Atom.family((key: AppKey) =>
-  HostedClient.query("skills", "list", {
-    params: { organization: key.organization, app: key.app },
-    query: {
-      deployment: key.deployment ?? undefined,
-      profile: key.profile,
-      expectedProfileRevision: key.expectedProfileRevision,
-    },
-  }).pipe(Atom.refreshOnWindowFocus, protectedQuery),
+  HostedClient.query(
+    "skills",
+    "list",
+    hydrated({
+      params: { organization: key.organization, app: key.app },
+      query: {
+        deployment: key.deployment ?? undefined,
+        profile: key.profile,
+        expectedProfileRevision: key.expectedProfileRevision,
+      },
+    }),
+  ).pipe(refreshOnFocus, protectedQuery),
 );
 const bundle = Atom.family((key: AppKey) =>
-  HostedClient.query("skills", "bundle", {
-    params: { organization: key.organization, app: key.app },
-    query: {
-      deployment: key.deployment ?? undefined,
-      profile: key.profile,
-      expectedProfileRevision: key.expectedProfileRevision,
-    },
-  }).pipe(Atom.refreshOnWindowFocus, protectedQuery),
+  HostedClient.query(
+    "skills",
+    "bundle",
+    hydrated({
+      params: { organization: key.organization, app: key.app },
+      query: {
+        deployment: key.deployment ?? undefined,
+        profile: key.profile,
+        expectedProfileRevision: key.expectedProfileRevision,
+      },
+    }),
+  ).pipe(refreshOnFocus, protectedQuery),
 );
 /** Product-owned query bindings share stable identities between overview and detail sections. */
 export function appBrowserBindings(

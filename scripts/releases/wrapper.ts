@@ -39,7 +39,14 @@ const build = Effect.gen(function* () {
     `#!/usr/bin/env node
 const name = "executor-" + process.platform + "-" + process.arch;
 const supported = ${JSON.stringify(platforms.map(platformPackage))};
-if (!supported.includes(name)) {
+const minimumNode = ${JSON.stringify(release.minimumNodeVersion.split(".").map(Number))};
+const currentNode = process.versions.node.split(".").map(Number);
+const difference = minimumNode.findIndex((part, index) => currentNode[index] !== part);
+if (difference !== -1 && currentNode[difference] < minimumNode[difference]) {
+  console.error("Executor requires Node.js ${release.minimumNodeVersion} or newer. You are running " + process.version + ".");
+  console.error("Upgrade Node.js, then reinstall: ${release.npmInstall} --include=optional");
+  process.exitCode = 1;
+} else if (!supported.includes(name)) {
   console.error("Executor does not support " + process.platform + "/" + process.arch + ".");
   process.exitCode = 1;
 } else {

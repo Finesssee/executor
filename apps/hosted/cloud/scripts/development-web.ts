@@ -15,6 +15,7 @@ import { homepageResponse } from "../src/implementation/homepage-response.ts";
 import { marketingFiles } from "../src/implementation/marketing.ts";
 import { developmentDashboard } from "../src/implementation/development-web.ts";
 import { cloudDevtools } from "@executor-js/hosted-testing/cloud";
+import { dashboardPageRoutes } from "../src/implementation/dashboard.ts";
 
 /** Route map shared by the cloud development entry point and its HTTP checks. */
 export const developmentRoutes = (
@@ -27,7 +28,7 @@ export const developmentRoutes = (
     HttpRouter.add(
       "GET",
       "/",
-      homepageResponse(cookiePrefix, marketing.experiment, dashboard.document),
+      homepageResponse(cookiePrefix, marketing.experiment, dashboard.document(null)),
     ),
     ...(["login", "login/sso", "create"] as const).map((page) =>
       HttpRouter.add(
@@ -54,6 +55,7 @@ export const developmentRoutes = (
         ),
       ),
     ),
+    ...dashboardPageRoutes.map((route) => HttpRouter.add("GET", route, dashboard.document(null))),
     HttpRouter.add("GET", "/home", marketing.document),
     ...marketing.paths.map((path) => HttpRouter.add("GET", path, marketing.asset)),
     HttpRouter.add("*", "*", dashboard.handler),
@@ -92,20 +94,17 @@ const main = Effect.scoped(
     );
     yield* Layer.build(NodeHttpServer.layerServer(() => hmrSocket, { host: listenHost, port: 0 }));
     // The proxy routes whole hostnames, so a proxied HMR client connects to its loopback listener.
+    const apiOrigin = `http://127.0.0.1:${configuration.apiPort}`;
     const dashboard = yield* developmentDashboard(
       root,
       hmrSocket,
       proxied ? new URL(`http://${listenHost}`) : origin,
+      apiOrigin,
     );
     const marketing = yield* marketingFiles(path.join(marketingRoot, "dist"));
     const routes = Layer.mergeAll(
       yield* cloudDevtools,
-      developmentRoutes(
-        marketing,
-        dashboard,
-        cloudSessionCookiePrefix(origin.origin),
-        `http://127.0.0.1:${configuration.apiPort}`,
-      ),
+      developmentRoutes(marketing, dashboard, cloudSessionCookiePrefix(origin.origin), apiOrigin),
     );
     yield* Layer.build(
       HttpRouter.serve(routes, { disableLogger: true }).pipe(

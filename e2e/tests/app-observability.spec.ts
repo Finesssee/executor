@@ -414,16 +414,26 @@ layer(HostedLive, { excludeTestServices: true })("App observability", (it) => {
         yield* (yield* warmPage)(url);
         yield* browser.use("Close the initial stream", (page) => page.goto("about:blank"));
         for (const sample of [1, 2]) {
-          const requestHeader = yield* browser.use(`Measure normal reload ${sample}`, (page) =>
-            Promise.all([
-              page
-                .waitForRequest((request) => request.url().endsWith("/_executor/api/subscribe"))
-                .then((request) => request.headers()["traceparent"]),
-              page.goto(url),
-            ]).then(([header]) => header),
+          const [requestHeader, timing] = yield* browser.use(
+            `Measure normal reload ${sample}`,
+            (page) =>
+              Promise.all([
+                page
+                  .waitForRequest((request) => request.url().endsWith("/_executor/api/subscribe"))
+                  .then((request) => request.headers()["traceparent"]),
+                page
+                  .waitForResponse((response) =>
+                    response.url().endsWith("/_executor/api/subscribe"),
+                  )
+                  .then((response) => response.headerValue("server-timing")),
+                page.goto(url),
+              ]),
           );
           const reloadTraceId = requestHeader?.match(/^00-([a-f0-9]{32})-/)?.[1];
           if (reloadTraceId === undefined) return yield* Effect.die("Reload trace context missing");
+          const serverSpan = timing?.match(/executor-span;desc="([a-f0-9]{16})"/)?.[1];
+          if (serverSpan === undefined)
+            return yield* Effect.die("The reload did not identify its open server span");
           yield* browser.use(`Normal reload ${sample} displays data`, (page) =>
             page.getByRole("status").filter({ hasText: "Ready" }).waitFor(),
           );
@@ -433,17 +443,32 @@ layer(HostedLive, { excludeTestServices: true })("App observability", (it) => {
               page.evaluate(navigationTiming),
             ),
           );
+          // Browser and server spans reach the collector separately, and the server's request
+          // span ends only with the stream. Close it and wait for the whole trace, so the counts
+          // below include every server span, including a late repeated query.
+          yield* browser.use(`Close normal reload ${sample}`, (page) => page.goto("about:blank"));
           const reloadTrace = yield* telemetry.query(reloadTraceId).pipe(
-            Effect.flatMap((result) =>
-              result.data.some(
-                (row) =>
-                  row.span.operationName === "ui.app.first_result" &&
-                  row.span.tags["executor.milestone.reached"] === "true",
-              )
+            Effect.flatMap((result) => {
+              const spans = result.data.map((row) => row.span);
+              const ids = new Set(spans.map((span) => span.spanId));
+              return spans.some(
+                (span) =>
+                  span.operationName === "ui.app.first_result" &&
+                  span.tags["executor.milestone.reached"] === "true",
+              ) &&
+                spans.some(
+                  (span) => span.spanId === serverSpan && span.operationName === "http.server POST",
+                ) &&
+                spans.every(
+                  (span) =>
+                    !span.operationName.startsWith("[missing parent") &&
+                    (span.parentSpanId === null || ids.has(span.parentSpanId)),
+                )
                 ? Effect.succeed(result)
-                : Effect.fail(new Error("Reload timing has not reached the collector")),
-            ),
+                : Effect.fail(new Error("The reload trace has not fully reached the collector"));
+            }),
             Effect.retry({ schedule: Schedule.spaced("1 second"), times: 30 }),
+            Effect.timeout("60 seconds"),
           );
           yield* evidence.json(`app-normal-reload-${sample}.json`, reloadTrace);
           if (target.metadata.target === "cloud") {
@@ -463,7 +488,6 @@ layer(HostedLive, { excludeTestServices: true })("App observability", (it) => {
               "Warm queries must not reread the server bundle from R2",
             ).toBe(false);
           }
-          yield* browser.use(`Close normal reload ${sample}`, (page) => page.goto("about:blank"));
         }
       }),
     ),

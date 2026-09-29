@@ -1,3 +1,5 @@
+import { refreshOnFocus } from "@executor-js/ui/contracts/refresh";
+import { browserOnly } from "@executor-js/ui/contracts/http";
 import { organizationHttpClient } from "./organization-reference.ts";
 /** Host-specific pages opt into the shared private-app browser contract. */
 import { HostedAppUiApi, AppSignInId } from "@executor-js/hosted-server/app-ui/contracts";
@@ -23,16 +25,17 @@ class AppUiKey extends Data.Class<{
   readonly deployment: DeploymentId;
 }> {}
 const location = Atom.family((key: AppUiKey) =>
-  AppUiClient.runtime
-    .atom(
+  // The open-app control polls deployment status; it loads after hydration.
+  browserOnly(
+    AppUiClient.runtime.atom(
       Stream.fromEffectSchedule(
         Effect.flatMap(AppUiClient, (client) =>
           client.appUi.location({ params: { organization: key.organization, app: key.app } }),
         ),
         Schedule.spaced("3 seconds"),
       ).pipe(Stream.takeUntil((location) => location.status !== "pending")),
-    )
-    .pipe(Atom.refreshOnWindowFocus),
+    ),
+  ).pipe(refreshOnFocus),
 );
 /** A stable, non-secret app link; opening it initiates authentication when needed. */
 export const appUiLocationAtom = (key: ConstructorParameters<typeof AppUiKey>[0]) =>

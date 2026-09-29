@@ -28,6 +28,8 @@ export const oauthSetupIssuer = Effect.gen(function* () {
   let registrationError: "invalid_client_metadata" | "invalid_redirect_uri" =
     "invalid_client_metadata";
   let omitSecretExpiry = false;
+  /** Vercel registers a public client whatever method the request names, as RFC 7591 allows. */
+  let issuePublicClients = false;
   let nonceRequested: boolean | undefined;
   let idTokenAlgorithms: readonly string[] | undefined;
   let includeIdToken = false;
@@ -37,6 +39,26 @@ export const oauthSetupIssuer = Effect.gen(function* () {
   /** Google signs RS256; a declared server advertises no algorithms, so RS256 is the only default. */
   let idTokenAlgorithm: "ES256" | "RS256" | "none" = "ES256";
   let refreshTokens = false;
+  /** Replace the refresh token on every refresh, as rotating services do. */
+  let rotateRefreshTokens = false;
+  /** Whether a replaced refresh token is still accepted, as services with a reuse window allow. */
+  let replacedRefreshTokens: "refused" | "accepted" = "refused";
+  /**
+   * Hold refresh requests before the service processes them, or after it has issued and saved
+   * their tokens but before it answers; or hold resource reads. A held request waits for
+   * `release`. One held before processing is then dropped unprocessed.
+   */
+  let hold: "refresh-unprocessed" | "refresh-issued" | "resource" | undefined;
+  let held = 0;
+  let releases: Array<Deferred.Deferred<void>> = [];
+  const heldRequest = Effect.gen(function* () {
+    const released = yield* Deferred.make<void>();
+    releases.push(released);
+    held++;
+    yield* Deferred.await(released);
+  });
+  /** Refresh requests that issued tokens. */
+  let refreshesIssued = 0;
   /** The `expires_in` of issued tokens; undefined omits it. */
   let expiresIn: number | undefined = 3600;
   let tokenExchanges = 0;
@@ -72,8 +94,10 @@ export const oauthSetupIssuer = Effect.gen(function* () {
   }> = [];
   const keyPair = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
   let rsaKey: KeyObject | undefined;
-  /** Refresh tokens issued for each client; like Google, refreshes do not rotate them. */
+  /** Refresh tokens issued for each client; unless rotation is configured, refreshes keep them. */
   const refreshGrants = new Map<string, string>();
+  /** Refresh tokens a rotation replaced, with their client. */
+  const replacedRefreshGrants = new Map<string, string>();
   const refreshedAccessTokens = new Set<string>();
   const clients = new Map<
     string,
@@ -103,6 +127,11 @@ export const oauthSetupIssuer = Effect.gen(function* () {
   let registrations = 0;
   let discoveries = 0;
   let authMethods = ["client_secret_basic"];
+  /**
+   * How the token endpoint reads HTTP Basic credentials. RFC 6749 section 2.3.1 form-decodes them;
+   * Doorkeeper, which PlanetScale runs, compares the decoded header literally.
+   */
+  let basicCredentials: "form-decoded" | "literal" = "form-decoded";
   let lastRegistration: { scope: string; method: string } | undefined;
   /** RFC 6749 section 2.3.1 client authentication presented at the token or revocation endpoint. */
   const presentedClient = (authorization: string | undefined, input: URLSearchParams) => {
@@ -110,14 +139,10 @@ export const oauthSetupIssuer = Effect.gen(function* () {
       ? Buffer.from(authorization.slice(6), "base64").toString("utf8")
       : "";
     const separator = decoded.indexOf(":");
-    const username =
-      separator < 0
-        ? undefined
-        : decodeURIComponent(decoded.slice(0, separator).replace(/\+/g, " "));
-    const password =
-      separator < 0
-        ? undefined
-        : decodeURIComponent(decoded.slice(separator + 1).replace(/\+/g, " "));
+    const read = (value: string) =>
+      basicCredentials === "literal" ? value : decodeURIComponent(value.replace(/\+/g, " "));
+    const username = separator < 0 ? undefined : read(decoded.slice(0, separator));
+    const password = separator < 0 ? undefined : read(decoded.slice(separator + 1));
     const method: TokenAuth =
       authorization !== undefined
         ? "client_secret_basic"
@@ -198,6 +223,11 @@ export const oauthSetupIssuer = Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest;
         const input = new URLSearchParams(yield* request.text);
         const refreshing = input.get("grant_type") === "refresh_token";
+        if (refreshing && hold === "refresh-unprocessed") {
+          // The service never processes this request; its caller is gone once it is released.
+          yield* heldRequest;
+          return HttpServerResponse.empty({ status: 503 });
+        }
         if (refreshing) refreshes++;
         else tokenExchanges++;
         if (tokenError === "reset") {
@@ -220,7 +250,12 @@ export const oauthSetupIssuer = Effect.gen(function* () {
           presentedRefresh = input.get("refresh_token");
         const issued = refreshing || code === null ? undefined : codes.get(code);
         const refreshClient =
-          refreshing && presentedRefresh !== null ? refreshGrants.get(presentedRefresh) : undefined;
+          refreshing && presentedRefresh !== null
+            ? (refreshGrants.get(presentedRefresh) ??
+              (replacedRefreshTokens === "accepted"
+                ? replacedRefreshGrants.get(presentedRefresh)
+                : undefined))
+            : undefined;
         const clientId = refreshing ? refreshClient : issued?.clientId;
         const authorization = request.headers.authorization;
         const presented = presentedClient(authorization, input);
@@ -289,9 +324,18 @@ export const oauthSetupIssuer = Effect.gen(function* () {
           : "synthetic-access-token";
         if (refreshing) refreshedAccessTokens.add(accessToken);
         const refreshToken =
-          refreshTokens && !refreshing ? `synthetic-refresh-${randomUUID()}` : undefined;
+          refreshTokens && (!refreshing || rotateRefreshTokens)
+            ? `synthetic-refresh-${randomUUID()}`
+            : undefined;
         if (refreshToken !== undefined) refreshGrants.set(refreshToken, clientId);
+        if (refreshing && rotateRefreshTokens && presentedRefresh !== null) {
+          // The presented token is consumed by this rotation, whether or not its answer arrives.
+          if (refreshGrants.delete(presentedRefresh))
+            replacedRefreshGrants.set(presentedRefresh, clientId);
+        }
+        if (refreshing) refreshesIssued++;
         const lifetime = refreshing ? (refreshedExpiresIn ?? expiresIn) : expiresIn;
+        if (refreshing && hold === "refresh-issued") yield* heldRequest;
         return yield* HttpServerResponse.json({
           access_token: accessToken,
           token_type: tokenType,
@@ -308,6 +352,7 @@ export const oauthSetupIssuer = Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest;
         const authorization = request.headers.authorization ?? null;
         const token = authorization?.replace(/^Bearer /, "") ?? "";
+        if (hold === "resource") yield* heldRequest;
         // Report whether a renewed token was presented, and echo the credential itself.
         return yield* HttpServerResponse.json({
           refreshed: refreshedAccessTokens.has(token),
@@ -487,15 +532,19 @@ export const oauthSetupIssuer = Effect.gen(function* () {
         if (!malformedRegistration)
           clients.set(`synthetic-client-${registrations}`, {
             redirects: input.redirect_uris,
-            secret: "synthetic-client-secret",
-            methods: ["client_secret_basic"],
+            secret: issuePublicClients ? null : "synthetic-client-secret",
+            methods: issuePublicClients ? ["none"] : ["client_secret_basic"],
           });
         return yield* HttpServerResponse.json(
           {
             ...(malformedRegistration ? {} : { client_id: `synthetic-client-${registrations}` }),
-            client_secret: "synthetic-client-secret",
-            ...(omitSecretExpiry ? {} : { client_secret_expires_at: expiresAt }),
-            token_endpoint_auth_method: input.token_endpoint_auth_method,
+            ...(issuePublicClients
+              ? { token_endpoint_auth_method: "none" }
+              : {
+                  client_secret: "synthetic-client-secret",
+                  ...(omitSecretExpiry ? {} : { client_secret_expires_at: expiresAt }),
+                  token_endpoint_auth_method: input.token_endpoint_auth_method,
+                }),
             redirect_uris: input.redirect_uris,
           },
           { status: registrationStatus },
@@ -511,7 +560,11 @@ export const oauthSetupIssuer = Effect.gen(function* () {
   );
   // Scenario work has ended. Release unfinished provider requests before the
   // HTTP adapter waits for its listener to close.
-  yield* Effect.addFinalizer(() => Effect.sync(() => listener.closeAllConnections()));
+  yield* Effect.addFinalizer(() =>
+    Effect.forEach(releases, (released) => Deferred.succeed(released, undefined), {
+      discard: true,
+    }).pipe(Effect.andThen(Effect.sync(() => listener.closeAllConnections()))),
+  );
   const server = yield* HttpServer.HttpServer.pipe(Effect.provideContext(services));
   if (!("port" in server.address)) return yield* Effect.die("OAuth fixture needs a TCP listener");
   const origin = `http://127.0.0.1:${server.address.port}`;
@@ -524,11 +577,19 @@ export const oauthSetupIssuer = Effect.gen(function* () {
       readonly malformedRegistration?: boolean;
       readonly registrationError?: typeof registrationError;
       readonly omitSecretExpiry?: boolean;
+      /** Register every client as public, replacing the requested token endpoint method. */
+      readonly issuePublicClients?: boolean;
       readonly idTokenAlgorithms?: readonly string[];
       readonly includeIdToken?: boolean;
       readonly idTokenIssuer?: string | null;
       readonly idTokenAlgorithm?: typeof idTokenAlgorithm;
       readonly refreshTokens?: boolean;
+      /** Replace the refresh token on every refresh. */
+      readonly rotateRefreshTokens?: boolean;
+      /** Whether a replaced refresh token is still accepted. */
+      readonly replacedRefreshTokens?: typeof replacedRefreshTokens;
+      /** Hold matching requests until `release`; null stops holding new ones. */
+      readonly hold?: typeof hold | null;
       /** The `expires_in` of issued tokens; null omits it. */
       readonly expiresIn?: number | null;
       readonly invalidNonce?: boolean;
@@ -540,6 +601,8 @@ export const oauthSetupIssuer = Effect.gen(function* () {
       readonly pathDiscovery?: typeof pathDiscovery;
       readonly scopes?: readonly string[];
       readonly authMethods?: readonly string[];
+      /** How the token endpoint reads HTTP Basic credentials. */
+      readonly basicCredentials?: typeof basicCredentials;
       readonly callbackIssuer?: string | null;
       readonly browserReturn?: string | null;
       /**
@@ -572,6 +635,11 @@ export const oauthSetupIssuer = Effect.gen(function* () {
           idTokenIssuer = input.idTokenIssuer === null ? undefined : input.idTokenIssuer;
         if (input.idTokenAlgorithm !== undefined) idTokenAlgorithm = input.idTokenAlgorithm;
         if (input.refreshTokens !== undefined) refreshTokens = input.refreshTokens;
+        if (input.rotateRefreshTokens !== undefined)
+          rotateRefreshTokens = input.rotateRefreshTokens;
+        if (input.replacedRefreshTokens !== undefined)
+          replacedRefreshTokens = input.replacedRefreshTokens;
+        if (input.hold !== undefined) hold = input.hold === null ? undefined : input.hold;
         if (input.expiresIn !== undefined)
           expiresIn = input.expiresIn === null ? undefined : input.expiresIn;
         if (input.invalidNonce !== undefined) invalidNonce = input.invalidNonce;
@@ -580,12 +648,14 @@ export const oauthSetupIssuer = Effect.gen(function* () {
           malformedRegistration = input.malformedRegistration;
         if (input.registrationError !== undefined) registrationError = input.registrationError;
         if (input.omitSecretExpiry !== undefined) omitSecretExpiry = input.omitSecretExpiry;
+        if (input.issuePublicClients !== undefined) issuePublicClients = input.issuePublicClients;
         if (input.registration !== undefined) registration = input.registration;
         if (input.expiresAt !== undefined) expiresAt = input.expiresAt;
         if (input.discovery !== undefined) discovery = input.discovery;
         if (input.pathDiscovery !== undefined) pathDiscovery = input.pathDiscovery;
         if (input.scopes !== undefined) scopes = [...input.scopes];
         if (input.authMethods !== undefined) authMethods = [...input.authMethods];
+        if (input.basicCredentials !== undefined) basicCredentials = input.basicCredentials;
         if (input.callbackIssuer !== undefined)
           callbackIssuer = input.callbackIssuer === null ? undefined : input.callbackIssuer;
         if (input.browserReturn !== undefined)
@@ -623,7 +693,17 @@ export const oauthSetupIssuer = Effect.gen(function* () {
               : ["client_secret_basic", "client_secret_post"],
         });
       }),
+    /** Answer every held request; one held before processing stays unprocessed. */
+    release: Effect.suspend(() => {
+      const pending = releases;
+      releases = [];
+      return Effect.forEach(pending, (released) => Deferred.succeed(released, undefined), {
+        discard: true,
+      });
+    }),
     metrics: Effect.sync(() => ({
+      held,
+      refreshesIssued,
       registrations,
       discoveries,
       discoveryRequests: [...discoveryRequests],

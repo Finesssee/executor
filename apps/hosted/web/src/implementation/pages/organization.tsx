@@ -1,3 +1,4 @@
+import { usePageUrl } from "@executor-js/dashboard-start/page";
 import {
   OrganizationSettingsPending,
   organizationSettingClass,
@@ -278,6 +279,7 @@ function OrganizationUrl({ disabled }: { readonly disabled: boolean }) {
     organization.role === "member"
       ? "Only organization owners and admins can change organization settings."
       : undefined;
+  const page = usePageUrl();
   const changeSlug = useAtomSet(changeOrganizationSlugAtom(organization.organization), {
     mode: "promiseExit",
   });
@@ -314,7 +316,7 @@ function OrganizationUrl({ disabled }: { readonly disabled: boolean }) {
               className="organization-url-prefix shrink-0 max-w-[50%] py-[7px] px-[10px] border-r border-r-input text-muted-foreground text-[12px] overflow-hidden text-ellipsis whitespace-nowrap"
               aria-hidden
             >
-              {window.location.host}/org/
+              {page.host}/org/
             </span>
             <Input
               aria-label="Organization URL"

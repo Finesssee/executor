@@ -1,4 +1,6 @@
 /** Independent resource queries and mutations retain the account and deployment that opened them. */
+import { hydrated } from "@executor-js/ui/contracts/http";
+import { refreshOnFocus } from "@executor-js/ui/contracts/refresh";
 import { Data, Effect } from "effect";
 import { Atom, AsyncResult } from "effect/unstable/reactivity";
 import {
@@ -10,7 +12,7 @@ import {
   type WebhookId,
 } from "@executor-js/sdk";
 import { acknowledge } from "@executor-js/ui/contracts/mutations";
-import { pollingQuery } from "@executor-js/ui/contracts/polling";
+import { pollingQuery, unsettledRuns, unsettledWebhooks } from "@executor-js/ui/contracts/polling";
 import { HostedClient } from "./api.ts";
 import type { OrganizationReference } from "@executor-js/hosted-server/organization";
 import { protectedQuery } from "./protected-query.ts";
@@ -37,25 +39,33 @@ class PageKey extends Data.Class<{
 class RunKey extends Data.Class<{ readonly page: PageKey; readonly run: WorkflowRunId }> {}
 class HookKey extends Data.Class<{ readonly target: Target; readonly subscription: WebhookId }> {}
 const definitions = Atom.family((key: DefinitionKey) =>
-  HostedClient.query("workflows", "definitions", {
-    params: key,
-    query: {
-      profile: key.profile,
-      deployment: key.deployment,
-      expectedProfileRevision: key.expectedProfileRevision,
-    },
-  }).pipe(Atom.refreshOnWindowFocus, protectedQuery),
+  HostedClient.query(
+    "workflows",
+    "definitions",
+    hydrated({
+      params: key,
+      query: {
+        profile: key.profile,
+        deployment: key.deployment,
+        expectedProfileRevision: key.expectedProfileRevision,
+      },
+    }),
+  ).pipe(refreshOnFocus, protectedQuery),
 );
 const runsSource = Atom.family((key: PageKey) =>
-  HostedClient.query("workflows", "list", {
-    params: key.target,
-    query: {
-      profile: key.target.profile,
-      limit: 20,
-      cursor: key.cursor,
-      workflow: key.workflow,
-    },
-  }).pipe(Atom.refreshOnWindowFocus, protectedQuery),
+  HostedClient.query(
+    "workflows",
+    "list",
+    hydrated({
+      params: key.target,
+      query: {
+        profile: key.target.profile,
+        limit: 20,
+        cursor: key.cursor,
+        workflow: key.workflow,
+      },
+    }),
+  ).pipe(refreshOnFocus, protectedQuery),
 );
 const runs = Atom.family((key: PageKey) =>
   pollingQuery(
@@ -66,6 +76,7 @@ const runs = Atom.family((key: PageKey) =>
         items: page.items.filter((run) => run.profile === key.target.profile),
       })),
     ),
+    { active: unsettledRuns },
   ),
 );
 const starts = Atom.family((start: StartKey) => {
@@ -146,10 +157,14 @@ export const workflowBindings = (input: ConstructorParameters<typeof DefinitionK
   };
 };
 const hooksSource = Atom.family((key: Target) =>
-  HostedClient.query("webhooks", "list", {
-    params: key,
-    query: { profile: key.profile },
-  }).pipe(Atom.refreshOnWindowFocus, protectedQuery),
+  HostedClient.query(
+    "webhooks",
+    "list",
+    hydrated({
+      params: key,
+      query: { profile: key.profile },
+    }),
+  ).pipe(refreshOnFocus, protectedQuery),
 );
 const hooks = Atom.family((key: Target) =>
   pollingQuery(
@@ -157,6 +172,7 @@ const hooks = Atom.family((key: Target) =>
       hooksSource(key),
       AsyncResult.map((rows) => rows.filter((hook) => (hook.profile ?? undefined) === key.profile)),
     ),
+    { active: unsettledWebhooks },
   ),
 );
 const reconcile = Atom.family((key: HookKey) =>

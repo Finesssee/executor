@@ -48,7 +48,11 @@ import {
 } from "@executor-js/ui/dashboard/app-overview";
 import { appManagement } from "../../contracts/app-management.ts";
 import { AppDetailLoading, OverviewCardLoading } from "@executor-js/ui/dashboard/app-loading";
-import { accountSelectionIssues, type AppView } from "@executor-js/ui/contracts/dashboard";
+import {
+  accountSelectionIssues,
+  unfilledAccountSlots,
+  type AppView,
+} from "@executor-js/ui/contracts/dashboard";
 class PreviewKey extends Data.Class<{
   readonly app: AppId;
   readonly deployment: App["activeDeployment"];
@@ -371,6 +375,10 @@ export function AppDetailPage({
                           app={current.app}
                           Failure={Failure}
                           empty={previewEmpty}
+                          accountsNeeded={previewContexts.every(
+                            (context) =>
+                              unfilledAccountSlots(context.app, context.accounts).length > 0,
+                          )}
                           sources={previewContexts.map((context) => ({
                             key: context.key,
                             query: overviewToolsAtom(

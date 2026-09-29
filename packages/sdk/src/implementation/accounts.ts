@@ -134,7 +134,7 @@ export const makeAccounts = (
         yield* query(() =>
           tx.updateMany("accounts", {
             where: (b) => b("id", "=", account.id),
-            set: { encryptedCredentials },
+            set: { encryptedCredentials, credentialGeneration: account.credentialGeneration + 1 },
           }),
         );
         return yield* Schema.decodeUnknownEffect(Account)(account).pipe(

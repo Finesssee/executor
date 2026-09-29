@@ -1,11 +1,7 @@
 /** Host bindings exist only on the trusted product Worker, never on authored app isolates. */
 import { Effect, Option, Schema } from "effect";
-import {
-  FetchHttpClient,
-  HttpClient,
-  HttpServerRequest,
-  HttpServerResponse,
-} from "effect/unstable/http";
+import { FetchHttpClient, HttpClient, HttpServerResponse } from "effect/unstable/http";
+import { dashboardRoutes, fileHeaders } from "../web.ts";
 import { BlobKey, BlobStoreError, type BlobStorage } from "@executor-js/sdk/core";
 import { SourceError } from "@executor-js/app-source";
 import { gitRepositories } from "@executor-js/app-source/host";
@@ -131,45 +127,21 @@ export const bindingHttpClient = (
 
 /** Serve only the build's asset manifest; a disk directory listing can never become a public page. */
 export const bindingDashboard = (assets: HttpBinding, files: Readonly<Record<string, string>>) =>
-  Effect.gen(function* () {
-    const request = yield* HttpServerRequest.HttpServerRequest;
-    const pathname = new URL(request.url, "http://dashboard.internal").pathname;
-    if (
-      /^\/(api|\.well-known)(\/|$)/.test(pathname) ||
-      pathname === "/mcp" ||
-      pathname === "/health" ||
-      pathname === "/openapi.json"
-    )
-      return HttpServerResponse.empty({ status: 404 });
-    const decoded = yield* Effect.try({
-      try: () => decodeURIComponent(pathname),
-      catch: () => new Error("Invalid asset path"),
-    }).pipe(Effect.option);
-    if (Option.isNone(decoded)) return HttpServerResponse.empty({ status: 400 });
-    const relative = decoded.value === "/" ? "index.html" : decoded.value.slice(1);
-    const file = Object.hasOwn(files, relative)
-      ? relative
-      : !relative.includes(".") &&
-          !relative.startsWith("assets/") &&
-          request.headers.accept?.includes("text/html")
-        ? "index.html"
-        : undefined;
-    if (file === undefined) return HttpServerResponse.empty({ status: 404 });
-    const response = yield* Effect.tryPromise(() =>
+  dashboardRoutes(new Set(Object.keys(files)), (relative) =>
+    Effect.tryPromise(() =>
       assets.fetch(
-        new Request(`http://assets.internal/${file.split("/").map(encodeURIComponent).join("/")}`),
+        new Request(
+          `http://assets.internal/${relative.split("/").map(encodeURIComponent).join("/")}`,
+        ),
       ),
-    );
-    return HttpServerResponse.fromWeb(response).pipe(
-      HttpServerResponse.setHeaders({
-        "content-type": files[file] ?? "application/octet-stream",
-        "cache-control": /^assets\/[^/]+-[\w-]{8}\.[a-z\d]+$/i.test(file)
-          ? "public, max-age=31536000, immutable"
-          : "no-cache",
-        "x-content-type-options": "nosniff",
-        ...(file.endsWith(".html")
-          ? { "content-security-policy": "frame-ancestors 'none'", "x-frame-options": "DENY" }
-          : {}),
-      }),
-    );
-  });
+    ).pipe(
+      Effect.map((response) =>
+        HttpServerResponse.fromWeb(response).pipe(
+          HttpServerResponse.setHeaders({
+            "content-type": files[relative] ?? "application/octet-stream",
+            ...fileHeaders(relative),
+          }),
+        ),
+      ),
+    ),
+  );

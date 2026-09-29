@@ -5,15 +5,14 @@ export {
   loadWorkerBuild,
   workerBuildAsset,
 } from "./implementation/worker-build-storage.ts";
-export { appBridge, appRpcBridge, appFacetBridge } from "./implementation/worker-bridge.ts";
-export {
-  invocationElicitation,
-  AppRpcEntrypoint,
-  AppRpcInvocation,
-} from "./implementation/worker-elicitation.ts";
-export {
-  invocationWorkflow,
-  invocationWorkflowControls,
-} from "./implementation/worker-workflow-rpc.ts";
 export { bindingWorkerdApps } from "./implementation/binding-workerd-apps.ts";
 export { workerdHostHandler } from "./implementation/workerd-client.ts";
+export {
+  makeAppRunner,
+  type AppRunner,
+  type AppRunnerHost,
+  type AppDataHost,
+  type AppInvocation,
+  type AppCapabilities,
+} from "./implementation/app-runner.ts";
+export { appRuntime, buildLoadSpan, type AppRuntimeHost } from "./implementation/app-runtime.ts";

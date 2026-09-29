@@ -20,7 +20,8 @@ const siteBuild = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const root = yield* path.fromFileUrl(new URL("../../../..", import.meta.url));
   const marketing = path.join(root, "apps/marketing/dist");
-  const dashboard = path.join(root, "apps/hosted/cloud/web/dist");
+  // The Worker renders dashboard documents; only their browser assets are static.
+  const dashboard = path.join(root, "apps/hosted/cloud/web/dist/client");
   // Blume builds the documentation with a deployment base of /docs, so its own
   // output is still rooted at dist. It moves below docs/ here. Everything in
   // that build ships, not just the HTML: llms.txt, llms-full.txt and the .md
@@ -65,14 +66,10 @@ const siteBuild = Effect.gen(function* () {
   const directives = ["_redirects", "_headers"];
 
   const addAsset = (asset: Asset, relative = asset.relative) => {
-    // The dashboard entry is renamed so the marketing site's index remains the
-    // asset root.
     if (directives.includes(asset.relative)) return;
-    const destination =
-      relative === "index.html" && asset.source.startsWith(dashboard) ? "dashboard.html" : relative;
-    const existing = assets.get(destination) ?? [];
-    existing.push({ ...asset, relative: destination });
-    assets.set(destination, existing);
+    const existing = assets.get(relative) ?? [];
+    existing.push({ ...asset, relative });
+    assets.set(relative, existing);
   };
   for (const asset of marketingAssets) addAsset(asset);
   for (const asset of dashboardAssets) addAsset(asset);
@@ -149,16 +146,7 @@ const siteBuild = Effect.gen(function* () {
         .map((line) => line.trim())
         .filter(Boolean)
     : [];
-  const dashboardRedirects = yield* fs.readFileString(path.join(dashboard, "_redirects"));
-  const redirects = new Set([
-    ...marketingRedirects,
-    ...customMarketingRedirects,
-    ...docsRedirects,
-    ...dashboardRedirects
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean),
-  ]);
+  const redirects = new Set([...marketingRedirects, ...customMarketingRedirects, ...docsRedirects]);
   yield* fs.writeFileString(path.join(output, "_redirects"), yield* siteRedirects(redirects));
 
   // _headers is block-structured, not one rule per line, so the files are

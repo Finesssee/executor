@@ -136,6 +136,7 @@ export function AppOverviewTools<E>({
   sources,
   Failure,
   empty,
+  accountsNeeded = false,
 }: {
   readonly app: App;
   readonly sources: readonly {
@@ -144,6 +145,8 @@ export function AppOverviewTools<E>({
   }[];
   readonly Failure: ComponentType<FailureProps<E>>;
   readonly empty: ReactNode;
+  /** Every source lists tools per account and has none selected, so an empty list is expected. */
+  readonly accountsNeeded?: boolean;
 }) {
   const { AppLink } = useDashboard();
   return (
@@ -161,9 +164,15 @@ export function AppOverviewTools<E>({
           Failure={Failure}
           label="Loading tools preview"
           empty={
-            <EmptyState size="card" heading="h3" title="No tools">
-              This app does not expose any tools.
-            </EmptyState>
+            accountsNeeded ? (
+              <EmptyState size="card" heading="h3" title="No accounts connected">
+                This app lists tools for each connected account.
+              </EmptyState>
+            ) : (
+              <EmptyState size="card" heading="h3" title="No tools">
+                This app does not expose any tools.
+              </EmptyState>
+            )
           }
         >
           {(tools) => (

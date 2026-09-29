@@ -1,3 +1,4 @@
+import { LocalTime, timeOfDay } from "../components/local-time.tsx";
 import { EmptyState } from "./empty-state.tsx";
 import { PageFrame, PageHeader } from "./page.tsx";
 import type { ComponentType, ReactNode } from "react";
@@ -33,9 +34,12 @@ export function ApprovalsPage<E>({
                     <p className="text-sm font-medium break-words">{item.app.name}</p>
                     <p className="mt-1 text-xs text-muted-foreground">
                       {item.run.name}
-                      {item.run.expiresAt
-                        ? ` · Expires ${item.run.expiresAt.toLocaleTimeString()}`
-                        : ""}
+                      {item.run.expiresAt && (
+                        <>
+                          {" · Expires "}
+                          <LocalTime value={item.run.expiresAt} options={timeOfDay} />
+                        </>
+                      )}
                     </p>
                   </div>
                   <Button size="sm" variant="outline" asChild>

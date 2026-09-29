@@ -6,6 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./grants": "./src/contracts/grant.ts",
+    "./connections": "./src/contracts/connection.ts",
     "./oauth": "./src/implementation/oauth.ts",
     "./node-database": "./src/implementation/node-database.ts"
   },

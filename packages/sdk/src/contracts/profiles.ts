@@ -200,5 +200,10 @@ export const AppProfilesGroup = HttpApiGroup.make("appProfiles")
 /** Host-owned durable setup wake; never an app-authored capability. */
 export const ProfileHost = Symbol.for("executor/ProfileHost");
 export interface ProfileDispatcher {
-  readonly tick: (limit: number) => Effect.Effect<void, StorageError>;
+  /**
+   * Reconcile up to `limit` profiles: saved intent first, then due retries. Succeeds with `true`
+   * when the batch was full of saved intent, so more may be waiting and the host should run
+   * another pass now instead of at its next wake.
+   */
+  readonly tick: (limit: number) => Effect.Effect<boolean, StorageError>;
 }

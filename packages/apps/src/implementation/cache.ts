@@ -19,9 +19,11 @@ export const authorCache = (
   host: HostCache,
   accounts: ResolvedAccounts,
   signal: AbortSignal,
+  /** The invocation's trusted deadline. Waiting on another caller's load never runs past it. */
+  deadline?: number,
 ): AppCache => {
   const scoped = (scope: JsonValue, callerSignal = signal): AppCache => {
-    const cache = makeCache(host.transport, host.background, scope);
+    const cache = makeCache(host.transport, host.background, scope, deadline);
     const load = <A>(method: "get" | "revalidate", options: CacheGetOptions<A>) =>
       cache[method]({
         key: options.key,
@@ -85,8 +87,9 @@ export const authorCache = (
           .flatMap((value) => (Array.isArray(value) ? value : [value]))
           .find((value) => value.id === account.id);
         if (bound === undefined) throw new CacheError({ reason: "invalid" });
+        // Credentials never enter the scope, so a token renewal keeps the account's entries.
         return scoped(
-          { account: bound.id, method: bound.method, fields: bound.fields },
+          { account: bound.id, method: bound.method, generation: bound.generation },
           callerSignal,
         );
       },

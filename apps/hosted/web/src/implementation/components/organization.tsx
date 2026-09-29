@@ -1,3 +1,4 @@
+import { usePreload } from "@executor-js/dashboard-start/registry";
 import { PageFrame, PageHeader } from "@executor-js/ui/dashboard/page";
 import { OrganizationSlug, OrganizationReference } from "@executor-js/hosted-server/organization";
 import { organizationTargetAtom } from "../../contracts/organization-reference.ts";
@@ -7,9 +8,9 @@ import { RegistryContext, useAtomRefresh, useAtomSet, useAtomValue } from "@effe
 import type { OrganizationId, OrganizationAccess } from "@executor-js/hosted-server/organization";
 import { Link, Navigate, useLocation, useNavigate } from "@tanstack/react-router";
 import { Cause, Exit, Match, Option, Schema } from "effect";
-import { sessionAtom } from "../../contracts/auth.ts";
+import { lastOrganizationAtom, sessionAtom } from "../../contracts/auth.ts";
 import { OrganizationResume } from "../../contracts/navigation.ts";
-import { readLastOrganization, rememberOrganization, forgetOrganization } from "../session-hint.ts";
+import { rememberOrganization, forgetOrganization } from "../last-organization.ts";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Add01Icon, ArrowUp01Icon } from "@hugeicons/core-free-icons";
 import { Dialog, DialogContent, DialogTitle } from "@executor-js/ui/components/dialog";
@@ -252,7 +253,8 @@ function ResumeOrganization({
   readonly userId: string;
   readonly children: ReactNode;
 }) {
-  const [organization] = useState(() => readLastOrganization(userId));
+  const saved = useAtomValue(lastOrganizationAtom);
+  const [organization] = useState(() => (saved?.user === userId ? saved.organization : undefined));
   return organization === undefined ? (
     children
   ) : (
@@ -290,6 +292,7 @@ export function OrganizationBoundary({
   const reference = useOrganizationQueryReference(
     Schema.decodeUnknownSync(OrganizationReference)(slug),
   );
+  usePreload(accessAtom(reference), organizationsAtom);
   const access = useAtomValue(accessAtom(reference));
   const session = useAtomValue(sessionAtom);
   const snapshot = useAtomValue(organizationPresentation(reference));

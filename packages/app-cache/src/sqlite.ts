@@ -24,6 +24,37 @@ const Row = Schema.Struct({
   lease_until: Schema.Number,
   bytes: Schema.Number,
 });
+const Usage = Schema.Struct({ bytes: Schema.Number, count: Schema.Number });
+
+/**
+ * Totals are kept by triggers, so bounding a write reads one row instead of every entry.
+ * Stores created before the usage table are counted once, in the transaction that adds it.
+ */
+const initialize = (storage: CacheSqlStorage) =>
+  storage.transactionSync(() => {
+    storage.sql.exec(`CREATE TABLE IF NOT EXISTS executor_cache (
+      namespace TEXT NOT NULL, key TEXT NOT NULL, value TEXT, version TEXT NOT NULL,
+      fresh REAL NOT NULL, stale REAL NOT NULL, lease TEXT, lease_until REAL NOT NULL,
+      bytes INTEGER NOT NULL, touched REAL NOT NULL, PRIMARY KEY(namespace, key)
+    )`);
+    storage.sql.exec("CREATE INDEX IF NOT EXISTS executor_cache_expiry ON executor_cache(stale)");
+    storage.sql.exec(`CREATE TABLE IF NOT EXISTS executor_cache_usage (
+      id INTEGER PRIMARY KEY CHECK (id = 0), bytes INTEGER NOT NULL, count INTEGER NOT NULL
+    )`);
+    if (storage.sql.exec("SELECT id FROM executor_cache_usage").toArray().length === 0)
+      storage.sql.exec(
+        "INSERT INTO executor_cache_usage SELECT 0, coalesce(sum(bytes), 0), count(*) FROM executor_cache",
+      );
+    storage.sql
+      .exec(`CREATE TRIGGER IF NOT EXISTS executor_cache_inserted AFTER INSERT ON executor_cache
+      BEGIN UPDATE executor_cache_usage SET bytes = bytes + NEW.bytes, count = count + 1 WHERE id = 0; END`);
+    storage.sql
+      .exec(`CREATE TRIGGER IF NOT EXISTS executor_cache_deleted AFTER DELETE ON executor_cache
+      BEGIN UPDATE executor_cache_usage SET bytes = bytes - OLD.bytes, count = count - 1 WHERE id = 0; END`);
+    storage.sql
+      .exec(`CREATE TRIGGER IF NOT EXISTS executor_cache_resized AFTER UPDATE OF bytes ON executor_cache
+      BEGIN UPDATE executor_cache_usage SET bytes = bytes - OLD.bytes + NEW.bytes WHERE id = 0; END`);
+  });
 
 /** Create a bounded, fenced cache store. All commands execute in a synchronous SQL transaction. */
 export const sqliteCache = (storage: CacheSqlStorage) => {
@@ -34,14 +65,7 @@ export const sqliteCache = (storage: CacheSqlStorage) => {
         const command = Schema.decodeUnknownSync(CacheCommand)(input);
         if (namespace.length > 256) throw new CacheError({ reason: "invalid" });
         if (!initialized) {
-          storage.sql.exec(`CREATE TABLE IF NOT EXISTS executor_cache (
-          namespace TEXT NOT NULL, key TEXT NOT NULL, value TEXT, version TEXT NOT NULL,
-          fresh REAL NOT NULL, stale REAL NOT NULL, lease TEXT, lease_until REAL NOT NULL,
-          bytes INTEGER NOT NULL, touched REAL NOT NULL, PRIMARY KEY(namespace, key)
-        )`);
-          storage.sql.exec(
-            "CREATE INDEX IF NOT EXISTS executor_cache_expiry ON executor_cache(stale)",
-          );
+          initialize(storage);
           initialized = true;
         }
         const now = Date.now();
@@ -62,6 +86,15 @@ export const sqliteCache = (storage: CacheSqlStorage) => {
               .toArray()[0];
             return row === undefined ? undefined : Schema.decodeUnknownSync(Row)(row);
           };
+          const entry = (row: typeof Row.Type | undefined): CacheEntry | null =>
+            row === undefined || row.value === null
+              ? null
+              : {
+                  value: Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json))(row.value),
+                  version: row.version,
+                  freshUntil: row.fresh,
+                  staleUntil: row.stale,
+                };
           const write = (key: string, entry: CacheEntry) => {
             const value = JSON.stringify(entry.value);
             const bytes = new TextEncoder().encode(value).byteLength;
@@ -86,17 +119,27 @@ export const sqliteCache = (storage: CacheSqlStorage) => {
             );
           };
           const bound = () => {
-            const totals = Schema.decodeUnknownSync(
-              Schema.Struct({ bytes: Schema.Number, count: Schema.Number }),
-            )(
-              storage.sql
-                .exec(
-                  "SELECT coalesce(sum(bytes), 0) as bytes, count(*) as count FROM executor_cache",
-                )
-                .one(),
+            const totals = Schema.decodeUnknownSync(Usage)(
+              storage.sql.exec("SELECT bytes, count FROM executor_cache_usage WHERE id = 0").one(),
             );
             if (totals.bytes > cacheLimits.totalBytes || totals.count > cacheLimits.totalEntries)
               throw new CacheError({ reason: "capacity" });
+          };
+          const claim = (key: string) => {
+            const lease = crypto.randomUUID();
+            storage.sql.exec(
+              `INSERT INTO executor_cache VALUES (?, ?, NULL, ?, 0, ?, ?, ?, 0, ?)
+              ON CONFLICT(namespace, key) DO UPDATE SET lease=excluded.lease, lease_until=excluded.lease_until`,
+              namespace,
+              key,
+              lease,
+              now + cacheLimits.leaseMs,
+              lease,
+              now + cacheLimits.leaseMs,
+              now,
+            );
+            bound();
+            return lease;
           };
           switch (command.operation) {
             case "read": {
@@ -108,13 +151,18 @@ export const sqliteCache = (storage: CacheSqlStorage) => {
                 if (row === undefined || row.value === null) return null;
                 bytes += row.bytes;
                 if (bytes > cacheLimits.batchBytes) throw new CacheError({ reason: "capacity" });
-                return {
-                  value: Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json))(row.value),
-                  version: row.version,
-                  freshUntil: row.fresh,
-                  staleUntil: row.stale,
-                };
+                return entry(row);
               });
+            }
+            case "acquire": {
+              const row = read(command.key);
+              const current = entry(row);
+              const wanted =
+                (command.version === undefined || (current?.version ?? null) === command.version) &&
+                (command.refresh || current === null || now >= current.freshUntil);
+              const lease =
+                wanted && (row === undefined || row.lease_until <= now) ? claim(command.key) : null;
+              return { entry: current, lease };
             }
             case "claim": {
               const row = read(command.key);
@@ -123,20 +171,7 @@ export const sqliteCache = (storage: CacheSqlStorage) => {
                 (row !== undefined && row.lease_until > now)
               )
                 return null;
-              const lease = crypto.randomUUID();
-              storage.sql.exec(
-                `INSERT INTO executor_cache VALUES (?, ?, NULL, ?, 0, ?, ?, ?, 0, ?)
-              ON CONFLICT(namespace, key) DO UPDATE SET lease=excluded.lease, lease_until=excluded.lease_until`,
-                namespace,
-                command.key,
-                lease,
-                now + cacheLimits.leaseMs,
-                lease,
-                now + cacheLimits.leaseMs,
-                now,
-              );
-              bound();
-              return lease;
+              return claim(command.key);
             }
             case "publish": {
               const row = read(command.key);
@@ -164,6 +199,18 @@ export const sqliteCache = (storage: CacheSqlStorage) => {
                 command.key,
               );
               return null;
+            case "renew": {
+              const row = read(command.key);
+              if (row?.lease !== command.lease || row.lease_until <= now) return false;
+              storage.sql.exec(
+                "UPDATE executor_cache SET lease_until=? WHERE namespace=? AND key=? AND lease=?",
+                now + cacheLimits.leaseMs,
+                namespace,
+                command.key,
+                command.lease,
+              );
+              return true;
+            }
             case "release":
               storage.sql.exec(
                 "UPDATE executor_cache SET lease=NULL, lease_until=0 WHERE namespace=? AND key=? AND lease=?",

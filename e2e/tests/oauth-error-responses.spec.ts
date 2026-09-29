@@ -134,6 +134,8 @@ layer(HostedLive, { excludeTestServices: true })("OAuth error responses", (it) =
         };
 
         // Token endpoint errors are classified by their RFC 6749 §5.2 body, whatever the status.
+        // Each app registers a fresh client, so invalid_client means the service refuses Executor's
+        // registrations: the client is discarded and the failure is a configuration problem.
         const tokenErrors: ReadonlyArray<{
           readonly name: string;
           readonly tokenError: {
@@ -156,7 +158,7 @@ layer(HostedLive, { excludeTestServices: true })("OAuth error responses", (it) =
               status: 200,
               body: { error: "invalid_client", error_description: "PRIVATE_PROVIDER_ERROR" },
             },
-            reason: "invalid_client",
+            reason: "registered_client_incompatible",
             evidence: "HTTP 200, provider error invalid_client",
           },
           {
@@ -172,7 +174,7 @@ layer(HostedLive, { excludeTestServices: true })("OAuth error responses", (it) =
               body: { error: "invalid_client" },
               challenge: 'Basic realm="synthetic"',
             },
-            reason: "invalid_client",
+            reason: "registered_client_incompatible",
             evidence: "HTTP 401, provider error invalid_client",
           },
         ];

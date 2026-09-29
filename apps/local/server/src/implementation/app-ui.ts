@@ -43,7 +43,7 @@ export const appUi = (
   auth: LocalAuth,
 ) => {
   const native = runtime;
-  const db = storage.orm("4.0.0");
+  const db = storage.orm("4.0.2");
   const current = (id: AppId) =>
     executor.apps
       .get({ app: id, owner: OwnerId.make("local") })

@@ -20,6 +20,12 @@ export const CompiledCloudApp = Schema.Struct({
   ),
 });
 
+/**
+ * Decoded builds one isolate keeps in memory, in UTF-16 code units of distinct module source
+ * plus WASM bytes. Builds that share a framework count its modules once.
+ */
+export const isolateBuildCacheSize = 24 * 1024 * 1024;
+
 /** Compiler binding calls include Alchemy transport failures as well as declared build failures. */
 export type CloudCompiler = {
   readonly compile: (

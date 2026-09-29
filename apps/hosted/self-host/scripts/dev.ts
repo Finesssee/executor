@@ -38,7 +38,7 @@ for (const signal of ["SIGINT", "SIGTERM"] as const)
   });
 
 // The API refuses to start without a built dashboard. Vite serves the live one, so any build works.
-if (!existsSync(new URL("../web/dist/index.html", import.meta.url))) {
+if (!existsSync(new URL("../web/dist/server/server.js", import.meta.url))) {
   const [code] = await once(spawn("bun", ["run", "build"], { cwd: web, stdio: "inherit" }), "exit");
   if (code !== 0) process.exit(1);
 }

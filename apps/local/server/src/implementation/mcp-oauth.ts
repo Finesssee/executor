@@ -7,11 +7,12 @@ import { grantOAuthPlugins } from "@executor-js/mcp-auth/oauth";
 import {
   GrantId,
   mcpOAuthResources,
-  requestedMcpMode,
+  requestedMcpAddress,
   mcpResource,
   mcpResourceMetadataUrl,
 } from "@executor-js/mcp-auth";
 import { makeAuthDatabase } from "@executor-js/mcp-auth/node-database";
+import type { ConnectionId, ConnectionPolicy } from "@executor-js/mcp-auth/connections";
 import { pgliteLayer } from "fumadb-effect/pglite";
 import {
   Effect,
@@ -68,7 +69,10 @@ export const makeLocalMcpOAuth = (config: ServerConfig, pairing: LocalAuth, cryp
       origin,
       scopes: ["mcp", "offline_access"],
       resources: mcpOAuthResources(origin),
-      selectResource: () => Effect.succeed("local"),
+      selectResource: (_ctx, _userId, required) =>
+        required === undefined || required === "local"
+          ? Effect.succeed("local")
+          : Effect.fail(new APIError("FORBIDDEN")),
       checkResource: (_ctx, _userId, resource) =>
         resource === "local" ? Effect.void : Effect.fail(new APIError("FORBIDDEN")),
     });
@@ -202,19 +206,19 @@ export const makeLocalMcpOAuth = (config: ServerConfig, pairing: LocalAuth, cryp
       try: () => auth.api.getOAuthServerConfig(),
       catch: () => new LocalMcpAuthUnavailable(),
     }).pipe(Effect.map(HttpServerResponse.jsonUnsafe));
-    const requestMode = Effect.map(HttpServerRequest.HttpServerRequest, (request) =>
-      requestedMcpMode(new URL(request.url, origin)),
+    const requestAddress = Effect.map(HttpServerRequest.HttpServerRequest, (request) =>
+      requestedMcpAddress(new URL(request.url, origin)),
     );
-    const invalidMode = HttpServerResponse.jsonUnsafe(
-      { error: "Unsupported elicitation_mode." },
+    const invalidAddress = HttpServerResponse.jsonUnsafe(
+      { error: "Unsupported elicitation_mode or connection." },
       { status: 400 },
     );
-    const protectedResource = requestMode.pipe(
-      Effect.map((mode) =>
-        mode === undefined
-          ? invalidMode
+    const protectedResource = requestAddress.pipe(
+      Effect.map((address) =>
+        address === undefined
+          ? invalidAddress
           : HttpServerResponse.jsonUnsafe({
-              resource: mcpResource(origin, mode),
+              resource: mcpResource(origin, address),
               authorization_servers: [`${origin}/api/auth`],
               scopes_supported: ["mcp", "offline_access"],
               bearer_methods_supported: ["header"],
@@ -222,20 +226,49 @@ export const makeLocalMcpOAuth = (config: ServerConfig, pairing: LocalAuth, cryp
             }),
       ),
     );
-    const challenge = requestMode.pipe(
-      Effect.map((mode) =>
-        mode === undefined
-          ? invalidMode
+    const challenge = requestAddress.pipe(
+      Effect.map((address) =>
+        address === undefined
+          ? invalidAddress
           : HttpServerResponse.empty({
               status: 401,
               headers: {
-                "www-authenticate": `Bearer resource_metadata="${mcpResourceMetadataUrl(origin, mode)}", scope="mcp offline_access"`,
+                "www-authenticate": `Bearer resource_metadata="${mcpResourceMetadataUrl(origin, address)}", scope="mcp offline_access"`,
                 "cache-control": "no-store",
               },
             }),
       ),
     );
-    return { origin, authenticate, browserGrant, handler, metadata, protectedResource, challenge };
+    /** The paired dashboard's single operator owns every local connection. */
+    const connectionOwner = { userId: user.id, resource: "local" };
+    const connectionCall = <A>(run: () => Promise<A>) =>
+      Effect.tryPromise({
+        try: run,
+        catch: (cause) => (isAPIError(cause) ? cause.statusCode : ("unavailable" as const)),
+      });
+    const connections = {
+      list: connectionCall(() => auth.api.listMcpConnections({ body: connectionOwner })),
+      create: (input: { id: ConnectionId; name: string; policy: ConnectionPolicy }) =>
+        connectionCall(() =>
+          auth.api.createMcpConnection({ body: { ...connectionOwner, ...input } }),
+        ),
+      update: (input: { id: ConnectionId; name: string; policy: ConnectionPolicy }) =>
+        connectionCall(() =>
+          auth.api.updateMcpConnection({ body: { ...connectionOwner, ...input } }),
+        ),
+      revoke: (id: ConnectionId) =>
+        connectionCall(() => auth.api.revokeMcpConnection({ body: { ...connectionOwner, id } })),
+    };
+    return {
+      origin,
+      authenticate,
+      browserGrant,
+      handler,
+      metadata,
+      protectedResource,
+      challenge,
+      connections,
+    };
   });
 /** Provider capabilities captured by the local server, never by app code. */
 export type LocalMcpOAuth = Effect.Success<ReturnType<typeof makeLocalMcpOAuth>>;

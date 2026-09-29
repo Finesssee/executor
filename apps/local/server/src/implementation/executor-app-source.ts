@@ -43,7 +43,7 @@ export default defineApp({ accounts: { executor } }, async (context) => {
     fetch: context.fetch,
     ...(context.signal === undefined ? {} : { signal: context.signal }),
   });
-  const skills = dynamicSkills({ list: () => wellKnownSkills({ url: baseUrl + "/.well-known/agent-skills/index.json", fetch: context.fetch, signal: context.signal }) });
+  const skills = dynamicSkills({ list: () => wellKnownSkills({ url: baseUrl + "/.well-known/agent-skills/index.json", cache: context.cache, fetch: context.fetch, signal: context.signal }) });
   return { ...operations, dynamicSkills: skills, queries: { ...operations.queries, ...frameworkQueries(reference) } };
 });
 `,

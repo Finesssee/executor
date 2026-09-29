@@ -15,8 +15,9 @@
     "./contracts/*": "./src/contracts/*.ts",
     "./icon-picker": "./src/implementation/components/icon-picker.tsx",
     "./page-pending": "./src/implementation/components/page-pending.tsx",
-    "./session-hint": "./src/implementation/session-hint.ts",
-    "./route-params": "./src/implementation/route-params.ts"
+    "./route-params": "./src/implementation/route-params.ts",
+    "./document": "./src/implementation/document.ts",
+    "./last-organization": "./src/implementation/last-organization.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"
@@ -26,6 +27,7 @@
     "@effect/atom-react": "https://pkg.pr.new/Effect-TS/effect/@effect/atom-react@c7d1ffff31a3e2ae0b0b0796b742bddeb797269d",
     "@executor-js/app-registry": "workspace:*",
     "@executor-js/catalog": "workspace:*",
+    "@executor-js/dashboard-start": "workspace:*",
     "@executor-js/hosted-server": "workspace:*",
     "@executor-js/mcp": "workspace:*",
     "@executor-js/mcp-auth": "workspace:*",
@@ -37,7 +39,8 @@
     "@hugeicons/react": "^1.1.10",
     "@tanstack/history": "1.162.4",
     "@tanstack/react-form": "^1.33.5",
-    "@tanstack/react-router": "^1.170.38",
+    "@tanstack/react-router": "1.170.40",
+    "@tanstack/react-start": "1.168.59",
     "better-auth": "1.7.5",
     "effect": "https://pkg.pr.new/Effect-TS/effect/effect@c7d1ffff31a3e2ae0b0b0796b742bddeb797269d",
     "react": "^19.2.0",
@@ -46,7 +49,6 @@
   "devDependencies": {
     "@happy-dom/global-registrator": "^20.14.5",
     "@tailwindcss/vite": "^4.2.1",
-    "@tanstack/router-plugin": "^1.168.40",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^6.0.0",

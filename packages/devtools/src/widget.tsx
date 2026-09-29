@@ -1,3 +1,4 @@
+import { refreshOnFocus } from "@executor-js/ui/contracts/refresh";
 import { UserPicker } from "./users.tsx";
 import { stopImpersonatingAtom } from "./auth.ts";
 import { LoopbackOrigin } from "@executor-js/utils/url-policy";
@@ -26,7 +27,7 @@ const stateAtom = runtime
       return yield* response.json.pipe(Effect.flatMap(Schema.decodeUnknownEffect(DevtoolsState)));
     }).pipe(Effect.mapError(() => new DevtoolsUnavailable())),
   )
-  .pipe(Atom.refreshOnWindowFocus);
+  .pipe(refreshOnFocus);
 
 type Action = { readonly kind: "operator" | "pair" };
 

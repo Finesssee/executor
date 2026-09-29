@@ -1,3 +1,4 @@
+import { useHydrated } from "@executor-js/ui/hooks/hydrated";
 import type { ReactNode } from "react";
 import { DashboardUnauthorized } from "@executor-js/local-server/contracts";
 import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
@@ -70,6 +71,8 @@ function Connect({
   expired?: boolean;
   unavailable?: boolean;
 }) {
+  // A pairing link arrives in the URL fragment, which the server never sees; show it once hydrated.
+  const connecting = useHydrated() && pending;
   return (
     <div className="connect-page min-h-dvh flex flex-col">
       <div className="connect-brand [&_img]:w-5.25 [&_img]:h-5.25 flex items-center gap-2 py-[24px] px-[30px] font-mono text-[15px] max-[740px]:p-[20px]">
@@ -84,14 +87,14 @@ function Connect({
           <HugeiconsIcon icon={LaptopIcon} aria-hidden size={24} strokeWidth={1.4} />
         </div>
         <h1 className="text-[22px] font-semibold tracking-[-0.035em] leading-[1.35] [&>span]:text-muted-foreground [&>span]:text-[13px] [&>span]:font-mono [&>span]:font-normal [&>span]:ml-[8px] [&>span]:align-middle">
-          {pending
+          {connecting
             ? "Connecting to Executor"
             : unavailable
               ? "Server unavailable"
               : "Open Executor locally"}
         </h1>
         <p>
-          {pending
+          {connecting
             ? "Starting your local session…"
             : unavailable
               ? "Check that your local server is running, then refresh this page."
@@ -99,7 +102,7 @@ function Connect({
                 ? "This connection link has expired or was already used."
                 : "In Executor desktop, choose File → Open in browser. With the CLI, run its pair command and open the link. Then return to this tab."}
         </p>
-        {expired && !pending && !unavailable && (
+        {expired && !connecting && !unavailable && (
           <p>Choose File → Open in browser in Executor desktop, or run the CLI’s pair command.</p>
         )}
         {unavailable && <Button onClick={() => window.location.reload()}>Retry</Button>}

@@ -326,6 +326,7 @@ function dispatch(
           context.cache ?? unavailableCache,
           Redacted.value(context.accounts),
           invocationSignal,
+          deadline,
         ),
         files,
         ...(yield* bindAccounts(native.accounts, declared, context).pipe(

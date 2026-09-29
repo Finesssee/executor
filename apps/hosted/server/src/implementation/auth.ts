@@ -78,7 +78,15 @@ export const authOptions = (
     ],
     hooks: { before: apiKeyManagement },
     session: { cookieCache: { enabled: false } },
-    rateLimit: { enabled: true, storage: "database" },
+    rateLimit: {
+      enabled: true,
+      storage: "database",
+      // Every dashboard page reads the session, and organization pages the membership list, on
+      // the server with the visitor's address. These reads require a valid session cookie and
+      // change nothing; a per-address limit on them would make whole pages unavailable to people
+      // sharing an address. Sign-in, sign-up and other credential routes keep their limits.
+      customRules: { "/get-session": false, "/organization/list": false },
+    },
     advanced: {
       cookiePrefix: "executor-hosted",
       ipAddress: { ipAddressHeaders },

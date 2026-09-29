@@ -13,8 +13,8 @@ export const ReleaseCommandProduct = Schema.Literals([
 /** Concrete instructions generated from the same identity as the published artifacts. */
 export const releaseCommands = {
   cli: {
-    description: `Requires Node 24.14 or newer. Version ${release.version} supports macOS on Apple Silicon and Intel, Linux on ARM64 and x64, and Windows on x64.`,
-    command: `${release.npmInstall}\nexecutor`,
+    description: `Requires Node ${release.minimumNodeVersion} or newer. Check that executor --version prints ${release.version} before starting. Supports macOS on Apple Silicon and Intel, Linux on ARM64 and x64, and Windows on x64.`,
+    command: `${release.npmInstall}\nexecutor --version\nexecutor`,
   },
   docker: {
     description: `Use version ${release.version} on Linux AMD64 or ARM64:`,

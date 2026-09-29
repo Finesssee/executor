@@ -2,19 +2,9 @@ import { Schema } from "effect";
 
 /** Wire projections owned by the tests; no server or SDK implementation imports. */
 export const Organization = Schema.Struct({ id: Schema.String, slug: Schema.String });
-/** Browser display and navigation metadata; no credential or permission fields are allowed. */
-export const SessionHint = Schema.Struct({
-  session: Schema.Struct({
-    user: Schema.Struct({
-      id: Schema.String,
-      name: Schema.String,
-      email: Schema.String,
-      image: Schema.NullOr(Schema.String),
-    }),
-  }),
-  expiresAt: Schema.Number,
-  lastOrganization: Schema.optionalKey(Schema.NonEmptyString),
-});
+/** The saved last-organization memory; navigation only, never authority. */
+export const LastOrganization = Schema.Struct({ user: Schema.String, organization: Schema.String });
+
 export const Resource = Schema.Struct({ id: Schema.String });
 export const App = Schema.Struct({ id: Schema.String, slug: Schema.String, name: Schema.String });
 export const Inventory = Schema.Struct({

@@ -6,7 +6,7 @@ import { TestLive, withCase } from "../support/case.ts";
 import { Browser } from "../support/browser.ts";
 import { Evidence, Telemetry } from "../support/evidence.ts";
 import { HttpClient } from "effect/unstable/http";
-import { Collector } from "../support/contracts.ts";
+import { Collector, SpanQuery } from "../support/contracts.ts";
 import { Target } from "../support/platform.ts";
 import { Onboarding } from "../support/onboarding.ts";
 
@@ -125,9 +125,29 @@ layer(TestLive, { excludeTestServices: true })("Auth observability", (it) => {
             });
             expect(status).toBe(302);
           }
+          // Spans arrive in separate export batches, and the request span ends after its children.
+          // Wait until every span asserted below has arrived, not only the callback span.
+          const exchanges =
+            fixture.kind === "success" ||
+            fixture.kind === "invalid_code" ||
+            fixture.kind === "profile_failure";
+          const delivered = (spans: (typeof SpanQuery.Type)["data"]) => {
+            const named = (name: string) => spans.some(({ span }) => span.operationName === name);
+            const callback = spans.find(({ span }) => span.operationName === "auth.oauth.callback");
+            return (
+              callback !== undefined &&
+              spans.some(
+                ({ span }) =>
+                  span.spanId === callback.span.parentSpanId &&
+                  !span.operationName.startsWith("[missing parent"),
+              ) &&
+              (!exchanges || named("auth.oauth.token_exchange")) &&
+              (!exchanges || fixture.kind === "invalid_code" || named("auth.oauth.user_info"))
+            );
+          };
           const trace = yield* telemetry.query(traceId).pipe(
             Effect.flatMap((trace) =>
-              trace.data.some(({ span }) => span.operationName === "auth.oauth.callback")
+              delivered(trace.data)
                 ? Effect.succeed(trace)
                 : Effect.fail(new Error("Missing auth callback telemetry")),
             ),
@@ -159,11 +179,7 @@ layer(TestLive, { excludeTestServices: true })("Auth observability", (it) => {
             status: fixture.code === "none" ? "ok" : "error",
             tags: { "http.response.status_code": "302", "auth.error_code": fixture.code },
           });
-          if (
-            fixture.kind === "success" ||
-            fixture.kind === "invalid_code" ||
-            fixture.kind === "profile_failure"
-          ) {
+          if (exchanges) {
             const token = trace.data.find(
               ({ span }) => span.operationName === "auth.oauth.token_exchange",
             )?.span;

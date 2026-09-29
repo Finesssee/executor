@@ -1,0 +1,22 @@
+[
+  "/app-auth",
+  "/app-auth/",
+  "/create",
+  "/create/",
+  "/create/agent",
+  "/create/agent/",
+  "/email/unsubscribe",
+  "/email/unsubscribe/",
+  "/invite",
+  "/invite/",
+  "/login",
+  "/login/",
+  "/login/sso",
+  "/login/sso/",
+  "/mcp/approve/*",
+  "/mcp/authorize",
+  "/mcp/authorize/",
+  "/oauth/callback",
+  "/oauth/callback/",
+  "/org/*"
+]

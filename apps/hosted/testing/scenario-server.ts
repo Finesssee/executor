@@ -244,6 +244,12 @@ const main = Effect.gen(function* () {
         ).rows,
       )[0];
     let cleanupPhase = "start-removal";
+    // Keep the name and message of the last failed step; its request details stay out of the log.
+    let cleanupCause: string | undefined;
+    const cleanupFailed = (cause: unknown) => {
+      cleanupCause = cause instanceof Error ? `${cause.name}: ${cause.message}` : typeof cause;
+      return new TestAccountFailed({ stage: "fixture" });
+    };
     yield* scenario.gate.withPermits(1)(
       Effect.gen(function* () {
         let organizationId = scenario.organization;
@@ -278,7 +284,7 @@ const main = Effect.gen(function* () {
             }
             return organization;
           },
-          catch: () => new TestAccountFailed({ stage: "fixture" }),
+          catch: cleanupFailed,
         });
         if (cleanup !== undefined) {
           const owner = yield* actor(id, "owner");
@@ -329,17 +335,20 @@ const main = Effect.gen(function* () {
             }
             for (const user of scenario.users) await ctx.internalAdapter.deleteUser(user);
           },
-          catch: () => new TestAccountFailed({ stage: "fixture" }),
+          catch: cleanupFailed,
         }).pipe(Effect.retry({ schedule: Schedule.spaced("500 millis") }));
         owned.delete(id);
       }).pipe(
         // Leave time to report the error before the runner's 60-second cleanup deadline.
         Effect.timeout("55 seconds"),
-        Effect.tapError(() =>
+        Effect.tapError((error) =>
           Console.error({
             message: "Fixture cleanup did not complete",
             scenario: id,
             phase: cleanupPhase,
+            error: error._tag,
+            ...(error._tag === "HttpClientError" ? { reason: error.reason._tag } : {}),
+            ...(cleanupCause === undefined ? {} : { cause: cleanupCause }),
           }),
         ),
       ),

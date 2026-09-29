@@ -1,4 +1,6 @@
-import { createFileRoute, Outlet } from "@tanstack/react-router";
+import { createFileRoute, Outlet, useLocation } from "@tanstack/react-router";
+import { DashboardEntryPending } from "@executor-js/hosted-web/entry";
+import { CloudPagePending } from "../components/page-pending.tsx";
 import { ErrorTrackingProvider } from "@executor-js/ui/dashboard/error-tracking";
 import { DashboardShell } from "@executor-js/hosted-web/shell";
 import { OrganizationBoundary, OrganizationContent } from "@executor-js/hosted-web/organization";
@@ -7,7 +9,11 @@ import { BetaNotice } from "../components/beta-notice.tsx";
 
 /** The URL owns this tab's organization; all product pages inherit this boundary. Cloud records
  * product failures in PostHog, so its error cards can say a failure was tracked. */
-export const Route = createFileRoute("/org/$organizationSlug")({ component: OrganizationLayout });
+export const Route = createFileRoute("/org/$organizationSlug")({
+  component: OrganizationLayout,
+  // The server streams the dashboard frame and navigation first, then the organization.
+  pendingComponent: OrganizationPending,
+});
 function OrganizationLayout() {
   const { organizationSlug } = Route.useParams();
   return (
@@ -20,5 +26,14 @@ function OrganizationLayout() {
         </DashboardShell>
       </ErrorTrackingProvider>
     </OrganizationBoundary>
+  );
+}
+
+function OrganizationPending() {
+  const { pathname } = useLocation();
+  return (
+    <DashboardEntryPending pathname={pathname} banner={<BetaNotice />}>
+      <CloudPagePending />
+    </DashboardEntryPending>
   );
 }

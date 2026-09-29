@@ -1,7 +1,7 @@
 /** MCP catalog caching through real app deployment, storage and upstream HTTP boundaries. */
 import { expect, layer } from "@effect/vitest";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
-import { Config, Effect, Layer, Option, Schema } from "effect";
+import { Config, Effect, Layer, Option, Schedule, Schema } from "effect";
 import {
   HttpRouter,
   HttpClient,
@@ -18,6 +18,8 @@ import { Api, body } from "../support/api.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { App, Resource } from "../support/contracts.ts";
 import { createProfile, selectProfileAccounts } from "../support/profiles.ts";
+import { McpClient } from "../support/mcp-client.ts";
+import { Evidence, Telemetry } from "../support/evidence.ts";
 
 const Counters = Schema.Struct({
   initialize: Schema.Number,
@@ -201,7 +203,8 @@ const deploy = (url: string, cached: boolean, accounts = false) =>
       files: source(url, cached, accounts),
     });
     expect(response.status).toBe(200);
-    const path = `${prefix}/apps/${(yield* body(App, response)).id}`;
+    const id = (yield* body(App, response)).id;
+    const path = `${prefix}/apps/${id}`;
     yield* Effect.addFinalizer(() => api.request(actors.owner, "DELETE", path).pipe(Effect.orDie));
     const profile = yield* createProfile(actors.owner, path);
     const call = (name: string, input: Schema.Json = {}, profileId = profile.id) =>
@@ -210,7 +213,7 @@ const deploy = (url: string, cached: boolean, accounts = false) =>
         tool: `queries.${name}`,
         input,
       });
-    return { api, actors, path, prefix, profile, call };
+    return { api, actors, id, path, prefix, profile, call };
   });
 
 layer(HostedLive, { excludeTestServices: true })("MCP cache", (it) => {
@@ -403,6 +406,108 @@ layer(HostedLive, { excludeTestServices: true })("MCP cache", (it) => {
         expect((yield* control(origin)).counters.call).toBe(calls);
         expect((yield* app.call("revision_1")).status).toBe(404);
       }),
+    ),
+  );
+  it.effect(scenarios.mcpListingCacheChanges.title, (context) =>
+    withHostedCase(
+      context,
+      Effect.gen(function* () {
+        const origin = yield* fixture();
+        yield* control(origin, { count: 3, delayMs: 0 });
+        const app = yield* deploy(`${origin}/mcp`, true);
+        const mcp = yield* McpClient;
+        const key = yield* body(
+          Schema.Struct({ id: Schema.String, key: Schema.RedactedFromValue(Schema.String) }),
+          yield* app.api.request(app.actors.owner, "POST", "/api/auth/api-key/create", {
+            name: "Listing cache changes",
+          }),
+        );
+        yield* Effect.addFinalizer(() =>
+          app.api
+            .request(app.actors.owner, "POST", "/api/auth/api-key/delete", { keyId: key.id })
+            .pipe(Effect.orDie),
+        );
+        const client = yield* mcp.connect(key.key, "listing-cache-changes", {
+          organization: app.actors.organization.id,
+        });
+        const listed = Schema.Struct({
+          structuredContent: Schema.Struct({
+            execution: Schema.Struct({
+              ok: Schema.Literal(true),
+              value: Schema.Struct({ items: Schema.Array(Schema.Struct({ path: Schema.String })) }),
+            }),
+          }),
+        });
+        /** The revision tool each listed target of the app exposes. */
+        const revisions = (step: string) =>
+          Effect.gen(function* () {
+            const result = yield* client.use(step, (client, signal) =>
+              client.callTool(
+                {
+                  name: "execute",
+                  arguments: {
+                    code: `return await tools.search({ query: "revision", limit: 50 });`,
+                  },
+                },
+                undefined,
+                { signal, timeout: 55_000 },
+              ),
+            );
+            const { items } = (yield* Schema.decodeUnknownEffect(listed)(result)).structuredContent
+              .execution.value;
+            return [
+              ...new Set(items.flatMap((item) => /revision_\d+/.exec(item.path) ?? [])),
+            ].sort();
+          });
+        const evidence = yield* Evidence,
+          telemetry = yield* Telemetry;
+        /**
+         * This app's SDK listing reads recorded in the trace of the latest MCP request. Other apps
+         * of the organization, such as one installed while the scenario runs, are listed too.
+         */
+        const listingReads = Effect.gen(function* () {
+          const request = (yield* evidence.requests)
+            .filter((entry) => entry.path === "/mcp")
+            .at(-1);
+          if (request === undefined) return yield* Effect.fail(new Error("Missing MCP request"));
+          return yield* telemetry.query(request.traceId).pipe(
+            Effect.flatMap((result) => {
+              const reads = result.data.flatMap(({ span }) => {
+                const outcome = span.tags["executor.declarations.cache"];
+                return span.operationName === "sdk.tools.listing" &&
+                  span.tags["executor.app.id"] === app.id &&
+                  outcome !== undefined
+                  ? [outcome]
+                  : [];
+              });
+              return reads.length === 0
+                ? Effect.fail(new Error("Missing tool listing span"))
+                : Effect.succeed(reads);
+            }),
+            Effect.retry({ schedule: Schedule.spaced("250 millis"), times: 80 }),
+          );
+        });
+        expect(yield* revisions("First listing")).toEqual(["revision_1"]);
+        // That evaluation filled the cold app cache, a change that keeps it from being reused;
+        // the next one reads the warm cache and is kept.
+        expect(yield* revisions("Listing from the warm app cache")).toEqual(["revision_1"]);
+        const lists = (yield* control(origin)).counters.list;
+        // The listing is kept: a second search neither evaluates the app nor asks the server.
+        expect(yield* revisions("Kept listing")).toEqual(["revision_1"]);
+        expect((yield* control(origin)).counters.list).toBe(lists);
+        for (const outcome of yield* listingReads) expect(outcome).toBe("hit");
+
+        // An explicit refresh replaces the app's cached catalog; the next search lists it again.
+        yield* control(origin, { version: 2 });
+        expect((yield* app.call("refresh", { id: "" })).status).toBe(200);
+        expect(yield* revisions("After a catalog refresh")).toEqual(["revision_2"]);
+
+        // A server that announces a changed tool list during a call invalidates the cached
+        // catalog, and the next search lists the changed tools.
+        yield* control(origin, { version: 3, notify: true });
+        expect((yield* app.call("fixture_0000")).status).toBe(200);
+        expect(yield* revisions("After tools/list_changed")).toEqual(["revision_3"]);
+      }).pipe(Effect.provide(McpClient.layer)),
     ),
   );
 });

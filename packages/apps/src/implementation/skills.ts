@@ -13,14 +13,19 @@ import {
   refCandidates,
   treeFetchRequest,
 } from "./git.ts";
+import { catalogCache } from "./catalog-cache.ts";
+import type { AppCache } from "../contracts/cache.ts";
+import type { JsonValue } from "../contracts/schema.ts";
 import {
   AppSkillMetadata,
+  AppSkillSource,
   AppSkills,
   SkillFilePath,
   SkillLoadFailed,
   SkillServiceName,
   skillLoadLimits,
   type GitHubSkillsOptions,
+  type SkillCacheOptions,
   type WellKnownSkillsOptions,
   type SkillTransport,
 } from "../contracts/skills.ts";
@@ -268,7 +273,8 @@ const skillDirectories = (
  * commit, so the entry stays fresh for the longest retention the cache allows.
  */
 const cachedSkillDirectories = (
-  cache: NonNullable<GitHubSkillsOptions["cache"]>,
+  cache: AppCache,
+  transport: SkillTransport,
   repo: string,
   commit: string,
   path: string | undefined,
@@ -281,7 +287,8 @@ const cachedSkillDirectories = (
         freshFor: "7 days",
         load: (context) =>
           Effect.runPromise(
-            reader(context).pipe(
+            // Keep the author's fetch, as every other read in this load does.
+            reader({ fetch: transport.fetch, signal: context.signal }).pipe(
               Effect.flatMap((remote) => skillDirectories(remote, repo, commit, path)),
             ),
             { signal: context.signal },
@@ -296,6 +303,43 @@ const cachedSkillDirectories = (
           }),
   });
 
+/**
+ * Keep a loaded catalog in the app cache, paged and refreshed like an MCP tool catalog. A refresh
+ * keeps the author's fetch and uses the cache's signal, never the finished request's.
+ */
+const cachedCatalog = (
+  options: SkillCacheOptions & SkillTransport,
+  prefix: readonly JsonValue[],
+  load: (
+    transport: SkillTransport,
+    cache: AppCache | undefined,
+  ) => Effect.Effect<typeof AppSkills.Type, SkillLoadFailed>,
+) =>
+  options.cache === undefined
+    ? load(options, undefined)
+    : catalogCache({
+        cache: options.cache,
+        ...(options.freshFor === undefined ? {} : { freshFor: options.freshFor }),
+        ...(options.staleFor === undefined ? {} : { staleFor: options.staleFor }),
+        prefix,
+        schema: AppSkillSource,
+        summary: { schema: AppSkillMetadata, of: ({ files: _files, ...metadata }) => metadata },
+        load: (context) =>
+          context === undefined
+            ? load(options, options.cache)
+            : load({ fetch: options.fetch, signal: context.signal }, context.cache),
+      }).pipe(
+        Effect.flatMap((catalog) => catalog.list()),
+        Effect.mapError((error) =>
+          Schema.is(SkillLoadFailed)(error)
+            ? error
+            : new SkillLoadFailed({
+                reason: "request",
+                message: "Executor could not read or update the app cache for skills.",
+              }),
+        ),
+      );
+
 export const githubSkillsEffect = (options: GitHubSkillsOptions) =>
   Effect.gen(function* () {
     if (
@@ -303,11 +347,24 @@ export const githubSkillsEffect = (options: GitHubSkillsOptions) =>
       (options.path !== undefined && !resourcePath(options.path))
     )
       return yield* failed("source");
-    const remote = yield* reader(options);
+    return yield* cachedCatalog(
+      options,
+      ["apps/githubSkills/catalog", 1, options.repo, options.ref ?? null, options.path ?? null],
+      (transport, cache) => githubCatalog(options, transport, cache),
+    );
+  }).pipe(withService("GitHub"));
+
+const githubCatalog = (
+  options: GitHubSkillsOptions,
+  transport: SkillTransport,
+  cache: AppCache | undefined,
+) =>
+  Effect.gen(function* () {
+    const remote = yield* reader(transport);
     const commit = yield* resolveCommit(remote, options.repo, options.ref);
-    const resources = yield* options.cache === undefined
+    const resources = yield* cache === undefined
       ? skillDirectories(remote, options.repo, commit, options.path)
-      : cachedSkillDirectories(options.cache, options.repo, commit, options.path);
+      : cachedSkillDirectories(cache, transport, options.repo, commit, options.path);
     const base = `https://raw.githubusercontent.com/${options.repo}/${commit}/`;
     const skills = yield* Effect.forEach(
       resources,
@@ -333,7 +390,7 @@ export const githubSkillsEffect = (options: GitHubSkillsOptions) =>
       { concurrency: 1 },
     );
     return yield* parse(AppSkills, skills);
-  }).pipe(withService("GitHub"));
+  });
 
 const Index = Schema.Struct({
   skills: Schema.Array(
@@ -354,7 +411,16 @@ export const wellKnownSkillsEffect = (options: WellKnownSkillsOptions) =>
     if (url.pathname === "/") url.pathname = "/.well-known/agent-skills/index.json";
     else if (!url.pathname.endsWith("index.json"))
       url.pathname = `${url.pathname.replace(/\/$/, "")}/index.json`;
-    const remote = yield* reader(options);
+    return yield* cachedCatalog(
+      options,
+      ["apps/wellKnownSkills/catalog", 1, url.href],
+      (transport) => wellKnownCatalog(url, transport),
+    );
+  }).pipe(withService(URL.canParse(options.url) ? new URL(options.url).hostname : undefined));
+
+const wellKnownCatalog = (url: URL, transport: SkillTransport) =>
+  Effect.gen(function* () {
+    const remote = yield* reader(transport);
     const first = yield* remote.read(url.href);
     const index = yield* parse(Schema.fromJsonString(Index), first);
     if (
@@ -383,4 +449,4 @@ export const wellKnownSkillsEffect = (options: WellKnownSkillsOptions) =>
     );
     if ((yield* remote.read(url.href)) !== first) return yield* failed("changed");
     return yield* parse(AppSkills, skills);
-  }).pipe(withService(URL.canParse(options.url) ? new URL(options.url).hostname : undefined));
+  });

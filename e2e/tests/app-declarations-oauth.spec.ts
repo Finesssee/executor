@@ -1,4 +1,7 @@
-/** Kept app declarations are never served for an OAuth account that a live read would refuse. */
+/**
+ * Kept app declarations and tool listings are never served for an OAuth account that a live read
+ * would refuse.
+ */
 import { expect, layer } from "@effect/vitest";
 import { Effect, Schedule, Schema } from "effect";
 import { randomUUID } from "node:crypto";
@@ -122,6 +125,7 @@ export default defineApp({accounts:{service}},async({accounts})=>{
             "GET",
             `${path}/skill-bundle?profile=${profile.id}`,
           );
+          const listing = api.request(actors.owner, "GET", `${path}/tools?profile=${profile.id}`);
           const names = (response: { status: number; body: unknown }) =>
             body(Workflows, response).pipe(Effect.map((rows) => rows.map((row) => row.name)));
           const descriptions = (response: { status: number; body: unknown }) =>
@@ -142,6 +146,12 @@ export default defineApp({accounts:{service}},async({accounts})=>{
           expect(yield* outcome).toBe("miss");
           expect(yield* descriptions(yield* bundle)).toEqual(["Grant 1"]);
           expect(yield* outcome).toBe("hit");
+          const listed = yield* listing;
+          expect(listed.status, JSON.stringify(listed.body)).toBe(200);
+          expect(listed.body).toMatchObject({ items: [{ name: "queries.read" }] });
+          expect(yield* outcome).toBe("miss");
+          expect((yield* listing).body).toEqual(listed.body);
+          expect(yield* outcome).toBe("hit");
           // Every read above ran before renewal was due, so the stored credential never changed.
           expect(Date.now() - connectedAt).toBeLessThan((lifetime - 30) * 1000);
 
@@ -156,8 +166,8 @@ export default defineApp({accounts:{service}},async({accounts})=>{
           expect(refused.status, JSON.stringify(refused.body)).toBe(409);
           expect((yield* body(Failure, refused))._tag).toBe("OAuthReconnectRequired");
 
-          // Both kept results are still within their stale bound, yet neither is served.
-          for (const read of [workflows, bundle]) {
+          // Every kept result is still within its stale bound, yet none is served.
+          for (const read of [workflows, bundle, listing]) {
             const denied = yield* read;
             expect(denied.status, JSON.stringify(denied.body)).toBe(409);
             expect((yield* body(Failure, denied))._tag).toBe("OAuthReconnectRequired");

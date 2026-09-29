@@ -1,5 +1,5 @@
 /** Pluggable Effect runtime. The caller resolves accounts; no database or owner policy lives here. */
-import { Schema, type Effect, type Stream } from "effect";
+import { Context, Effect, Schema, type Stream } from "effect";
 import {
   DeclaredRequirements,
   type HostInspectError,
@@ -14,6 +14,16 @@ import {
 } from "apps/contracts";
 import { SourceFiles, type BuildMemoryExceeded } from "./deployment.ts";
 import { BuildId, Json } from "./shared.ts";
+
+/**
+ * Runtimes report that an invocation replaced or removed the app's cached upstream data, such as
+ * a refreshed MCP catalog or one invalidated after `notifications/tools/list_changed`, including
+ * a refresh that finishes after the invocation. The SDK then stops reusing results it evaluated
+ * for that app from the earlier data.
+ */
+export const AppCacheChanges = Context.Reference<{
+  readonly changed: (app: string) => Effect.Effect<void>;
+}>("executor/AppCacheChanges", { defaultValue: () => ({ changed: () => Effect.void }) });
 
 /** Retained compiled output and declarations obtained without running the app factory. */
 export const UiAsset = Schema.Struct({
