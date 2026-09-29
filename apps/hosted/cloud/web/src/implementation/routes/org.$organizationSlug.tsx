@@ -4,6 +4,7 @@ import { CloudPagePending } from "../components/page-pending.tsx";
 import { ErrorTrackingProvider } from "@executor-js/ui/dashboard/error-tracking";
 import { DashboardShell } from "@executor-js/hosted-web/shell";
 import { OrganizationBoundary, OrganizationContent } from "@executor-js/hosted-web/organization";
+import { NameAccountDialog } from "@executor-js/hosted-web/pages/name-account-dialog";
 import { HostedNavigation } from "@executor-js/hosted-web/navigation";
 import { BetaNotice } from "../components/beta-notice.tsx";
 
@@ -22,6 +23,7 @@ function OrganizationLayout() {
         <DashboardShell navigation={<HostedNavigation />} banner={<BetaNotice />}>
           <OrganizationContent>
             <Outlet />
+            <NameAccountDialog />
           </OrganizationContent>
         </DashboardShell>
       </ErrorTrackingProvider>

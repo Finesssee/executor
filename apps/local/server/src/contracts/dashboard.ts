@@ -8,7 +8,7 @@ import { Profile } from "@executor-js/sdk/core";
 import { DashboardAppBrowser } from "./app-browser.ts";
 import { DashboardWorkflows, DashboardWebhooks } from "./resources.ts";
 import { DashboardProfiles } from "./profiles.ts";
-import { ProfileId, ProfileRevision } from "@executor-js/sdk/core";
+import { ProfileId, ProfileRevision, ToolKind, ToolKindMismatch } from "@executor-js/sdk/core";
 import { ProfileErrors } from "@executor-js/sdk/core";
 import { AppWorkflowsActive, AccountWorkflowsActive } from "@executor-js/sdk/core";
 import { DashboardSchedules } from "./schedules.ts";
@@ -22,6 +22,8 @@ import {
   AccountConnectionNotFound,
   AccountConnectionClosed,
   Account,
+  AccountHealth,
+  CredentialCheck,
   AccountNotFound,
   AccountRequired,
   AccountSelectionInvalid,
@@ -67,6 +69,16 @@ import {
   AccountId,
   DeployedApp,
   Tool,
+  ToolName,
+  Json,
+  ToolNotFound,
+  InputInvalid,
+  ToolCallFailed,
+  ToolElicitationFailed,
+  ToolBlocked,
+  ToolApprovalRequired,
+  ToolPolicyFailed,
+  RequestInvalid,
   type ProviderDefinition,
 } from "@executor-js/sdk";
 import {
@@ -180,6 +192,8 @@ export const DashboardAccount = Schema.Struct({
   providerName: Schema.String,
   providerUrl: Schema.NullOr(HttpUrl),
   signIn: AccountSignIn,
+  /** Checks by the apps that select the account; absent from single-account reads. */
+  health: Schema.optionalKey(AccountHealth),
 });
 export type DashboardAccount = typeof DashboardAccount.Type;
 /** Credential management uses the retained provider even when no installed app selects it. */
@@ -187,6 +201,8 @@ export const DashboardAccountDetail = Schema.Struct({
   account: DashboardAccount,
   provider: Provider,
   apps: Schema.Array(App),
+  /** The latest check by each app in `apps`; reading it never runs a check. */
+  health: AccountHealth,
   canManage: Schema.Boolean,
 });
 export type DashboardAccountDetail = typeof DashboardAccountDetail.Type;
@@ -408,6 +424,45 @@ export const DashboardApi = HttpApi.make("local-dashboard").add(
       }),
     )
     .add(
+      HttpApiEndpoint.post("callTool", "/dashboard/api/apps/:app/tools/call", {
+        params: { app: AppId },
+        payload: Schema.Struct({
+          tool: ToolName,
+          /** "query" for tools the catalog marks readOnly, otherwise "mutation". Omitted, it is read from the catalog. */
+          kind: Schema.optional(ToolKind),
+          input: Json,
+          deployment: Schema.optional(DeploymentId),
+          profile: Schema.optional(ProfileId),
+          expectedProfileRevision: Schema.optional(ProfileRevision),
+        }),
+        success: Json,
+        error: [
+          ...ProfileErrors,
+          StorageError,
+          CredentialsError,
+          AppNotFound,
+          AppNotDeployed,
+          DeploymentNotFound,
+          AppEvaluationFailed,
+          AppProviderFailed,
+          AccountNotFound,
+          AccountRequired,
+          AccountSelectionInvalid,
+          OAuthReconnectRequired,
+          OAuthRenewalFailed,
+          ToolNotFound,
+          ToolKindMismatch,
+          InputInvalid,
+          ToolCallFailed,
+          ToolElicitationFailed,
+          ToolBlocked,
+          ToolApprovalRequired,
+          ToolPolicyFailed,
+          RequestInvalid,
+        ],
+      }),
+    )
+    .add(
       HttpApiEndpoint.get("catalog", "/dashboard/api/catalog", {
         success: Schema.Array(CatalogEntry),
         error: CatalogUnavailable,
@@ -459,7 +514,7 @@ export const DashboardApi = HttpApi.make("local-dashboard").add(
         payload: Schema.Struct({
           provider: ProviderId,
           method: AuthMethodName,
-          label: Schema.NonEmptyString,
+          label: Schema.optional(Schema.NonEmptyString),
           fields: AccountFieldsInput,
         }),
         success: Account,
@@ -476,6 +531,25 @@ export const DashboardApi = HttpApi.make("local-dashboard").add(
       HttpApiEndpoint.get("account", "/dashboard/api/accounts/:account", {
         params: { account: AccountId },
         success: DashboardAccountDetail,
+        error: [StorageError, AccountNotFound],
+      }),
+    )
+    .add(
+      HttpApiEndpoint.post("checkCredentials", "/dashboard/api/apps/:app/credential-checks", {
+        params: { app: AppId },
+        payload: Schema.Struct({
+          provider: ProviderId,
+          method: AuthMethodName,
+          fields: AccountFieldsInput,
+        }),
+        success: Schema.NullOr(CredentialCheck),
+        error: [StorageError, AppNotFound, AuthMethodInvalid, AccountFieldsInvalid],
+      }),
+    )
+    .add(
+      HttpApiEndpoint.post("checkAccount", "/dashboard/api/accounts/:account/health", {
+        params: { account: AccountId },
+        success: AccountHealth,
         error: [StorageError, AccountNotFound],
       }),
     )
@@ -560,7 +634,7 @@ export const DashboardApi = HttpApi.make("local-dashboard").add(
         payload: Schema.Struct({
           provider: ProviderId,
           method: AuthMethodName,
-          label: Schema.NonEmptyString,
+          label: Schema.optional(Schema.NonEmptyString),
           client: Schema.optional(OAuthClientInput),
         }),
         success: ConnectionSignIn,

@@ -116,7 +116,7 @@ layer(HostedLive, { excludeTestServices: true })("Executor customization", (it) 
               {
                 name: "execute",
                 arguments: {
-                  code: `return await tools[${JSON.stringify(app.slug)}].profiles[${JSON.stringify(own.id)}].queries.context_get({});`,
+                  code: `return await tools[${JSON.stringify(app.slug)}].profiles[${JSON.stringify(own.id)}].context.get({});`,
                 },
               },
               undefined,

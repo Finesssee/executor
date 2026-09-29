@@ -4,20 +4,19 @@
  */
 import { expect, layer } from "@effect/vitest";
 import { Effect, Schedule, Schema } from "effect";
+import { FetchHttpClient, HttpClient } from "effect/unstable/http";
 import { randomUUID } from "node:crypto";
 import { scenarios } from "../test-plan.ts";
 import { Actors } from "../support/actors.ts";
 import { Api, body } from "../support/api.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { Resource } from "../support/contracts.ts";
-import { clientCredentialsIssuer, machineClient } from "../support/client-credentials-issuer.ts";
+import { oauthSetupIssuer } from "../support/oauth-setup-issuer.ts";
 import { createProfile } from "../support/profiles.ts";
 import { Evidence, Telemetry } from "../support/evidence.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
-const Completed = Schema.Struct({
-  status: Schema.Literal("completed"),
-  account: Schema.Struct({ id: Schema.String }),
-});
+const SignIn = Schema.Struct({ authorizationUrl: Schema.String });
 const Workflows = Schema.Array(Schema.Struct({ name: Schema.String }));
 const Bundle = Schema.Struct({
   skills: Schema.Array(Schema.Struct({ name: Schema.String, description: Schema.String })),
@@ -37,33 +36,33 @@ layer(HostedLive, { excludeTestServices: true })("App declarations and OAuth gra
           const api = yield* Api,
             actors = yield* Actors,
             evidence = yield* Evidence,
-            telemetry = yield* Telemetry;
-          const issuer = yield* clientCredentialsIssuer;
-          yield* issuer.configure({
-            method: "client_secret_basic",
-            expiresIn: lifetime,
-            rejected: false,
-          });
+            telemetry = yield* Telemetry,
+            http = yield* HttpClient.HttpClient;
+          const issuer = yield* oauthSetupIssuer;
+          yield* issuer.configure({ refreshTokens: true, expiresIn: lifetime });
           const prefix = `/api/organizations/${actors.organization.id}`;
-          const token = JSON.stringify(`${issuer.origin}/token`);
+          const discover = JSON.stringify(`${issuer.origin}/mcp`);
           const resource = JSON.stringify(`${issuer.origin}/resource`);
           const deployed = yield* api.request(actors.owner, "POST", `${prefix}/apps/deploy`, {
             name: `Declarations OAuth ${randomUUID().slice(0, 8)}`,
             files: [
               {
                 path: "index.ts",
-                content: `import {defineApp,defineProvider,oauth2,query,workflow,object} from "apps";
-const service=defineProvider({name:"Reporting",auth:{machine:oauth2({grant:"client_credentials",tokenUrl:${token},scopes:["reports:read"],resource:${resource},tokenEndpointAuthMethod:"client_secret_basic"})}});
+                content: `import {defineApp,defineProvider,oauth2,query,workflow,object, router} from "apps";
+const service=defineProvider({name:"Reporting",auth:{oauth:oauth2({discover:${discover}})}});
 const noop=workflow({input:object({})},async()=>null);
 export default defineApp({accounts:{service}},async({accounts})=>{
   const generation=accounts.service.fields.access_token.split("-").pop();
   return {
-    queries:{read:query({input:object({})},async({fetch})=>(await fetch(${resource},{headers:{authorization:"Bearer "+accounts.service.fields.access_token}})).json())},
+    tools: router({
+      read:query({input:object({})},async({fetch})=>(await fetch(${resource},{headers:{authorization:"Bearer "+accounts.service.fields.access_token}})).json()),
+    }),
     workflows:{["grant_"+generation]:noop},
     skills:[{name:"grant-guide",description:"Grant "+generation,files:[{path:"SKILL.md",content:"---\\nname: grant-guide\\ndescription: Grant "+generation+"\\n---\\n# Grant"}]}],
   };
 });`,
               },
+              appsManifest,
             ],
           });
           expect(deployed.status, JSON.stringify(deployed.body)).toBe(200);
@@ -85,16 +84,32 @@ export default defineApp({accounts:{service}},async({accounts})=>{
               profile: profile.id,
             }),
           );
-          const completed = yield* body(
-            Completed,
-            yield* api.request(
-              actors.owner,
-              "POST",
-              `${prefix}/connections/${connection.id}/oauth/start`,
-              { method: "machine", label: "Reporting", client: machineClient },
-            ),
+          const started = yield* api.request(
+            actors.owner,
+            "POST",
+            `${prefix}/connections/${connection.id}/oauth/start`,
+            { method: "oauth", label: "Reporting" },
           );
-          account = completed.account.id;
+          expect(started.status, JSON.stringify(started.body)).toBe(200);
+          const { authorizationUrl } = yield* body(SignIn, started);
+          const callbackUrl = yield* Effect.scoped(
+            Effect.gen(function* () {
+              const consent = yield* HttpClient.withScope(http).get(authorizationUrl);
+              expect(consent.status).toBe(302);
+              const location = consent.headers.location;
+              if (location === undefined)
+                return yield* Effect.die("Issuer did not return a callback");
+              return location;
+            }),
+          ).pipe(Effect.provideService(FetchHttpClient.RequestInit, { redirect: "manual" }));
+          const completed = yield* api.request(
+            actors.owner,
+            "POST",
+            `${prefix}/connections/${connection.id}/oauth/complete`,
+            { callbackUrl },
+          );
+          expect(completed.status, JSON.stringify(completed.body)).toBe(200);
+          account = (yield* body(Resource, completed)).id;
           const connectedAt = Date.now();
 
           /** The cache outcome recorded by the SDK span of the latest request's own trace. */
@@ -136,31 +151,35 @@ export default defineApp({accounts:{service}},async({accounts})=>{
           // Evaluated with the first issued token, then kept for identical reads.
           const first = yield* workflows;
           expect(first.status, JSON.stringify(first.body)).toBe(200);
-          expect(yield* names(first)).toEqual(["grant_1"]);
+          expect(yield* names(first)).toEqual(["grant_token"]);
           expect(yield* outcome).toBe("miss");
           const kept = yield* workflows;
-          expect(yield* names(kept)).toEqual(["grant_1"]);
+          expect(yield* names(kept)).toEqual(["grant_token"]);
           expect(yield* outcome).toBe("hit");
           const skills = yield* bundle;
-          expect(yield* descriptions(skills)).toEqual(["Grant 1"]);
+          expect(yield* descriptions(skills)).toEqual(["Grant token"]);
           expect(yield* outcome).toBe("miss");
-          expect(yield* descriptions(yield* bundle)).toEqual(["Grant 1"]);
+          expect(yield* descriptions(yield* bundle)).toEqual(["Grant token"]);
           expect(yield* outcome).toBe("hit");
           const listed = yield* listing;
           expect(listed.status, JSON.stringify(listed.body)).toBe(200);
-          expect(listed.body).toMatchObject({ items: [{ name: "queries.read" }] });
+          expect(listed.body).toMatchObject({ items: [{ name: "read" }] });
           expect(yield* outcome).toBe("miss");
           expect((yield* listing).body).toEqual(listed.body);
           expect(yield* outcome).toBe("hit");
           // Every read above ran before renewal was due, so the stored credential never changed.
           expect(Date.now() - connectedAt).toBeLessThan((lifetime - 30) * 1000);
 
-          // Once renewal is due, the provider refuses it and the grant needs reconnecting.
+          // Once renewal is due, the provider refuses the grant with invalid_grant, and the grant
+          // needs reconnecting.
           yield* Effect.sleep(Math.max(0, connectedAt + (lifetime - 29) * 1000 - Date.now()));
-          yield* issuer.configure({ rejected: true });
+          yield* issuer.configure({
+            tokenError: { status: 400, body: { error: "invalid_grant" } },
+          });
           const refused = yield* api.request(actors.owner, "POST", `${path}/tools/call`, {
             profile: profile.id,
-            tool: "queries.read",
+            tool: "read",
+            kind: "query",
             input: {},
           });
           expect(refused.status, JSON.stringify(refused.body)).toBe(409);

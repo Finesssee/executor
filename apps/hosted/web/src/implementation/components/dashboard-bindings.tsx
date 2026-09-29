@@ -48,8 +48,9 @@ const AccountLink = ({ account, children, ...props }: AccountLinkProps) => {
   const { slug: organizationSlug } = useOrganizationRoute();
   return (
     <Link
-      to="/org/$organizationSlug/accounts/$accountId"
-      params={{ organizationSlug, accountId: account }}
+      to="/org/$organizationSlug/accounts"
+      params={{ organizationSlug }}
+      search={{ account }}
       {...props}
     >
       {children}

@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { AccountConnectionId, type Provider } from "@executor-js/sdk";
-import { Option, Schema } from "effect";
+import { Option } from "effect";
 import {
   Dialog,
   DialogContent,
@@ -12,7 +12,7 @@ import { ProviderIcon } from "@executor-js/ui/dashboard/common";
 import { providerDisplayUrl } from "@executor-js/ui/contracts/dashboard";
 import { DetailSkeleton } from "@executor-js/ui/dashboard/loading";
 import { QueryResult, useQuery } from "@executor-js/ui/dashboard/context";
-import { connectionAtom, PendingOAuth } from "../../contracts/apps.ts";
+import { connectionAtom } from "../../contracts/apps.ts";
 import { useOrganizationRoute } from "../components/organization.tsx";
 import { HostedFailure } from "../components/dashboard-bindings.tsx";
 import { ConnectionFields } from "./connect-account.tsx";
@@ -102,15 +102,6 @@ function ResumedConnectionDialog({
   const query = useQuery(connectionAtom({ organization, connection: connectionId }));
   const connection = Option.getOrUndefined(query.data);
   const [busy, setBusy] = useState(false);
-  const [pending] = useState(() =>
-    Schema.decodeUnknownOption(Schema.fromJsonString(PendingOAuth))(
-      sessionStorage.getItem("executor:hosted:oauth"),
-    ),
-  );
-  const label =
-    Option.isSome(pending) && pending.value.connection === connectionId
-      ? pending.value.label
-      : undefined;
   return (
     <ConnectionModal open busy={busy} onClose={onClose}>
       {connection ? (
@@ -133,7 +124,6 @@ function ResumedConnectionDialog({
         {(connection) => (
           <ConnectionFields
             connection={connection}
-            initialLabel={label}
             manualClient={client === "change"}
             onPendingChange={setBusy}
             onSaved={(account) => {
@@ -146,9 +136,9 @@ function ResumedConnectionDialog({
                       replace: true,
                     }
                   : {
-                      to: "/org/$organizationSlug/accounts/$accountId",
-                      params: { organizationSlug, accountId: account.id },
-                      search: {},
+                      to: "/org/$organizationSlug/accounts",
+                      params: { organizationSlug },
+                      search: { account: account.id },
                       replace: true,
                     },
               );
@@ -185,9 +175,9 @@ export function ConnectionEntry({
           }
         : connection.reconnectAccount
           ? {
-              to: "/org/$organizationSlug/accounts/$accountId",
-              params: { organizationSlug, accountId: connection.reconnectAccount.id },
-              search,
+              to: "/org/$organizationSlug/accounts",
+              params: { organizationSlug },
+              search: { ...search, account: connection.reconnectAccount.id },
               replace: true,
             }
           : {

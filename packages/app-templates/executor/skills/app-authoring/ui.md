@@ -21,10 +21,10 @@ The full Tailwind import includes Preflight, which resets browser button and
 form styles. Importing only `theme.css` and `utilities.css` omits those resets;
 use that split only when you supply the required base styles yourself.
 
-For hosted apps, discover and call `appUi_location` after deployment:
+For hosted apps, discover and call `appUi.location` after deployment:
 
 ```js
-return await tools.executor.profiles["<management-profile-id>"].queries.appUi_location({
+return await tools.executor.profiles["<management-profile-id>"].appUi.location({
   path: { organization: "<approved-organization-id>", app: "<app-id>" },
 });
 ```
@@ -68,7 +68,7 @@ const { data, pending, error } = useAppQuery(todosAtom);
 const todos = data ?? [];
 ```
 
-Use `framework_describe` for `apps/react.useAppQuery`, `AppClient.queryAtom`, and
+Use `framework.describe` for `apps/react.useAppQuery`, `AppClient.queryAtom`, and
 `AppClient.mutate` before using an unfamiliar call shape. Type parameters on
 `queryReference` and `mutationReference` describe the individual operation,
 for example `queryReference<typeof list>("list")`, not the entire app.
@@ -99,7 +99,7 @@ await setDone({ id, done: true });
 `getAllQueries(reference)` returns `{ input, value }` for every mounted argument
 variant. Update filtered lists deliberately. `setQuery` replaces a mounted value
 and validates it with that query's output schema. It does not create a subscription.
-The complete `live-inbox` example returned by `framework_describe` shows insertion
+The complete `live-inbox` example returned by `framework.describe` shows insertion
 with a temporary ID. Create IDs before calling the mutation, and pass them as input.
 
 A temporary ID is only a UI placeholder. The example's server ignores `clientId`

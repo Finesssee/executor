@@ -25,6 +25,7 @@ export const holdTeamInstallation = (
     yield* Effect.addFinalizer(() => release.pipe(Effect.orDie));
     yield* browser.use("Hold the missing app while installation runs", (page) =>
       page.route(match, (route) => {
+        // oxlint-disable-next-line executor/no-manual-effect-runtime-in-tests -- Playwright route handlers are plain callbacks
         Effect.runSync(Deferred.succeed(requested, undefined));
         return route.fulfill({ json: { ...directory, apps: [], pendingApp: pending } });
       }),

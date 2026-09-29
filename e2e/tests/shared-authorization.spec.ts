@@ -7,6 +7,7 @@ import { McpOAuth } from "../support/mcp-oauth.ts";
 import { McpClient } from "../support/mcp-client.ts";
 import { Inventory } from "../support/contracts.ts";
 import { authorizationFixture } from "../support/authorization.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const Tools = Schema.Struct({ items: Schema.Array(Schema.Struct({ name: Schema.String })) });
 layer(HostedLive, { excludeTestServices: true })("Shared authorization", (it) => {
@@ -34,10 +35,8 @@ layer(HostedLive, { excludeTestServices: true })("Shared authorization", (it) =>
               headers,
             );
             expect(tools.status).toBe(200);
-            expect((yield* body(Tools, tools)).items.map((item) => item.name)).toEqual([
-              "mutations.echo",
-            ]);
-            const response = yield* call("mutations.echo");
+            expect((yield* body(Tools, tools)).items.map((item) => item.name)).toEqual(["echo"]);
+            const response = yield* call("echo");
             expect(response.status).toBe(200);
             expect(response.body).toEqual({ message: "shared policy", receipt });
             yield* Effect.forEach(
@@ -69,7 +68,7 @@ layer(HostedLive, { excludeTestServices: true })("Shared authorization", (it) =>
                 anonymous,
                 "POST",
                 `${prefix}/apps/deploy`,
-                { name: "Denied", files: [{ path: "index.ts", content: "" }] },
+                { name: "Denied", files: [{ path: "index.ts", content: "" }, appsManifest] },
                 headers,
               )).status,
             ).toBe(403);

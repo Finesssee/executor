@@ -61,6 +61,11 @@ export class Telemetry extends Context.Service<
       operation: string,
       attributes: Readonly<Record<string, string>>,
     ) => Effect.Effect<ReadonlyArray<Readonly<Record<string, string>>>, TelemetryUnavailable>;
+    /** Delivered spans of one operation whose attributes match exactly, with their trace and status. */
+    readonly search: (
+      operation: string,
+      attributes: Readonly<Record<string, string>>,
+    ) => Effect.Effect<typeof SpanQuery.Type, TelemetryUnavailable>;
     readonly export: (
       spans: ReadonlyArray<ClientSpan>,
     ) => Effect.Effect<number, TelemetryUnavailable>;
@@ -82,6 +87,30 @@ export class Telemetry extends Context.Service<
           Effect.timeout("5 seconds"),
           Effect.mapError(() => new TelemetryUnavailable()),
         );
+      const search = <A>(
+        operation: string,
+        attributes: Readonly<Record<string, string>>,
+        schema: Schema.Codec<A>,
+      ) =>
+        target.metadata.target === "cloud" && target.metadata.mode === "attached"
+          ? Effect.fail(new TelemetryUnavailable())
+          : safe(
+              Effect.scoped(
+                Effect.gen(function* () {
+                  const url = new URL("/api/spans/search", yield* origin);
+                  url.searchParams.set("operation", operation);
+                  url.searchParams.set("lookback", "1d");
+                  url.searchParams.set("limit", "10000");
+                  for (const [key, value] of Object.entries(attributes))
+                    url.searchParams.set(`attr.${key}`, value);
+                  const response = yield* http.get(url.href);
+                  if (response.status !== 200) return yield* new TelemetryUnavailable();
+                  return yield* response.json.pipe(
+                    Effect.flatMap(Schema.decodeUnknownEffect(schema)),
+                  );
+                }),
+              ),
+            );
       return {
         query: (id) =>
           target.metadata.target === "cloud" && target.metadata.mode === "attached"
@@ -99,38 +128,18 @@ export class Telemetry extends Context.Service<
                 ),
               ),
         spans: (operation, attributes) =>
-          target.metadata.target === "cloud" && target.metadata.mode === "attached"
-            ? Effect.fail(new TelemetryUnavailable())
-            : safe(
-                Effect.scoped(
-                  Effect.gen(function* () {
-                    const url = new URL("/api/spans/search", yield* origin);
-                    url.searchParams.set("operation", operation);
-                    url.searchParams.set("lookback", "1d");
-                    url.searchParams.set("limit", "10000");
-                    for (const [key, value] of Object.entries(attributes))
-                      url.searchParams.set(`attr.${key}`, value);
-                    const response = yield* http.get(url.href);
-                    if (response.status !== 200) return yield* new TelemetryUnavailable();
-                    const found = yield* response.json.pipe(
-                      Effect.flatMap(
-                        Schema.decodeUnknownEffect(
-                          Schema.Struct({
-                            data: Schema.Array(
-                              Schema.Struct({
-                                span: Schema.Struct({
-                                  tags: Schema.Record(Schema.String, Schema.String),
-                                }),
-                              }),
-                            ),
-                          }),
-                        ),
-                      ),
-                    );
-                    return found.data.map(({ span }) => span.tags);
-                  }),
-                ),
+          search(
+            operation,
+            attributes,
+            Schema.Struct({
+              data: Schema.Array(
+                Schema.Struct({
+                  span: Schema.Struct({ tags: Schema.Record(Schema.String, Schema.String) }),
+                }),
               ),
+            }),
+          ).pipe(Effect.map((found) => found.data.map(({ span }) => span.tags))),
+        search: (operation, attributes) => search(operation, attributes, SpanQuery),
         export: (spans) =>
           safe(
             Effect.scoped(

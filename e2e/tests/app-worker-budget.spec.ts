@@ -14,6 +14,7 @@ import { Resource } from "../support/contracts.ts";
 import { Target } from "../support/platform.ts";
 import { createProfile, selectProfileAccounts } from "../support/profiles.ts";
 import { requestGate } from "../support/request-gate.ts";
+import { appsManifest } from "../support/apps-release.ts";
 import { scenarios } from "../test-plan.ts";
 
 /** The limits the scenarios configure as `EXECUTOR_APP_WORKERS` in their plans. */
@@ -61,14 +62,14 @@ interface Workload {
 const budgetApp = (
   name: string,
   database: boolean,
-) => `import { defineApp, defineDatabase, defineProvider, secrets, object, string, boolean, query, table } from "apps";
+) => `import { defineApp, defineDatabase, defineProvider, secrets, object, string, boolean, query, table, router } from "apps";
 const service = defineProvider({ name: ${JSON.stringify(name)}, auth: {
   key: secrets({ label: "Key", fields: object({ token: string() }) })
 } });
 let isolate;
 let calls = 0;
 export default defineApp({ accounts: { service }${database ? ", database: defineDatabase({ marks: table({ label: string() }) })" : ""} }, {
-  queries: {
+  tools: router({
     probe: query({ input: object({ gate: string().optional() }) }, async (ctx, input) => {
       isolate ??= crypto.randomUUID();
       calls++;
@@ -101,7 +102,7 @@ export default defineApp({ accounts: { service }${database ? ", database: define
       return true;
     }),
     chained: query({ input: object({}) }, async (ctx) => (await ctx.cache.read("second", string())) ?? null),
-  },
+  }),
 });`;
 
 interface Selection {
@@ -123,7 +124,7 @@ const hostedSelections = ({ apps, accountsPerApp, database }: Workload) =>
       const name = `Worker budget ${index} ${randomUUID().slice(0, 8)}`;
       const deployed = yield* api.request(actors.owner, "POST", `${prefix}/apps/deploy`, {
         name,
-        files: [{ path: "index.ts", content: budgetApp(name, database) }],
+        files: [{ path: "index.ts", content: budgetApp(name, database) }, appsManifest],
       });
       expect(deployed.status, JSON.stringify(deployed.body)).toBe(200);
       const app = yield* body(HostedApp, deployed);
@@ -167,7 +168,7 @@ const hostedSelections = ({ apps, accountsPerApp, database }: Workload) =>
           api
             .request(actors.owner, "POST", `${path}/tools/call`, {
               profile: profile.id,
-              tool: `queries.${name}`,
+              tool: name,
               input,
             })
             .pipe(
@@ -213,7 +214,7 @@ const localSelections = ({ apps, accountsPerApp, database }: Workload) =>
       const deployed = yield* api.request(agent, "POST", "/v1/apps/deploy", {
         owner,
         name,
-        files: [{ path: "index.ts", content: budgetApp(name, database) }],
+        files: [{ path: "index.ts", content: budgetApp(name, database) }, appsManifest],
       });
       expect(deployed.status, JSON.stringify(deployed.body)).toBe(200);
       const { app } = yield* body(App, deployed);
@@ -270,7 +271,7 @@ const localSelections = ({ apps, accountsPerApp, database }: Workload) =>
             .request(agent, "POST", "/v1/tools/call", {
               app: app.id,
               profile: profile.id,
-              tool: `queries.${name}`,
+              tool: name,
               input,
             })
             .pipe(

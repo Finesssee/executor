@@ -10,6 +10,7 @@ import { openPrivateApp, waitForAppUrl } from "../support/app-pages.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { App } from "../support/contracts.ts";
 import { Evidence, Telemetry } from "../support/evidence.ts";
+import { withApps } from "../support/apps-release.ts";
 
 const DeployedApp = Schema.Struct({ ...App.fields, activeDeployment: Schema.String });
 
@@ -20,7 +21,9 @@ const files = [
   },
   {
     path: "package.json",
-    content: JSON.stringify({ dependencies: { react: "^19.2.0", "react-dom": "^19.2.0" } }),
+    content: JSON.stringify({
+      dependencies: withApps({ react: "^19.2.0", "react-dom": "^19.2.0" }),
+    }),
   },
   {
     path: "ui/index.html",

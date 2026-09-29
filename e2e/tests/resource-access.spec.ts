@@ -10,6 +10,7 @@ import { App, Resource, Inventory } from "../support/contracts.ts";
 import { scenarios } from "../test-plan.ts";
 import { Browser } from "../support/browser.ts";
 import { openPrivateApp, waitForAppUrl } from "../support/app-pages.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const Access = Schema.Struct({
   revision: Schema.String,
@@ -20,11 +21,13 @@ const Group = Schema.Struct({ id: Schema.String, revision: Schema.String });
 const Groups = Schema.Struct({
   members: Schema.Array(Schema.Struct({ id: Schema.String, userId: Schema.String })),
 });
-const identitySource = `import {defineApp, query, object} from "apps";
-export default defineApp({accounts:{}},{name:"Access fixture", queries:{identity:query({input:object({})},async()=>"allowed")}});`;
-const arraySource = `import {defineApp, defineProvider, secrets, query, object, string} from "apps";
+const identitySource = `import {defineApp, query, object, router} from "apps";
+export default defineApp({accounts:{}},{name:"Access fixture", tools: router({ identity:query({input:object({})},async()=>"allowed") })});`;
+const arraySource = `import {defineApp, defineProvider, secrets, query, object, string, router} from "apps";
 const service=defineProvider({name:"Group array fixture",auth:{key:secrets({label:"Key",fields:object({token:string()})})}});
-export default defineApp({accounts:{service:service.many()}},async ctx=>({name:"Group array",queries:{identity:query({input:object({})},async()=>ctx.accounts.service.map(account=>account.fields.token))}}));`;
+export default defineApp({accounts:{service:service.many()}},async ctx=>({name:"Group array",tools: router({
+  identity:query({input:object({})},async()=>ctx.accounts.service.map(account=>account.fields.token)),
+})}));`;
 const singleSource = arraySource
   .replace("service:service.many()", "service")
   .replace(
@@ -99,7 +102,7 @@ const resourceFixture = Effect.gen(function* () {
 
 const arrayFixture = Effect.gen(function* () {
   const { api, actors, prefix, suffix, created, sales } = yield* resourceFixture;
-  const call = { tool: "queries.identity", input: {} };
+  const call = { tool: "identity", kind: "query", input: {} };
   const array = yield* body(
     App,
     yield* api.request(actors.owner, "POST", `${prefix}/apps/deploy`, {
@@ -115,6 +118,7 @@ const arrayFixture = Effect.gen(function* () {
           path: "ui/public/probe.svg",
           content: '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"></svg>',
         },
+        appsManifest,
       ],
     }),
   );
@@ -222,12 +226,12 @@ layer(HostedLive, { excludeTestServices: true })("Resource access", (it) => {
         const { api, actors, prefix, suffix, created, sales, engineering } = yield* resourceFixture;
         const deployment = yield* api.request(actors.member, "POST", `${prefix}/apps/deploy`, {
           name: `Private ${suffix}`,
-          files: [{ path: "index.ts", content: identitySource }],
+          files: [{ path: "index.ts", content: identitySource }, appsManifest],
         });
         expect(deployment.status).toBe(200);
         const app = yield* body(App, deployment);
         created.apps.push(app.id);
-        const call = { tool: "queries.identity", input: {} };
+        const call = { tool: "identity", kind: "query", input: {} };
         expect(
           (yield* api.request(actors.member, "POST", `${prefix}/apps/${app.id}/tools/call`, call))
             .body,
@@ -400,7 +404,7 @@ layer(HostedLive, { excludeTestServices: true })("Resource access", (it) => {
         expect(
           (yield* api.request(actors.admin, "POST", `${prefix}/apps/${array.id}/commits`, {
             expected: workspace.revision.commit,
-            files: [{ path: "index.ts", content: arraySource }],
+            files: [{ path: "index.ts", content: arraySource }, appsManifest],
             message: "Source editing is independent of personal profiles",
           })).status,
         ).toBe(200);
@@ -419,7 +423,7 @@ layer(HostedLive, { excludeTestServices: true })("Resource access", (it) => {
           App,
           yield* api.request(actors.owner, "POST", `${prefix}/apps/deploy`, {
             name: `Single ${suffix}`,
-            files: [{ path: "index.ts", content: singleSource }],
+            files: [{ path: "index.ts", content: singleSource }, appsManifest],
           }),
         );
         created.apps.push(single.id);
@@ -536,7 +540,7 @@ layer(HostedLive, { excludeTestServices: true })("Resource access", (it) => {
           App,
           yield* api.request(actors.member, "POST", `${prefix}/apps`, {
             name: `Member draft ${suffix}`,
-            files: [{ path: "index.ts", content: identitySource }],
+            files: [{ path: "index.ts", content: identitySource }, appsManifest],
           }),
         );
         created.push(draft.id);
@@ -569,7 +573,7 @@ layer(HostedLive, { excludeTestServices: true })("Resource access", (it) => {
           App,
           yield* api.request(actors.owner, "POST", `${prefix}/apps`, {
             name: `Owner draft ${suffix}`,
-            files: [{ path: "index.ts", content: identitySource }],
+            files: [{ path: "index.ts", content: identitySource }, appsManifest],
           }),
         );
         created.push(hidden.id);

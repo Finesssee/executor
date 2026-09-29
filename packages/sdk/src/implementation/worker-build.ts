@@ -1,19 +1,33 @@
 /** Compile server and browser source inside workerd using Cloudflare's dependency resolver. */
 import { createApp, InMemoryFileSystem } from "@cloudflare/worker-bundler";
-import { RuntimeBuildFailed } from "../contracts/runtime.ts";
+import {
+  boundBuildMessage,
+  describeBuildCause,
+  RuntimeAppsDependencyMissing,
+  RuntimeBuildFailed,
+} from "../contracts/runtime.ts";
 import type { SourceFiles } from "../contracts/deployment.ts";
 import { prepareUiBuild } from "./ui-build.ts";
-import { Effect, Path, Schema } from "effect";
+import { Effect, Option, Path, Schema } from "effect";
 import type { Plugin } from "esbuild";
-import { PublishedAppFramework, WorkerBundle } from "../contracts/worker-build.ts";
-import { appBridge } from "./worker-bridge.ts";
+import {
+  PublishedAppFramework,
+  WorkerBundle,
+  type AppFramework,
+} from "../contracts/worker-build.ts";
+import { appProtocol } from "./app-protocols.ts";
 import { browserBuild } from "./worker-browser-build.ts";
 import { wasmBuild } from "./worker-wasm-build.ts";
 import { workerDependencies } from "./worker-dependencies.ts";
-/** Default framework for single-file apps that do not declare their own apps dependency. */
-export interface WorkerFramework {
-  readonly server: Readonly<Record<string, string>>;
-  readonly browser: Readonly<Record<string, string>>;
+import apps from "apps/package.json" with { type: "json" };
+export type WorkerFramework = AppFramework;
+
+/**
+ * What the compiling host contributes. `registry` replaces the public npm registry. A host has no
+ * framework of its own: every source declares the `apps` release it uses in `dependencies.apps`.
+ */
+export interface WorkerHost {
+  readonly registry?: string;
 }
 
 const frameworkExports = [
@@ -28,7 +42,7 @@ const frameworkExports = [
   "apps/skills/effect",
   "apps/operations/approval",
 ];
-const frameworkModules = (framework: WorkerFramework["server"]) => ({
+const frameworkModules = (framework: AppFramework["server"]) => ({
   ...Object.fromEntries(Object.entries(framework).filter(([name]) => name.endsWith(".js"))),
   ...Object.fromEntries(
     frameworkExports.map((name) => [
@@ -45,6 +59,50 @@ const quietCompiler: Plugin = {
     build.initialOptions.logLevel = "silent";
   },
 };
+
+const EsbuildFailure = Schema.Struct({
+  errors: Schema.Array(
+    Schema.Struct({
+      text: Schema.String,
+      location: Schema.NullOr(
+        Schema.Struct({ file: Schema.String, line: Schema.Int, column: Schema.Int }),
+      ),
+    }),
+  ),
+});
+/** The bundler reads source from its `virtual:` namespace; report the authored path. */
+const sourcePath = (file: string) => file.replace(/^virtual:/, "");
+/** Shown compiler errors; the rest are counted. */
+const shownCompileErrors = 5;
+
+/** Keep the compiler's own errors and the first failing location for the deployer. */
+const compileFailure = (cause: unknown) =>
+  Option.match(Schema.decodeUnknownOption(EsbuildFailure)(cause), {
+    onNone: () => new RuntimeBuildFailed({ stage: "compile", message: describeBuildCause(cause) }),
+    onSome: ({ errors }) => {
+      const first = errors[0]?.location ?? undefined;
+      const lines = errors
+        .slice(0, shownCompileErrors)
+        .map(({ text, location }) =>
+          location === null
+            ? text
+            : `${sourcePath(location.file)}:${location.line}:${location.column}: ${text}`,
+        );
+      const more = errors.length - lines.length;
+      return new RuntimeBuildFailed({
+        stage: "compile",
+        message: boundBuildMessage(
+          [...lines, ...(more > 0 ? [`(${more} more errors)`] : [])].join("\n") ||
+            describeBuildCause(cause),
+        ),
+        ...(first === undefined
+          ? {}
+          : {
+              location: { file: sourcePath(first.file), line: first.line, column: first.column },
+            }),
+      });
+    },
+  });
 
 const selectedFramework = (filesystem: InMemoryFileSystem) =>
   Effect.gen(function* () {
@@ -71,19 +129,29 @@ const selectedFramework = (filesystem: InMemoryFileSystem) =>
     ),
   );
 
-/** Compilation returns browser bytes separately; neither imports nor credentials cross from server execution. */
-export const compileWorkerApp = (files: SourceFiles, framework: WorkerFramework) =>
+/**
+ * Compilation returns browser bytes separately; neither imports nor credentials cross from server
+ * execution. The selected framework's protocol must be supported before anything compiles.
+ */
+export const compileWorkerApp = (files: SourceFiles, host: WorkerHost) =>
   Effect.gen(function* () {
-    if (files.some((file) => file.path.split("/").includes("node_modules")))
-      return yield* new RuntimeBuildFailed({ stage: "source" });
-    const filesystem = new InMemoryFileSystem({
-      ...Object.fromEntries(files.map((file) => [file.path, file.content])),
-      "__executor_worker.ts": appBridge(files),
-    });
-    const dependencies = yield* workerDependencies(filesystem);
-    const selected = (yield* dependencies.framework)
-      ? yield* selectedFramework(filesystem)
-      : framework;
+    const vendored = files.find((file) => file.path.split("/").includes("node_modules"));
+    if (vendored !== undefined)
+      return yield* new RuntimeBuildFailed({
+        stage: "source",
+        location: { file: vendored.path },
+        message:
+          "Source files cannot include node_modules. Declare packages in package.json dependencies; the build installs them.",
+      });
+    const filesystem = new InMemoryFileSystem(
+      Object.fromEntries(files.map((file) => [file.path, file.content])),
+    );
+    const dependencies = yield* workerDependencies(filesystem, host.registry);
+    if (!(yield* dependencies.framework))
+      return yield* new RuntimeAppsDependencyMissing({ version: apps.version });
+    const selected = yield* selectedFramework(filesystem);
+    const protocol = yield* appProtocol(selected.protocol);
+    filesystem.write("__executor_worker.ts", protocol.workerEntry(files));
     const plan = yield* prepareUiBuild(files);
     const browser =
       plan === undefined
@@ -108,12 +176,22 @@ export const compileWorkerApp = (files: SourceFiles, framework: WorkerFramework)
             ...(browser === undefined ? [] : [browser.plugin]),
           ],
         }),
-      catch: () => new RuntimeBuildFailed({ stage: "compile" }),
+      catch: compileFailure,
     });
     const bundle = yield* Schema.decodeUnknownEffect(Schema.toType(WorkerBundle))({
       ...compiled,
       modules: { ...compiled.modules, ...frameworkModules(selected.server), ...wasm.modules },
-    }).pipe(Effect.mapError(() => new RuntimeBuildFailed({ stage: "compile" })));
+    }).pipe(
+      Effect.mapError(
+        (cause) =>
+          new RuntimeBuildFailed({
+            stage: "compile",
+            message: boundBuildMessage(
+              `The compiled bundle is invalid: ${describeBuildCause(cause)}`,
+            ),
+          }),
+      ),
+    );
     const ui = browser === undefined ? undefined : yield* browser.finish();
-    return { bundle, ui };
+    return { bundle, ui, protocol: selected.protocol };
   }).pipe(Effect.provide(Path.layer), Effect.withSpan("runtime.cloud.compile"));

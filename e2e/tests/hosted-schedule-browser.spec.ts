@@ -10,12 +10,13 @@ import { Evidence } from "../support/evidence.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { scenarios } from "../test-plan.ts";
 import { holdQuery, refreshVisiblePage } from "../support/query-transition.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 class Pending extends Schema.TaggedError<Pending>()("Pending", {}) {}
-const source = `import { defineApp, mutation, object, interval } from "apps";
+const source = `import { defineApp, mutation, object, interval, router } from "apps";
 import { always } from "apps/operations/approval";
 const send = mutation({ input: object({}), approval: always() }, async () => ({ done: true }));
-export default defineApp({ accounts: {} }, async () => ({  mutations: { send }, schedules: { digest: interval({ hours: 1 }, send, {}) } }));`;
+export default defineApp({ accounts: {} }, async () => ({  tools: router({ send }), schedules: { digest: interval({ hours: 1 }, send, {}) } }));`;
 layer(HostedLive, { excludeTestServices: true })("Hosted schedule dashboard", (it) => {
   it.effect(scenarios.scheduleLoading.title, (context) =>
     withHostedCase(
@@ -27,7 +28,7 @@ layer(HostedLive, { excludeTestServices: true })("Hosted schedule dashboard", (i
         const prefix = `/api/organizations/${actors.organization.id}`;
         const deployed = yield* api.request(actors.owner, "POST", `${prefix}/apps/deploy`, {
           name: `Schedule layout ${randomUUID().slice(0, 8)}`,
-          files: [{ path: "index.ts", content: source }],
+          files: [{ path: "index.ts", content: source }, appsManifest],
         });
         expect(deployed.status).toBe(200);
         const app = yield* body(Schema.Struct({ id: Schema.String }), deployed);
@@ -206,7 +207,7 @@ layer(HostedLive, { excludeTestServices: true })("Hosted schedule dashboard", (i
         const name = `Schedule states ${randomUUID().slice(0, 8)}`;
         const deployed = yield* api.request(actors.owner, "POST", `${prefix}/apps/deploy`, {
           name,
-          files: [{ path: "index.ts", content: source }],
+          files: [{ path: "index.ts", content: source }, appsManifest],
         });
         expect(deployed.status).toBe(200);
         const app = yield* body(Schema.Struct({ id: Schema.String }), deployed);
@@ -268,9 +269,10 @@ layer(HostedLive, { excludeTestServices: true })("Hosted schedule dashboard", (i
           files: [
             {
               path: "index.ts",
-              content: `import { defineApp } from "apps";
+              content: `import { defineApp, router } from "apps";
 export default defineApp({ accounts: {} }, async () => ({  }));`,
             },
+            appsManifest,
           ],
         });
         expect(empty.status).toBe(200);
@@ -311,12 +313,13 @@ export default defineApp({ accounts: {} }, async () => ({  }));`,
           files: [
             {
               path: "index.ts",
-              content: `import { defineApp, defineProvider, secrets, object, string } from "apps";
+              content: `import { defineApp, defineProvider, secrets, object, string, router } from "apps";
 const service = defineProvider({ name: "Schedule fixture", auth: {
   key: secrets({ label: "API key", fields: object({ token: string() }) })
 } });
 export default defineApp({ accounts: { service } }, async () => ({  }));`,
             },
+            appsManifest,
           ],
         });
         expect(deployed.status).toBe(200);
@@ -356,7 +359,7 @@ export default defineApp({ accounts: { service } }, async () => ({  }));`,
           page.getByRole("button", { name: "Go to Accounts", exact: true }).click(),
         );
         yield* browser.use("The account selection action is available", (page) =>
-          page.getByRole("button", { name: "Add Schedule fixture account", exact: true }).waitFor(),
+          page.getByRole("button", { name: "Connect new account", exact: true }).waitFor(),
         );
       }),
     ),
@@ -372,7 +375,7 @@ export default defineApp({ accounts: { service } }, async () => ({  }));`,
         const prefix = `/api/organizations/${actors.organization.id}`;
         const deployed = yield* api.request(actors.owner, "POST", `${prefix}/apps/deploy`, {
           name: `Browser schedules ${randomUUID().slice(0, 8)}`,
-          files: [{ path: "index.ts", content: source }],
+          files: [{ path: "index.ts", content: source }, appsManifest],
         });
         expect(deployed.status).toBe(200);
         const app = yield* body(Schema.Struct({ id: Schema.String }), deployed);

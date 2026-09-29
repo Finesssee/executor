@@ -1,12 +1,33 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
   "plugins": ["typescript", "react", "unicorn", "oxc"],
+  "jsPlugins": ["./scripts/oxlint-plugin.ts"],
   "rules": {
     "typescript/no-explicit-any": "error",
     // Effect.gen bodies without a yield are valid Effect code.
     "require-yield": "off",
   },
   "overrides": [
+    {
+      // Workers and servers reuse one module instance across requests.
+      "files": ["apps/**/src/**", "packages/*/src/**"],
+      "rules": { "executor/no-module-level-mutable-state": "error" },
+    },
+    {
+      // Exceptions kept here because a comment in these files changes the published apps
+      // framework. openapi-source keeps an isolate-wide cache of content-addressed parts.
+      "files": ["packages/apps/src/implementation/openapi-source.ts"],
+      "rules": { "executor/no-module-level-mutable-state": "off" },
+    },
+    {
+      "files": ["e2e/**"],
+      "rules": { "executor/no-manual-effect-runtime-in-tests": "error" },
+    },
+    {
+      // The evidence viewer is a browser app, not a scenario.
+      "files": ["e2e/viewer/**"],
+      "rules": { "executor/no-manual-effect-runtime-in-tests": "off" },
+    },
     {
       // Compile-only type checks declare functions and expressions that are never run.
       "files": ["**/*.types.tsx", "**/*.types.ts"],

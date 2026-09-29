@@ -6,13 +6,15 @@ import type {
   jsonSchemaValidator,
 } from "@modelcontextprotocol/sdk/validation/types.js";
 import { ListToolsResultSchema } from "@modelcontextprotocol/sdk/types.js";
-import { Effect, Exit, Schema } from "effect";
+import { Effect, Exit, Option, Schema } from "effect";
 import {
   defaultMcpClientLimits,
   McpError,
+  McpServerHeader,
   McpToolMetadata,
   type McpToolContext,
 } from "../contracts/mcp.ts";
+import { RouterIcon } from "../contracts/router.ts";
 import type { JsonObject } from "../effect.ts";
 import { mcpCall } from "./mcp-call.ts";
 import { jsonSchemaDecoder } from "./schema.ts";
@@ -49,7 +51,10 @@ export function mcpClient(
   timeoutMs: number,
   failure: (phase: McpError["phase"], error: unknown) => McpError | ProviderError,
 ) {
-  /** Follow the complete live catalog, rejecting duplicate tools and cursor loops. */
+  /**
+   * Follow the complete live catalog, rejecting duplicate tools and cursor loops. The server's
+   * self-description comes from the same session's initialization.
+   */
   const list = withClient("discover", (client) =>
     Effect.gen(function* () {
       const tools = new Map<string, typeof McpToolMetadata.Type>();
@@ -58,7 +63,7 @@ export function mcpClient(
       do {
         const page = yield* Effect.tryPromise({
           // This session only reads metadata. listTools() also eagerly compiles
-          // every output validator; mcpOperations validates the selected tool on call.
+          // every output validator; mcpRouter validates the selected tool on call.
           try: (signal) =>
             client.request(
               { method: "tools/list", params: cursor === undefined ? {} : { cursor } },
@@ -89,7 +94,26 @@ export function mcpClient(
           cursors.add(cursor);
         }
       } while (cursor !== undefined);
-      return [...tools.values()];
+      const info = client.getServerVersion();
+      const instructions = client.getInstructions();
+      // The SDK has validated these fields. Icons are display-only, so one that does not fit
+      // is dropped; a header that still does not fit is omitted. Tools stay usable either way.
+      const icons = info?.icons?.flatMap((icon) =>
+        Option.toArray(Schema.decodeUnknownOption(RouterIcon)(icon)),
+      );
+      const server = Schema.decodeUnknownOption(McpServerHeader)({
+        ...(info?.name === undefined ? {} : { name: info.name }),
+        ...(info?.title === undefined ? {} : { title: info.title }),
+        ...(info?.version === undefined ? {} : { version: info.version }),
+        ...(info?.description === undefined ? {} : { description: info.description }),
+        ...(info?.websiteUrl === undefined ? {} : { websiteUrl: info.websiteUrl }),
+        ...(icons === undefined ? {} : { icons }),
+        ...(instructions === undefined ? {} : { instructions }),
+      });
+      return {
+        tools: [...tools.values()],
+        server: Option.getOrElse(server, () => ({})),
+      };
     }),
   ).pipe(Effect.withSpan("provider.mcp.discover"));
 

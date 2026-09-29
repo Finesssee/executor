@@ -409,7 +409,9 @@ export function AppDetailPage({
                 ) : (
                   <div className="max-w-3xl space-y-4 p-5 max-[740px]:p-4">
                     <AppAccounts
-                      key={context?.key ?? "default"}
+                      // Siblings below key on the same profile; a shared key would leave the
+                      // previous profile's accounts mounted after switching.
+                      key={`accounts:${context?.key ?? "default"}`}
                       app={current.app}
                       profile={context?.profile}
                       data={overview}

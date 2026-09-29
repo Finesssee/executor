@@ -1,6 +1,7 @@
 /** Display contracts shared by dashboards. Hosts retain ownership, auth, and transport semantics. */
 import type {
   Account,
+  AccountHealth,
   AccountId,
   App,
   AppId,
@@ -27,12 +28,16 @@ export type AccountSummary = Account & {
   readonly signIn?:
     | { readonly state: "saved"; readonly reconnectAt: Date | null }
     | { readonly state: "reconnect" | "unavailable" };
+  /** Checks by the apps that select the account, when the host exposes them. */
+  readonly health?: AccountHealth;
 };
 /** Safe account detail shared by hosts; management authority remains product-owned. */
 export interface AccountDetail {
   readonly account: AccountSummary;
   readonly provider: Provider;
   readonly apps: readonly App[];
+  /** Each listed app's latest check, when the host exposes checks. */
+  readonly health?: AccountHealth;
   readonly canManage: boolean;
 }
 /** The common inventory contains no product permission or organization fields. */
@@ -106,7 +111,7 @@ export interface AppLinkProps {
   readonly "aria-label"?: string;
   readonly "aria-current"?: "page" | undefined;
 }
-/** Accounts without a detail route can still render their label. */
+/** Accounts have no page of their own; a link opens the account list at that account. */
 export interface AccountLinkProps {
   readonly className?: string;
   readonly account: AccountId;

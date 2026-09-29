@@ -7,6 +7,7 @@ import { cloudAppUiBase } from "./contracts/app-ui.ts";
 import { AppDomainCoordinatorLive, cloudAppDomains } from "./infrastructure/app-domains.ts";
 import { AppRepositoryRecovery, WorkflowHost } from "@executor-js/sdk/core";
 import { AppWorkflows } from "./infrastructure/workflows.ts";
+import { cloudDataSteps } from "./infrastructure/data-steps.ts";
 import {
   OrganizationRemoval,
   OrganizationRemovalHost,
@@ -17,7 +18,7 @@ import {
 import { HostedExecutor, lazyHostedApiDocument } from "@executor-js/hosted-server";
 import { BillingMeter } from "./contracts/billing-meter.ts";
 import { billingBindings } from "./infrastructure/billing.ts";
-import { registryRoutes, gitRoutes } from "@executor-js/app-management";
+import { frameworkDocumentation, registryRoutes, gitRoutes } from "@executor-js/app-management";
 import { hostedAppGitAccess } from "@executor-js/hosted-server/app-management";
 /** Cloudflare composition edge. Alchemy owns the Effect runtime and request scopes. */
 import { publishedSkillRoutes } from "@executor-js/app-templates/executor";
@@ -74,7 +75,7 @@ import { sentryBindings } from "./infrastructure/sentry.ts";
 import { cloudErrorTunnel } from "./implementation/error-tunnel.ts";
 import { cloudSentry } from "./implementation/error-reporting.ts";
 import { cloudOrigin } from "./infrastructure/stage.ts";
-import { AppDataSupervisor, AppDataSupervisorLive } from "./infrastructure/app-data.ts";
+import { appDataSupervisors } from "./infrastructure/app-data.ts";
 import { cloudDevelopment } from "./contracts/development.ts";
 import { requestServices } from "@executor-js/hosted-server";
 import { recordRequestRejections, requestTiming } from "@executor-js/telemetry/http";
@@ -165,7 +166,7 @@ export default Api.make(
     yield* AppWorkflows;
     yield* Provisioning;
     const executor = yield* cloudExecutor(
-      yield* AppDataSupervisor,
+      yield* appDataSupervisors,
       yield* cloudArtifactsTokensLive,
     );
     const billing = yield* billingLive.pipe(Effect.orDie);
@@ -196,6 +197,16 @@ export default Api.make(
       ),
     );
     yield* Cloudflare.Workers.cron("* * * * *", () => dispatch.pipe(lifetime.background));
+    const dataSteps = yield* cloudDataSteps;
+    yield* Cloudflare.Workers.cron("* * * * *", () =>
+      dataSteps.pipe(
+        Effect.provide(executor),
+        reportErrors,
+        Effect.scoped,
+        Effect.catch(() => Effect.logWarning("Data steps unavailable")),
+        lifetime.background,
+      ),
+    );
     yield* Cloudflare.Workers.cron("* * * * *", () =>
       Effect.flatten(AppRepositoryRecovery).pipe(
         Effect.provide(executor),
@@ -247,14 +258,15 @@ export default Api.make(
     const egress = yield* cloudEgress;
     // Only /openapi.json and preparing the Executor catalog app read the document.
     const document = lazyHostedApiDocument(() => executorCloudApiDocument(auth.origin));
-    // Only that app and the published skills read the large authoring reference.
+    // Only framework lookups and the published skills read the large authoring reference.
     const authoring = Effect.promise(() => import("./implementation/executor-authoring.ts")).pipe(
       Effect.map(({ executorAuthoringSkills }) => executorAuthoringSkills),
     );
     const api = cloudApi(document).pipe(
+      Layer.provide(frameworkDocumentation(authoring)),
       Layer.provide(appUi.dashboard),
       Layer.provide(requestServices(auth.appSessions).layer),
-      HttpRouter.provideRequest(catalogLive(authoring, document.document, egress)),
+      HttpRouter.provideRequest(catalogLive(document.document, egress)),
       Layer.provide(schedules),
       Layer.provide(billing),
       Layer.provide(removals),
@@ -338,7 +350,16 @@ export default Api.make(
       browserTelemetry.pipe(HttpRouter.provideRequest(auth.identity)),
       HttpRouter.add("GET", "/", homepage(auth.cookiePrefix, analytics.hero, cloudDashboard(null))),
       HttpRouter.add("GET", "/org/:organizationSlug", organizationRoot),
-      ...dashboardPageRoutes.map((route) => HttpRouter.add("GET", route, cloudDashboard(null))),
+      ...dashboardPageRoutes.map((route) =>
+        route === "/app-auth"
+          ? // Resolved on the server so opening an app never renders an intermediate page.
+            HttpRouter.add("GET", route, appUi.signIn(cloudDashboard(null))).pipe(
+              Layer.provide(requestServices(auth.appSessions).layer),
+              HttpRouter.provideRequest(executor),
+              HttpRouter.provideRequest(auth.identity),
+            )
+          : HttpRouter.add("GET", route, cloudDashboard(null)),
+      ),
       HttpRouter.add("*", "/api/webhooks/:appId/:subscriptionId", hostedWebhookCallback).pipe(
         HttpRouter.provideRequest(executor),
       ),
@@ -406,7 +427,6 @@ export default Api.make(
   }).pipe(
     Effect.provide(
       Layer.mergeAll(
-        AppDataSupervisorLive,
         McpSessionsLive,
         ScheduleCoordinatorLive,
         AppDomainCoordinatorLive,

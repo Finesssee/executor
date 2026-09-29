@@ -9,6 +9,7 @@ import { McpClient } from "../support/mcp-client.ts";
 import { Evidence } from "../support/evidence.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { App } from "../support/contracts.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const Token = Schema.Struct({
   key: Schema.RedactedFromValue(Schema.String),
@@ -71,20 +72,20 @@ const patFixture = Effect.gen(function* () {
       {
         path: "index.ts",
         content: `
-import { defineApp, mutation, object } from "apps";
+import { defineApp, mutation, object, router } from "apps";
 import { always } from "apps/operations/approval";
-export default defineApp({ accounts: {} }, async () => ({  mutations: {
-  echo: mutation({ description: "Echo receipt", input: object({}) }, async () => ({ receipt: ${JSON.stringify(receipt)} })),
-  approved: mutation({ description: "Requires approval", input: object({}), approval: always() }, async () => ({ receipt: ${JSON.stringify(receipt)} }))
-} }));`,
+export default defineApp({ accounts: {} }, async () => ({  tools: router({
+    echo: mutation({ description: "Echo receipt", input: object({}) }, async () => ({ receipt: ${JSON.stringify(receipt)} })),
+  approved: mutation({ description: "Requires approval", input: object({}), approval: always() }, async () => ({ receipt: ${JSON.stringify(receipt)} })),
+  }) }));`,
       },
+      appsManifest,
     ],
   });
   expect(deployed.status).toBe(200);
   const app = yield* body(App, deployed);
   appId = app.id;
-  const code = (tool: string) =>
-    `return await tools[${JSON.stringify(app.slug)}].mutations.${tool}({})`;
+  const code = (tool: string) => `return await tools[${JSON.stringify(app.slug)}].${tool}({})`;
   const ownerClient = yield* mcp.connect(owner.key, "pat-model", { organization });
   return {
     api,
@@ -218,7 +219,7 @@ layer(HostedLive, { excludeTestServices: true })("PAT MCP", (it) => {
             const admin = yield* create(actors.admin);
             const adminClient = yield* mcp.connect(admin.key, "pat-role-change", { organization });
             const { profile } = yield* managementApp(actors.admin);
-            const inspect = `return await tools.executor.profiles[${JSON.stringify(profile.id)}].queries.appManagement_source(${JSON.stringify({ path: { organization, app: app.id } })})`;
+            const inspect = `return await tools.executor.profiles[${JSON.stringify(profile.id)}].appManagement.source(${JSON.stringify({ path: { organization, app: app.id } })})`;
             const before = yield* adminClient.use(
               "An admin PAT can inspect app source",
               (client, signal) =>

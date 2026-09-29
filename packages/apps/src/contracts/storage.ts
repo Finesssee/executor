@@ -5,7 +5,7 @@ import type { Fields, ObjectValue } from "../implementation/schema.ts";
 import type {
   DatabaseSchema,
   DatabaseSession,
-  AppDatabaseError,
+  DatabaseError,
 } from "@executor-js/app-data/contracts";
 
 /** Names for authored operations and tables. */
@@ -23,11 +23,11 @@ export interface AppStorage {
   readonly read: <A, E>(
     schema: DatabaseSchema,
     work: (session: DatabaseSession) => Effect.Effect<A, E>,
-  ) => Effect.Effect<A, E | AppDatabaseError | AppStorageUnavailable | AppStorageError>;
+  ) => Effect.Effect<A, E | DatabaseError | AppStorageUnavailable | AppStorageError>;
   readonly mutate: <A, E>(
     schema: DatabaseSchema,
     work: (session: DatabaseSession) => Effect.Effect<A, E>,
-  ) => Effect.Effect<A, E | AppDatabaseError | AppStorageUnavailable | AppStorageError>;
+  ) => Effect.Effect<A, E | DatabaseError | AppStorageUnavailable | AppStorageError>;
 }
 
 type InputValue<F extends Fields> = {

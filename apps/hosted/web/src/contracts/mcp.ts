@@ -1,6 +1,7 @@
 import { AppId, type Cursor, type DeploymentId, type Tool } from "@executor-js/sdk";
 import type { OrganizationId } from "@executor-js/hosted-server/organization";
 import { HostedClient } from "./api.ts";
+import { hydratedResult, requestKey } from "@executor-js/ui/contracts/http";
 import { BrowserAtoms } from "./telemetry.ts";
 import { Effect, Schema } from "effect";
 import { Atom } from "effect/unstable/reactivity";
@@ -38,9 +39,32 @@ const request = <A>(
     Effect.withSpan(`ui.mcp.${operation}`),
   );
 
+/** The registered client metadata consent shows; Better Auth's public client response decodes to it. */
+const McpClient = Schema.Struct({ client_name: Schema.optional(Schema.String) });
+
 /** Look up registered client metadata; names from the authorization URL are not trusted. */
 export const mcpClientAtom = Atom.family((clientId: string) =>
-  BrowserAtoms.atom(request("client", (options) => mcpAuthorization(options).client(clientId))),
+  BrowserAtoms.atom(
+    request("client", (options) => mcpAuthorization(options).client(clientId)).pipe(
+      Effect.flatMap((client) =>
+        Schema.decodeUnknownEffect(McpClient)(client).pipe(
+          Effect.mapError(
+            () =>
+              new McpConnectionFailed({
+                message:
+                  "This connection request could not be completed. Start again from your MCP client.",
+              }),
+          ),
+        ),
+      ),
+    ),
+  ).pipe(
+    hydratedResult({
+      key: `hosted:mcp-client:${requestKey({ clientId })}`,
+      success: McpClient,
+      error: McpConnectionFailed,
+    }),
+  ),
 );
 
 /** The chosen organization belongs to this consent POST, not a shared browser preference. */

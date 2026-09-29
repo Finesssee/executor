@@ -31,8 +31,16 @@ const basicCredentials = (header: string | undefined) => {
   }
 };
 
-/** The browser simulates consent; the real Executor validates state and completes its own callback. */
-export const oauthRecoveryIssuer = (callbackOrigin: string, interactive = false) =>
+/**
+ * The browser simulates consent; the real Executor validates state and completes its own callback.
+ * Hosted Executor advertises a callback relay, so by default the browser returns to its
+ * `/oauth/callback` page. Local Executor serves its redirect URI directly; pass `"redirect"`.
+ */
+export const oauthRecoveryIssuer = (
+  callbackOrigin: string,
+  interactive = false,
+  browserReturnTo: "relay" | "redirect" = "relay",
+) =>
   Effect.gen(function* () {
     const address = yield* Deferred.make<string>();
     let discoveryFails = false;
@@ -40,6 +48,12 @@ export const oauthRecoveryIssuer = (callbackOrigin: string, interactive = false)
     let tokenFails = false;
     const codes = new Map<string, { clientId: string; redirect: string; challenge: string }>();
     const redirects = new Set([`${callbackOrigin}/api/oauth/callback`]);
+    const browserReturnUrl = (callback: URL) => {
+      if (browserReturnTo === "redirect") return callback;
+      const relay = new URL("/oauth/callback", callbackOrigin);
+      relay.search = callback.search;
+      return relay;
+    };
     const observations: Array<{
       authorization: boolean;
       original: boolean;
@@ -124,8 +138,7 @@ export const oauthRecoveryIssuer = (callbackOrigin: string, interactive = false)
             const denied = new URL(redirect);
             denied.searchParams.set("error", "access_denied");
             denied.searchParams.set("state", parameters.get("state") ?? "");
-            const browserReturn = new URL("/oauth/callback", callbackOrigin);
-            browserReturn.search = denied.search;
+            const browserReturn = browserReturnUrl(denied);
             return HttpServerResponse.empty({
               status: 302,
               headers: { location: browserReturn.href },
@@ -138,8 +151,7 @@ export const oauthRecoveryIssuer = (callbackOrigin: string, interactive = false)
           callback.searchParams.set("state", parameters.get("state") ?? "");
           // The managed host advertises a separate callback relay. Keep its exact
           // URI for the token exchange and model the relay's browser return here.
-          const browserReturn = new URL("/oauth/callback", callbackOrigin);
-          browserReturn.search = callback.search;
+          const browserReturn = browserReturnUrl(callback);
           return HttpServerResponse.empty({
             status: 302,
             headers: { location: browserReturn.href },

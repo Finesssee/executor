@@ -73,7 +73,8 @@ const fixture = Effect.gen(function* () {
     rows: () =>
       Effect.gen(function* () {
         const response = yield* api.request(actors.owner, "POST", `${path}/tools/call`, {
-          tool: "queries.rows",
+          tool: "rows",
+          kind: "query",
           input: {},
         });
         expect(response.status).toBe(200);

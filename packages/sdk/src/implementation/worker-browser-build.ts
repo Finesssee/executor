@@ -1,6 +1,6 @@
 /** Narrow adapter for worker-bundler's pinned esbuild plugin hook. No filesystem or Node runtime is needed. */
 import { InMemoryFileSystem } from "@cloudflare/worker-bundler";
-import { RuntimeBuildFailed } from "../contracts/runtime.ts";
+import { boundBuildMessage, describeBuildCause, RuntimeBuildFailed } from "../contracts/runtime.ts";
 import type { SourceFiles } from "../contracts/deployment.ts";
 import { isBrowserAppImport, isServerUiImport, uiContentType } from "./ui-build.ts";
 import type { UiBuildEntry, UiBuildFile, UiBuildPlan } from "../contracts/ui-build.ts";
@@ -138,5 +138,12 @@ export const browserBuild = (
     };
   }).pipe(
     Effect.provide(Path.layer),
-    Effect.mapError(() => new RuntimeBuildFailed({ stage: "compile" })),
+    Effect.mapError((cause) =>
+      Schema.is(RuntimeBuildFailed)(cause)
+        ? cause
+        : new RuntimeBuildFailed({
+            stage: "compile",
+            message: boundBuildMessage(`The app UI failed to build: ${describeBuildCause(cause)}`),
+          }),
+    ),
   );

@@ -7,8 +7,13 @@ import { Schema } from "effect";
 import { StorageError } from "./shared.ts";
 import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi";
 import { AccountId, AppCodeId, AppId, DeploymentId, OwnerId, ProviderId } from "./shared.ts";
-import { AccountNotFound } from "./account.ts";
-import { ProviderDefinition } from "./provider.ts";
+import {
+  AccountFieldsInput,
+  AccountFieldsInvalid,
+  AccountNotFound,
+  CredentialCheck,
+} from "./account.ts";
+import { AuthMethodInvalid, AuthMethodName, ProviderDefinition } from "./provider.ts";
 import { SourceCommit, sourceErrors, SourceSnapshot } from "./source.ts";
 import {
   AppDeploymentChanged,
@@ -29,6 +34,8 @@ export const AccountRequirement = Schema.Struct({
   provider: ProviderId,
   definition: ProviderDefinition,
   cardinality: Schema.Literals(["one", "many"]),
+  /** This deployment's provider defines an account check for the slot. */
+  health: Schema.optionalKey(Schema.Literal(true)),
 });
 
 export type AccountRequirement = typeof AccountRequirement.Type;
@@ -234,6 +241,14 @@ export class AppWorkflowsActive extends Schema.TaggedError<AppWorkflowsActive>()
 
 /** Canonical operation inputs; Promise and HTTP callers use the same validators. */
 export const AppInputs = {
+  /** Credentials to check with the app's check for their provider; never saved. */
+  checkCredentials: Schema.Struct({
+    app: AppId,
+    owner: Schema.optional(OwnerId),
+    provider: ProviderId,
+    method: AuthMethodName,
+    fields: AccountFieldsInput,
+  }),
   create: Schema.Struct({ owner: OwnerId, name: AppName, files: SourceFiles }),
   workspace: Schema.Struct({ app: AppId, owner: Schema.optional(OwnerId) }),
   commit: Schema.Struct({
@@ -287,6 +302,22 @@ const ownerQuery = { owner: AppInputs.get.fields.owner };
 
 /** Creation and deployment share a build pipeline; copies own independent source. */
 export const AppsGroup = HttpApiGroup.make("apps")
+  .add(
+    HttpApiEndpoint.post("checkCredentials", "/v1/apps/:app/credential-checks", {
+      params: appParams,
+      query: ownerQuery,
+      payload: Schema.Struct({
+        provider: AppInputs.checkCredentials.fields.provider,
+        method: AppInputs.checkCredentials.fields.method,
+        fields: AppInputs.checkCredentials.fields.fields,
+      }),
+      success: Schema.NullOr(CredentialCheck),
+      error: [StorageError, AppNotFound, AuthMethodInvalid, AccountFieldsInvalid],
+    }).annotate(
+      OpenApi.Description,
+      "Check credentials before saving them, with this app's check for their provider. Nothing is saved or recorded. Returns null when the app defines no check for the provider.",
+    ),
+  )
   .add(
     HttpApiEndpoint.post("create", "/v1/apps", {
       payload: AppInputs.create,

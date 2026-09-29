@@ -50,16 +50,21 @@ import {
   TextStrikethroughIcon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon, type IconSvgElement } from "@hugeicons/react";
+import { useAtomValue } from "@effect/atom-react";
+import { AsyncResult } from "effect/unstable/reactivity";
+import type { HighlighterCore } from "shiki/core";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Button } from "../components/button.tsx";
 import { Input } from "../components/input.tsx";
+import { highlighterAtom } from "../../contracts/highlight.ts";
 import { cn } from "../lib/utils.ts";
+import { codeBlockHighlight, refreshCodeBlockHighlight } from "./code-block-highlight.ts";
 import { preserveMarkdown } from "./markdown-preserve.ts";
 import { markdownProse } from "./markdown-prose.ts";
 
-/** Editing-only additions: inline code chips, quotes, rules and GFM task items. */
+/** Editing-only additions: code block colors, inline code chips, quotes, rules and GFM task items. */
 const editorProse =
-  "[&_.ProseMirror]:min-h-40 [&_.ProseMirror]:outline-none [&_.ProseMirror]:before:content-[attr(data-placeholder)] [&_.ProseMirror]:before:float-left [&_.ProseMirror]:before:h-0 [&_.ProseMirror]:before:pointer-events-none [&_.ProseMirror]:before:text-muted-foreground [&_:not(pre)>code]:rounded [&_:not(pre)>code]:bg-muted [&_:not(pre)>code]:px-1 [&_:not(pre)>code]:py-0.5 [&_blockquote]:my-3 [&_blockquote]:border-l-2 [&_blockquote]:pl-4 [&_blockquote]:text-muted-foreground [&_hr]:my-6 [&_a]:underline [&_li>p]:my-1 [&_td>p]:my-0 [&_th>p]:my-0 [&_li[data-item-type=task]]:list-none [&_li[data-item-type=task]]:before:mr-2 [&_li[data-item-type=task]]:before:content-['☐'] [&_li[data-item-type=task][data-checked=true]]:before:content-['☑'] [&_li[data-item-type=task]>p]:inline [&_.selectedCell]:bg-accent";
+  "[&_.ProseMirror]:min-h-40 [&_.ProseMirror]:outline-none [&_.ProseMirror]:before:content-[attr(data-placeholder)] [&_.ProseMirror]:before:float-left [&_.ProseMirror]:before:h-0 [&_.ProseMirror]:before:pointer-events-none [&_.ProseMirror]:before:text-muted-foreground [&_:not(pre)>code]:rounded [&_:not(pre)>code]:bg-muted [&_:not(pre)>code]:px-1 [&_:not(pre)>code]:py-0.5 [&_blockquote]:my-3 [&_blockquote]:border-l-2 [&_blockquote]:pl-4 [&_blockquote]:text-muted-foreground [&_hr]:my-6 [&_a]:underline [&_li>p]:my-1 [&_td>p]:my-0 [&_th>p]:my-0 [&_li[data-item-type=task]]:list-none [&_li[data-item-type=task]]:before:mr-2 [&_li[data-item-type=task]]:before:content-['☐'] [&_li[data-item-type=task][data-checked=true]]:before:content-['☑'] [&_li[data-item-type=task]>p]:inline [&_.selectedCell]:bg-accent [@media(prefers-color-scheme:_dark)]:[&_pre_span[style]]:text-[color:var(--shiki-dark)]!";
 
 /** The GFM preset gives title-less images a null title, which the schema rejects and drops. */
 const imageTitle = $remark("imageTitle", () => () => (tree) => {
@@ -148,6 +153,14 @@ function Surface({
   const [slash, setSlash] = useState<Slash | null>(null);
   const [active, setActive] = useState(0);
   const view = useRef<EditorView | null>(null);
+  const highlighter = useAtomValue(highlighterAtom);
+  // The ProseMirror plugin outlives renders; it reads the loaded highlighter from here.
+  const loaded = useRef<HighlighterCore | undefined>(undefined);
+  useEffect(() => {
+    if (!AsyncResult.isSuccess(highlighter)) return;
+    loaded.current = highlighter.value;
+    if (view.current !== null) refreshCodeBlockHighlight(view.current);
+  }, [highlighter]);
   // A dismissed `/` stays closed until the person types a different one.
   const dismissed = useRef<number | null>(null);
   const options = slash
@@ -281,6 +294,7 @@ function Surface({
       .use(clipboard)
       .use(listener)
       .use(imageTitle)
+      .use($prose(() => codeBlockHighlight(() => loaded.current)))
       .use(menus);
   }, []);
 

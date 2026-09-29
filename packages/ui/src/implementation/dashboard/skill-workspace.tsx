@@ -26,6 +26,7 @@ import {
 } from "../components/dialog.tsx";
 import { SkillFileEditor, type SkillEditing, type Committed } from "./skill-editor.tsx";
 import { SkillContent } from "./skill-content.tsx";
+import { SkillSize } from "./skill-size.tsx";
 import { skillDescription, splitSkillDocument } from "./skill-document.ts";
 
 interface Skill {
@@ -104,6 +105,7 @@ export function SkillWorkspace<E>({
         <span className="truncate text-foreground">
           {file?.path === "SKILL.md" ? "Instructions" : file?.path}
         </span>
+        {file !== undefined && <SkillSize contents={[file.content]} className="shrink-0" />}
       </div>
       <div className="ml-auto flex items-center gap-1">{actions}</div>
     </div>
@@ -157,6 +159,10 @@ export function SkillWorkspace<E>({
                     </span>
                   )}
                 </button>
+                <SkillSize
+                  contents={skill.files.map((item) => item.content)}
+                  className="block pb-1 pl-[3.25rem] text-[11px]"
+                />
                 {expanded && (
                   <div className="ml-4 border-l pl-2">
                     {[...skill.files]

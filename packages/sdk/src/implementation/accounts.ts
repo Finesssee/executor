@@ -5,7 +5,7 @@ import { Clock, type Crypto, Effect, Schema } from "effect";
 import { Account, AccountNotFound } from "../contracts/account.ts";
 import type { Executor, ResourceLifecycle } from "../contracts/executor.ts";
 import { Provider, ProviderNotFound } from "../contracts/provider.ts";
-import { AccountId, StorageError, type OwnerId } from "../contracts/shared.ts";
+import { AccountId, StorageError, type OwnerId, type ProviderId } from "../contracts/shared.ts";
 import { StoredAccount, type Credentials } from "../contracts/storage.ts";
 import { query, transaction, type Query } from "./database.ts";
 import { validateFields } from "./provider.ts";
@@ -23,6 +23,24 @@ export const storedAccount = (db: Query, account: AccountId, owner?: OwnerId) =>
     return yield* Schema.decodeUnknownEffect(StoredAccount)(row).pipe(
       Effect.mapError(() => new StorageError()),
     );
+  });
+
+/**
+ * An account created without a name starts with the owner's first free "Default" label for its
+ * provider, so it can be named once its identity is known. Read inside the creating transaction.
+ */
+export const defaultLabel = (tx: Query, owner: OwnerId, provider: ProviderId) =>
+  Effect.gen(function* () {
+    const rows = yield* query(() =>
+      tx.findMany("accounts", {
+        select: ["label"],
+        where: (b) => b.and(b("owner", "=", owner), b("provider", "=", provider)),
+      }),
+    );
+    const labels = new Set(rows.map((row) => row.label));
+    let label = "Default";
+    for (let number = 2; labels.has(label); number++) label = `Default ${number}`;
+    return label;
   });
 
 /** Apply the caller's owner filter before reading or mutating a saved account. */
@@ -61,24 +79,27 @@ export const makeAccounts = (
         input.method,
         input.fields,
       );
-      const account = {
+      const identity = {
         id: AccountId.make(
           `acc_${yield* crypto.randomUUIDv4.pipe(Effect.mapError(() => new StorageError()))}`,
         ),
         owner: input.owner,
         provider: provider.id,
         method: input.method,
-        label: input.label,
         createdAt: new Date(yield* Clock.currentTimeMillis),
       };
-      const encryptedCredentials = yield* credentials.encrypt(account.id, fields);
-      yield* transaction(db, (tx) =>
+      const encryptedCredentials = yield* credentials.encrypt(identity.id, fields);
+      return yield* transaction(db, (tx) =>
         Effect.gen(function* () {
+          const account = {
+            ...identity,
+            label: input.label ?? (yield* defaultLabel(tx, input.owner, provider.id)),
+          };
           yield* query(() => tx.create("accounts", { ...account, encryptedCredentials }));
           if (lifecycle) yield* lifecycle.accountCreated(account);
+          return account;
         }),
       );
-      return account;
     }).pipe(Effect.withSpan("sdk.accounts.add")),
   get: (input: Parameters<Executor["accounts"]["get"]>[0]) =>
     Effect.gen(function* () {
@@ -181,6 +202,9 @@ export const makeAccounts = (
             );
             yield* query(() =>
               tx.deleteMany("oauthGrants", { where: (b) => b("id", "=", input.account) }),
+            );
+            yield* query(() =>
+              tx.deleteMany("accountChecks", { where: (b) => b("account", "=", input.account) }),
             );
             yield* query(() =>
               tx.deleteMany("accounts", { where: (b) => b("id", "=", input.account) }),

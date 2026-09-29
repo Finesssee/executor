@@ -1,4 +1,8 @@
-import { LocalAppAccess, LocalAppManagementApi } from "../contracts/app-management.ts";
+import {
+  LocalAppAccess,
+  LocalAppManagementApi,
+  LocalFrameworkApi,
+} from "../contracts/app-management.ts";
 import { DashboardAccess } from "../contracts/dashboard.ts";
 import { dashboardAccess } from "./dashboard.ts";
 /** Local authoring shares pairing, persistent app IDs, and the ordinary Git source store. */
@@ -8,6 +12,8 @@ import {
   AppAccessDenied,
   AppManagementHost,
   appManagementRoutes,
+  frameworkDocumentation,
+  frameworkRoutes,
   gitRoutes,
 } from "@executor-js/app-management";
 import {
@@ -36,6 +42,8 @@ export const localAppManagement = (
     readonly registry: Registry;
     readonly blobs: BlobStorage;
   },
+  /** Packaged authoring assets; they include this build's framework reference. */
+  assets: readonly { readonly path: string; readonly content: string }[],
 ) =>
   Effect.gen(function* () {
     const access = Layer.effect(
@@ -90,7 +98,13 @@ export const localAppManagement = (
           }).pipe(Effect.mapError(() => new AppAccessDenied({ reason: "forbidden" }))),
       }),
     );
-    return Layer.mergeAll(appManagementRoutes(LocalAppManagementApi), gitRoutes).pipe(
+    return Layer.mergeAll(
+      appManagementRoutes(LocalAppManagementApi),
+      frameworkRoutes(LocalFrameworkApi).pipe(
+        Layer.provide(frameworkDocumentation(Effect.succeed(assets))),
+      ),
+      gitRoutes,
+    ).pipe(
       Layer.provide(access),
       HttpRouter.provideRequest(gitAccess),
       HttpRouter.provideRequest(

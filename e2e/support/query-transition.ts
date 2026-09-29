@@ -25,6 +25,7 @@ export const holdQuery = (
         ([key, value]) => url.searchParams.get(key) === value,
       );
     const intercept = (route: Route) => {
+      // oxlint-disable-next-line executor/no-manual-effect-runtime-in-tests -- Playwright route handlers must return a Promise
       const request = Effect.runPromise(
         Effect.gen(function* () {
           if (

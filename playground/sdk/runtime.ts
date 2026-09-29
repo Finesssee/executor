@@ -6,6 +6,8 @@ import { HttpServer, HttpServerRequest, HttpServerResponse } from "effect/unstab
 import { nodeRuntime, filesystemBlobStore } from "@executor-js/sdk/node";
 import { AccountId, createAppRuntime } from "@executor-js/sdk";
 import type { ResolvedAccountsInput } from "apps/contracts";
+import apps from "apps/package.json" with { type: "json" };
+import playground from "./package.json" with { type: "json" };
 
 /** Build once, use two account contexts, refresh the catalog, and reload retained output. */
 export async function runtimeWalkthrough(directory: string) {
@@ -49,9 +51,17 @@ export async function runtimeWalkthrough(directory: string) {
         });
         const built = await runtime.build({
           files: [
+            { path: "index.ts", content: source },
             {
-              path: "index.ts",
-              content: source,
+              path: "package.json",
+              // The fixture uses Effect directly, so it declares this workspace's Effect packages.
+              content: JSON.stringify({
+                dependencies: {
+                  apps: apps.version,
+                  effect: playground.dependencies.effect,
+                  "@effect/platform-node": playground.dependencies["@effect/platform-node"],
+                },
+              }),
             },
           ],
         });
@@ -84,7 +94,8 @@ export async function runtimeWalkthrough(directory: string) {
           build: built.build,
           database: built.requirements.database !== undefined,
           accounts: first,
-          tool: "queries.alpha1",
+          tool: "alpha1",
+          kind: "query",
           input: {},
         });
         const secondResult = await runtime.call({
@@ -92,7 +103,8 @@ export async function runtimeWalkthrough(directory: string) {
           build: built.build,
           database: built.requirements.database !== undefined,
           accounts: second,
-          tool: "queries.beta",
+          tool: "beta",
+          kind: "query",
           input: { count: 3 },
         });
         revision = 2;
@@ -110,7 +122,8 @@ export async function runtimeWalkthrough(directory: string) {
           build: built.build,
           database: built.requirements.database !== undefined,
           accounts: first,
-          tool: "queries.alpha2",
+          tool: "alpha2",
+          kind: "query",
           input: {},
         });
         const nodeResult = await reloaded.call({
@@ -118,7 +131,8 @@ export async function runtimeWalkthrough(directory: string) {
           build: built.build,
           database: built.requirements.database !== undefined,
           accounts: first,
-          tool: "queries.node",
+          tool: "node",
+          kind: "query",
           input: {},
         });
         return {

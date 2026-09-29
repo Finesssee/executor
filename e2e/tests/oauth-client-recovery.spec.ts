@@ -10,7 +10,9 @@ import { Resource } from "../support/contracts.ts";
 import { Target } from "../support/platform.ts";
 import { Evidence } from "../support/evidence.ts";
 import { oauthRecoveryIssuer, recoveryClients } from "../support/oauth-recovery-issuer.ts";
+import { nameConnectedAccount } from "../support/name-account.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const App = Schema.Struct({
   id: Schema.String,
@@ -51,10 +53,11 @@ layer(HostedLive, { excludeTestServices: true })("OAuth client recovery", (it) =
           files: [
             {
               path: "index.ts",
-              content: `import { defineApp, defineProvider, oauth2 } from "apps";
+              content: `import { defineApp, defineProvider, oauth2, router } from "apps";
 const service=defineProvider({name:"Recoverable OAuth",auth:{oauth:oauth2({authorizationUrl:${JSON.stringify(issuer.origin + "/authorize")},tokenUrl:${JSON.stringify(issuer.origin + "/token")},scopes:["read"],tokenEndpointAuthMethod:"client_secret_basic"})}});
-export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
+export default defineApp({accounts:{service}},async()=>({tools: router({})}));`,
             },
+            appsManifest,
           ],
         });
         expect(deployed.status).toBe(200);
@@ -126,14 +129,13 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
           page.goto(`/org/${actors.organization.slug}/apps/${app.id}?view=accounts`),
         );
         yield* browser.use("Choose an account for the app", (page) =>
-          page.getByRole("button", { name: "Add Recoverable OAuth account", exact: true }).click(),
+          page.getByRole("button", { name: "Connect new account", exact: true }).click(),
         );
         yield* issuer.configure({ tokenFails: true });
         yield* browser.use("Enter a valid client while the service is unavailable", (page) =>
           page
             .getByLabel("Client secret", { exact: true })
             .waitFor({ state: "visible" })
-            .then(() => page.getByLabel("Account name", { exact: true }).fill("Recovery account"))
             .then(() =>
               page.getByLabel("Client ID", { exact: true }).fill(recoveryClients.original.clientId),
             )
@@ -162,16 +164,10 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
         yield* browser.use("Retry reopens the unsaved client fields", (page) =>
           page.getByRole("link", { name: "Try again", exact: true }).click(),
         );
-        expect(
-          yield* browser.use("Keep the account name across the retry", (page) =>
-            page.getByLabel("Account name", { exact: true }).inputValue(),
-          ),
-        ).toBe("Recovery account");
         yield* browser.use("Enter a rejected secret", (page) =>
           page
             .getByLabel("Client secret", { exact: true })
             .waitFor({ state: "visible" })
-            .then(() => page.getByLabel("Account name", { exact: true }).fill("Recovery account"))
             .then(() =>
               page.getByLabel("Client ID", { exact: true }).fill(recoveryClients.original.clientId),
             )
@@ -192,11 +188,6 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
         yield* browser.use("Reopen the client fields", (page) =>
           page.getByRole("link", { name: "Update client details", exact: true }).click(),
         );
-        expect(
-          yield* browser.use("Keep the account name across the callback", (page) =>
-            page.getByLabel("Account name", { exact: true }).inputValue(),
-          ),
-        ).toBe("Recovery account");
         // Pasted secrets often carry surrounding whitespace; the issuer compares secrets exactly.
         yield* browser.use("Correct the client and finish connecting", (page) =>
           page
@@ -210,9 +201,10 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
             .then(() =>
               page.getByRole("button", { name: "Connect Recoverable OAuth", exact: true }).click(),
             )
+            .then(() => nameConnectedAccount(page, "Recovery account"))
             .then(() =>
               page
-                .getByRole("link", { name: "Recovery account", exact: true })
+                .getByRole("radio", { name: "Recovery account", exact: true, checked: true })
                 .waitFor({ state: "visible" }),
             ),
         );
@@ -296,7 +288,13 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
                 .click(),
             )
             .then(() =>
-              page.getByRole("heading", { name: /Recovery account/ }).waitFor({ state: "visible" }),
+              page
+                .waitForURL((url) => url.searchParams.get("account") === savedAccount)
+                .then(() =>
+                  page
+                    .getByRole("button", { name: /^Manage Recovery account/ })
+                    .waitFor({ state: "visible" }),
+                ),
             ),
         );
         expect(

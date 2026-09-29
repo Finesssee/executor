@@ -13,6 +13,7 @@ import {
   oauth2,
   object,
   string,
+  router,
 } from "apps";
 
 /** Gmail OAuth declaration; the host supplies its approved client configuration. */
@@ -78,7 +79,7 @@ const accounts = { mailboxes: gmail.many() };
 export default defineApp(
   { accounts },
   {
-    queries: {
+    tools: router({
       listMessages: query(
         {
           description:
@@ -106,6 +107,6 @@ export default defineApp(
           return inboxes;
         },
       ),
-    },
+    }),
   },
 );

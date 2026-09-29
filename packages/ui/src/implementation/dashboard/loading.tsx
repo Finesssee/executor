@@ -40,17 +40,18 @@ export function AccountRowsSkeleton() {
     <div role="status" aria-label="Loading accounts" className="overflow-hidden rounded-lg border">
       <div
         aria-hidden
-        className="grid grid-cols-[minmax(200px,_1.5fr)_minmax(130px,_0.8fr)_minmax(170px,_1fr)] items-center gap-6.25 bg-muted px-4 py-[9px] text-[11px] text-muted-foreground max-[1000px]:grid-cols-[minmax(0,_1.3fr)_minmax(0,_1fr)] max-[1000px]:gap-4 max-[740px]:hidden"
+        className="grid grid-cols-[minmax(200px,_1.5fr)_minmax(130px,_0.8fr)_minmax(170px,_1fr)_auto] items-center gap-6.25 bg-muted px-4 py-[9px] text-[11px] text-muted-foreground max-[1000px]:grid-cols-[minmax(0,_1.3fr)_minmax(0,_1fr)_auto] max-[1000px]:gap-4 max-[740px]:hidden"
       >
         <span>Account</span>
         <span className="max-[1000px]:hidden">Added</span>
         <span>Apps</span>
+        <span className="size-8" />
       </div>
       {Array.from({ length: 5 }, (_, index) => (
         <div
           key={index}
           aria-hidden
-          className="grid min-h-16 grid-cols-[minmax(200px,_1.5fr)_minmax(130px,_0.8fr)_minmax(170px,_1fr)] items-center gap-6.25 border-t px-4 py-3 max-[1000px]:grid-cols-[minmax(0,_1.3fr)_minmax(0,_1fr)] max-[1000px]:gap-4 max-[740px]:grid-cols-1 max-[740px]:gap-3 max-[740px]:first:border-t-0"
+          className="grid min-h-16 grid-cols-[minmax(200px,_1.5fr)_minmax(130px,_0.8fr)_minmax(170px,_1fr)_auto] items-center gap-6.25 border-t px-4 py-3 max-[1000px]:grid-cols-[minmax(0,_1.3fr)_minmax(0,_1fr)_auto] max-[1000px]:gap-4 max-[740px]:grid-cols-[minmax(0,_1fr)_auto] max-[740px]:gap-3 max-[740px]:first:border-t-0"
         >
           <div className="flex items-center gap-3">
             <Skeleton className="size-8.5 shrink-0 rounded-md" />
@@ -60,7 +61,8 @@ export function AccountRowsSkeleton() {
             </div>
           </div>
           <Skeleton className="h-3 w-20 max-[1000px]:hidden" />
-          <Skeleton className="h-5 w-28" />
+          <Skeleton className="h-5 w-28 max-[740px]:col-span-2" />
+          <Skeleton className="size-8 rounded-md max-[740px]:col-start-2 max-[740px]:row-start-1" />
         </div>
       ))}
       <span className="sr-only">Loading accounts…</span>

@@ -106,7 +106,7 @@ export const AccountConnectApi = HttpApi.make("account-connect").add(
         payload: Schema.Struct({
           ...ConnectionGrant.fields,
           method: Schema.NonEmptyString,
-          label: Schema.NonEmptyString,
+          label: Schema.optional(Schema.NonEmptyString),
           fields: AccountFieldsInput,
         }),
         success: Account,
@@ -125,7 +125,7 @@ export const AccountConnectApi = HttpApi.make("account-connect").add(
         payload: Schema.Struct({
           ...ConnectionGrant.fields,
           method: Schema.NonEmptyString,
-          label: Schema.NonEmptyString,
+          label: Schema.optional(Schema.NonEmptyString),
           client: Schema.optional(OAuthClientInput),
         }),
         success: OAuthStartResult,

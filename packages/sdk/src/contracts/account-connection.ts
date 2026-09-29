@@ -75,18 +75,21 @@ export const GetAccountConnection = Schema.Struct({
   connection: AccountConnectionId,
   owner: Schema.optional(OwnerId),
 });
-/** Save one set of fields. Successful retries return the same account. */
+/** Save one set of fields. Successful retries return the same account. Without a label, the account is named when created. */
 export const SubmitAccountConnection = Schema.Struct({
   ...GetAccountConnection.fields,
   method: AuthMethodName,
-  label: Schema.NonEmptyString,
+  label: Schema.optional(Schema.NonEmptyString),
   fields: AccountFieldsInput,
 });
-/** OAuth setup is bound to the connection's owner and provider. */
+/**
+ * OAuth setup is bound to the connection's owner and provider. Without a label, the account is
+ * named when it is created, after sign-in, so it can be renamed once its identity is known.
+ */
 export const StartConnectionOAuth = Schema.Struct({
   ...GetAccountConnection.fields,
   method: AuthMethodName,
-  label: Schema.NonEmptyString,
+  label: Schema.optional(Schema.NonEmptyString),
   redirectUri: Schema.optional(HttpUrl),
   client: Schema.optional(OAuthClientInput),
 });

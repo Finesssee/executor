@@ -2,7 +2,15 @@
 import { SentryTransportFailed } from "./error-reporting.ts";
 import { CurrentRuntimeContext } from "alchemy/RuntimeContext";
 import { ByteSize, Effect, Option, Schema } from "effect";
-import { HttpIncomingMessage, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
+import {
+  FetchHttpClient,
+  HttpBody,
+  HttpClient,
+  HttpClientRequest,
+  HttpIncomingMessage,
+  HttpServerRequest,
+  HttpServerResponse,
+} from "effect/unstable/http";
 
 const Settings = Schema.Struct({
   localTest: Schema.optional(Schema.Literal(true)),
@@ -53,26 +61,30 @@ export const cloudErrorTunnel = Effect.gen(function* () {
       config.localTest === true,
     );
     if (!target) return HttpServerResponse.empty({ status: 400 });
-    const response = yield* Effect.tryPromise({
-      try: async (signal) => {
-        const response = await fetch(target, {
-          method: "POST",
-          signal,
-          body: bytes,
-          headers: { "content-type": "application/x-sentry-envelope" },
-          redirect: "manual",
-        });
-        if (response.status >= 300 && response.status < 400) throw new SentryTransportFailed();
-        const headers: Record<string, string> = {};
-        for (const name of ["x-sentry-rate-limits", "retry-after"]) {
-          const value = response.headers.get(name);
-          if (value !== null) headers[name] = value;
-        }
-        await response.arrayBuffer();
-        return { status: response.status, headers };
-      },
-      catch: () => new SentryTransportFailed(),
-    }).pipe(Effect.timeout("5 seconds"), Effect.option);
+    const response = yield* Effect.gen(function* () {
+      const response = yield* HttpClient.execute(
+        HttpClientRequest.post(target, {
+          body: HttpBody.uint8Array(bytes, "application/x-sentry-envelope"),
+        }),
+      );
+      if (response.status >= 300 && response.status < 400)
+        return yield* new SentryTransportFailed();
+      const headers: Record<string, string> = {};
+      for (const name of ["x-sentry-rate-limits", "retry-after"]) {
+        const value = response.headers[name];
+        if (value !== undefined) headers[name] = value;
+      }
+      yield* response.arrayBuffer;
+      return { status: response.status, headers };
+    }).pipe(
+      // Sentry is a third party: no client span or trace headers leave with the envelope.
+      Effect.provideService(HttpClient.TracerDisabledWhen, () => true),
+      Effect.provideService(HttpClient.TracerPropagationEnabled, false),
+      Effect.provideService(FetchHttpClient.RequestInit, { redirect: "manual" }),
+      Effect.provide(FetchHttpClient.layer),
+      Effect.timeout("5 seconds"),
+      Effect.option,
+    );
     return HttpServerResponse.empty(Option.isSome(response) ? response.value : { status: 502 });
   });
 });

@@ -9,6 +9,7 @@ import { Resource } from "../support/contracts.ts";
 import { Target } from "../support/platform.ts";
 import { accountToolSource, checkToolAccountContext } from "../support/tool-account-context.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 layer(TestLive, { excludeTestServices: true })("Local tool account context", (it) => {
   it.effect(scenarios.localToolAccountContext.title, (context) =>
@@ -33,7 +34,7 @@ layer(TestLive, { excludeTestServices: true })("Local tool account context", (it
           {
             owner: "local",
             name: `Account tools ${randomUUID().slice(0, 8)}`,
-            files: [{ path: "index.ts", content: accountToolSource }],
+            files: [{ path: "index.ts", content: accountToolSource }, appsManifest],
           },
           headers,
         );

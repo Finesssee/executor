@@ -25,7 +25,7 @@ record does not connect their updates. Changing or deleting the original does
 not change the copy.
 
 Each app has a slug. That slug is the namespace an agent uses:
-`tools.<app-slug>.queries.<name>`.
+`tools.<app-slug>.<name>`.
 
 ## Deployment
 

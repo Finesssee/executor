@@ -10,6 +10,7 @@ import { HostedLive, withHostedCase } from "../support/case.ts";
 import { App } from "../support/contracts.ts";
 import { Evidence } from "../support/evidence.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 /** Reads mounted on every app tab; each one used to repeat every five seconds. */
 const shared = ["app", "profiles", "inventory"] as const;
@@ -45,13 +46,14 @@ layer(HostedLive, { excludeTestServices: true })("Dashboard request volume", (it
             {
               path: "index.ts",
               content: `
-import { defineApp, mutation, object, string } from "apps";
+import { defineApp, mutation, object, string, router } from "apps";
 export default defineApp({ accounts: {} }, async () => ({
-  mutations: { echo: mutation({ description: "Echo text", input: object({ text: string() }) },
-    async (_, input) => input.text) }
+  tools: router({ echo: mutation({ description: "Echo text", input: object({ text: string() }) },
+    async (_, input) => input.text) })
 }));
 `,
             },
+            appsManifest,
           ],
         });
         expect(deployed.status).toBe(200);

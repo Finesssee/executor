@@ -9,7 +9,7 @@ import {
   HttpApiMiddleware,
   HttpApiSchema,
 } from "effect/unstable/httpapi";
-import { Account, App, OwnerId, HttpUrl, StorageError } from "@executor-js/sdk/core";
+import { Account, AccountHealth, App, OwnerId, HttpUrl, StorageError } from "@executor-js/sdk/core";
 import {
   OrganizationIconUrl,
   OrganizationIconKey,
@@ -149,7 +149,10 @@ export class OrganizationIcons extends Context.Service<
 export const Inventory = Schema.Struct({
   profiles: Schema.Array(Profile),
   apps: Schema.Array(App),
-  accounts: Schema.Array(Account),
+  /** Each account's checks by the apps listed here; reading them never runs a check. */
+  accounts: Schema.Array(
+    Schema.Struct({ ...Account.fields, health: Schema.optionalKey(AccountHealth) }),
+  ),
   accountSetup: Schema.Struct({ redirectUri: HttpUrl }),
 });
 export type Inventory = typeof Inventory.Type;

@@ -7,8 +7,15 @@ import { Browser } from "../support/browser.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { App, Resource } from "../support/contracts.ts";
 import { Evidence } from "../support/evidence.ts";
+import {
+  accountNameField,
+  accountNamePrompt,
+  nameAccountDialog,
+  nameConnectedAccount,
+} from "../support/name-account.ts";
 import { holdQuery } from "../support/query-transition.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 layer(HostedLive, { excludeTestServices: true })("Account connection", (it) => {
   it.effect(scenarios.accountConnectionQuery.title, (context) =>
@@ -27,16 +34,19 @@ layer(HostedLive, { excludeTestServices: true })("Account connection", (it) => {
             {
               path: "index.ts",
               content: `
-import { defineApp, defineProvider, mutation, object, secrets, string } from "apps";
+import { defineApp, defineProvider, mutation, object, secrets, string, router } from "apps";
 const service = defineProvider({ name: "Connection fixture", auth: {
   key: secrets({ label: "API key", fields: object({ token: string() }) })
 } });
 export default defineApp({ accounts: { service } }, async ({ accounts }) => ({
-  mutations: { echo: mutation({ description: "Echo with the connected account", input: object({ text: string() }) },
-    async (_, input) => ({ text: input.text, connected: accounts.service.fields.token === "synthetic-connection-token" })) }
+  tools: router({
+    echo: mutation({ description: "Echo with the connected account", input: object({ text: string() }) },
+    async (_, input) => ({ text: input.text, connected: accounts.service.fields.token === "synthetic-connection-token" })),
+  })
 }));
 `,
             },
+            appsManifest,
           ],
         });
         expect(deployed.status).toBe(200);
@@ -68,7 +78,7 @@ export default defineApp({ accounts: { service } }, async ({ accounts }) => ({
           }),
         );
         yield* browser.use("Connect directly from the app account card", (page) =>
-          page.getByRole("button", { name: "Add Connection fixture account", exact: true }).click(),
+          page.getByRole("button", { name: "Connect new account", exact: true }).click(),
         );
         yield* browser.use("Credentials open inside the app", (page) =>
           page.getByRole("dialog").waitFor({ state: "visible" }),
@@ -80,9 +90,11 @@ export default defineApp({ accounts: { service } }, async ({ accounts }) => ({
         ).toBe(`/org/${actors.organization.slug}/apps/${app.id}`);
         expect(created).toBe(0);
         expect(connectionReads).toBe(0);
-        yield* browser.use("Name the synthetic account", (page) =>
-          page.getByRole("textbox", { name: "Account name", exact: true }).fill(name),
-        );
+        expect(
+          yield* browser.use("The credential form does not ask for a name", (page) =>
+            page.getByRole("dialog").getByRole("textbox", { name: "Account name" }).count(),
+          ),
+        ).toBe(0);
         yield* browser.use("Enter the synthetic API key", (page) =>
           page.getByLabel("Token", { exact: true }).fill("synthetic-connection-token"),
         );
@@ -113,10 +125,10 @@ export default defineApp({ accounts: { service } }, async ({ accounts }) => ({
         account = (yield* Schema.decodeUnknownEffect(Resource)(committed)).id;
         expect(created).toBe(1);
         expect(
-          yield* browser.use("The account name survives the failed response", (page) =>
-            page.getByRole("textbox", { name: "Account name", exact: true }).inputValue(),
+          yield* browser.use("The credential survives the failed response", (page) =>
+            page.getByRole("dialog").getByLabel("Token", { exact: true }).inputValue(),
           ),
-        ).toBe(name);
+        ).toBe("synthetic-connection-token");
         const timeOrigin = yield* browser.use("Remember this document before saving", (page) =>
           page.evaluate(() => performance.timeOrigin),
         );
@@ -140,6 +152,24 @@ export default defineApp({ accounts: { service } }, async ({ accounts }) => ({
         expect((yield* Schema.decodeUnknownEffect(Resource)(saved.body)).id).toBe(account);
         expect(created).toBe(1);
         expect(connectionReads).toBe(0);
+        yield* browser.use("Saving closes the credential dialog and asks for a name", (page) =>
+          page
+            .getByRole("dialog", { name: "Connect Connection fixture", exact: true })
+            .waitFor({ state: "hidden" })
+            .then(() => accountNamePrompt(page))
+            .then(() =>
+              nameAccountDialog(page)
+                .getByText("Connection fixture is connected. Choose a name you’ll recognize.", {
+                  exact: true,
+                })
+                .waitFor({ state: "visible" }),
+            ),
+        );
+        expect(
+          yield* browser.use("The name starts as the server's default", (page) =>
+            accountNameField(page).inputValue(),
+          ),
+        ).toBe("Default");
         const selections = yield* body(
           Schema.Array(
             Schema.Struct({
@@ -154,25 +184,57 @@ export default defineApp({ accounts: { service } }, async ({ accounts }) => ({
         expect(
           (yield* api.request(actors.owner, "GET", `${prefix}/apps/${app.id}`)).body,
         ).not.toHaveProperty("accounts");
-        yield* browser.use("Saving returns to the app without a document navigation", (page) =>
-          page.waitForURL(
-            (url) => url.pathname === `/org/${actors.organization.slug}/apps/${app.id}`,
-          ),
+        const search = yield* browser.use(
+          "Saving returns to the app without a document navigation",
+          (page) =>
+            page
+              .waitForURL(
+                (url) => url.pathname === `/org/${actors.organization.slug}/apps/${app.id}`,
+              )
+              .then(() => new URL(page.url()).searchParams),
         );
+        expect(search.has("rename")).toBe(false);
         yield* browser.checkpoint("App waits for confirmed profile bindings");
         const refreshPath = yield* evidence.step(
           "Saving starts a fresh profile metadata read",
           read.requested,
         );
+        // The modal prompt hides the page from assistive technology while it is open.
         yield* browser.use("The pending profile read has a loading state", (page) =>
           page
-            .getByRole("status", { name: "Loading accounts", exact: true })
+            .getByRole("status", { name: "Loading accounts", exact: true, includeHidden: true })
             .waitFor({ state: "visible" }),
+        );
+        yield* browser.use("Type a name while the Accounts tab reloads", (page) =>
+          accountNameField(page).fill(name),
         );
         yield* read.release;
         yield* browser.use("The new account appears on the same app", (page) =>
-          page.getByRole("link", { name, exact: true }).waitFor({ state: "visible" }),
+          page
+            .getByRole("radio", { name: "Default", exact: true, includeHidden: true })
+            .waitFor({ state: "visible" }),
         );
+        expect(
+          yield* browser.use("The naming dialog and its draft survive the reload", (page) =>
+            nameAccountDialog(page)
+              .isVisible()
+              .then((visible) =>
+                accountNameField(page)
+                  .inputValue()
+                  .then((draft) => ({ visible, draft })),
+              ),
+          ),
+        ).toEqual({ visible: true, draft: name });
+        yield* browser.checkpoint("Name the connected account after the Accounts tab reloads");
+        yield* browser.use("Save the account's name", (page) => nameConnectedAccount(page, name));
+        yield* browser.use("The app shows the saved name", (page) =>
+          page.getByRole("radio", { name, exact: true }).waitFor({ state: "visible" }),
+        );
+        expect(
+          yield* browser.use("The new account is the selected one", (page) =>
+            page.getByRole("radio", { name, exact: true }).isChecked(),
+          ),
+        ).toBe(true);
         expect(
           yield* browser.use("The accounts tab stays selected", (page) =>
             page.evaluate(() => new URL(location.href).searchParams.get("view")),
@@ -187,10 +249,8 @@ export default defineApp({ accounts: { service } }, async ({ accounts }) => ({
           ),
         ).toBe(0);
         yield* browser.checkpoint("Account connected in place");
-        yield* browser.use("Manage the connected account", (page) =>
-          page
-            .getByRole("button", { name: "Switch Connection fixture account", exact: true })
-            .click(),
+        yield* browser.use("Connect another account from the list", (page) =>
+          page.getByRole("button", { name: "Connect new account", exact: true }).click(),
         );
         yield* browser.use("Another connection opens in the shared dialog", (page) =>
           page
@@ -208,9 +268,7 @@ export default defineApp({ accounts: { service } }, async ({ accounts }) => ({
           page.getByRole("link", { name: "Tools", exact: true }).click(),
         );
         yield* browser.use("The connected app's tools load without refreshing", (page) =>
-          page
-            .getByRole("button", { name: "mutations.echo", exact: true })
-            .waitFor({ state: "visible" }),
+          page.getByRole("button", { name: "echo", exact: true }).waitFor({ state: "visible" }),
         );
         expect(
           yield* browser.use("The original document remains mounted", (page) =>

@@ -9,6 +9,7 @@ import {
   type Executor,
   type ExecutorOptions,
 } from "@executor-js/sdk";
+import apps from "apps/package.json" with { type: "json" };
 
 const me = OwnerId.make("app-user-me");
 
@@ -22,7 +23,10 @@ export async function vercelProjectsReport(executor: Executor) {
   const { app } = await executor.apps.deploy({
     owner: me,
     name: "Work Vercel",
-    files: [{ path: "index.ts", content: source }],
+    files: [
+      { path: "index.ts", content: source },
+      { path: "package.json", content: JSON.stringify({ dependencies: { apps: apps.version } }) },
+    ],
   });
 
   // Runtime metadata has dynamic slot names; check the expected slot exists.
@@ -48,7 +52,8 @@ export async function vercelProjectsReport(executor: Executor) {
   const projects = await executor.tools.call({
     app: app.id,
     profile: profile.id,
-    tool: ToolName.make("queries.listProjects"),
+    tool: ToolName.make("listProjects"),
+    kind: "query",
     input: {},
   });
   return { app, profile, account, projects };

@@ -44,7 +44,10 @@ export const OpenapiRequestBody = Schema.Struct({
 
 /** Credential-free operation data emitted by the OpenAPI importer. */
 export const OpenapiOperation = Schema.Struct({
+  /** The tool name after `queries.` or `mutations.`, grouped as `<group>.<leaf>`. */
   name: Schema.NonEmptyString,
+  /** The document's operationId, when it declares one. `kinds` overrides are keyed by it. */
+  operationId: Schema.optionalKey(Schema.String),
   description: Schema.String,
   method: Schema.Literals(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]),
   path: Schema.String,
@@ -60,6 +63,8 @@ export const OpenapiOperation = Schema.Struct({
   }),
   /** Streams remain in the metadata but cannot run through a single-result tool call. */
   streaming: Schema.optionalKey(Schema.Literal(true)),
+  /** The operation's OpenAPI tags, shown to agents as labels within its router. */
+  tags: Schema.optionalKey(Schema.Array(Schema.NonEmptyString)),
   input: JsonObject,
   outputSchema: Schema.optionalKey(JsonObject),
   errorResponses: Schema.optionalKey(Schema.Array(OpenapiErrorResponse)),

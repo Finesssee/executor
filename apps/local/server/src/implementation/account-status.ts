@@ -18,7 +18,7 @@ export const accountSignIn =
       if (method === undefined) return { state: "unavailable" } as const;
       if (method.type === "secrets") return { state: "saved", reconnectAt: null } as const;
       const row = yield* storage
-        .orm("4.0.2")
+        .orm("4.0.3")
         .findFirst("oauthGrants", { where: (b) => b("id", "=", account.id) });
       if (row === null || row.status === "reconnect") return { state: "reconnect" } as const;
       // A grant claimed by a renewal, including one a stopped process abandoned, still carries the

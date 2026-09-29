@@ -54,6 +54,7 @@ export const postgresExecutor = (
       | "webhookOrigin"
       | "workflows"
       | "declarations"
+      | "durableDeclarations"
       | "toolListings"
       | "background"
     >
@@ -70,6 +71,9 @@ export const postgresExecutor = (
       ...(options?.webhookOrigin === undefined ? {} : { webhookOrigin: options.webhookOrigin }),
       ...(options?.appStorage === undefined ? {} : { appStorage: options.appStorage }),
       ...(options?.declarations === undefined ? {} : { declarations: options.declarations }),
+      ...(options?.durableDeclarations === undefined
+        ? {}
+        : { durableDeclarations: options.durableDeclarations }),
       ...(options?.toolListings === undefined ? {} : { toolListings: options.toolListings }),
       ...(options?.background === undefined ? {} : { background: options.background }),
       blobs,

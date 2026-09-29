@@ -9,6 +9,7 @@ import { Browser } from "../support/browser.ts";
 import { Evidence } from "../support/evidence.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { App } from "../support/contracts.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const Key = Schema.Struct({
   key: Schema.RedactedFromValue(Schema.NonEmptyString),
@@ -24,13 +25,14 @@ const source = [
   {
     path: "index.ts",
     content: `
-import { defineApp, mutation, object } from "apps";
+import { defineApp, mutation, object, router } from "apps";
 import { always } from "apps/operations/approval";
-export default defineApp({ accounts: {} }, async () => ({  mutations: {
-  echo: mutation({ description: "Return a receipt", input: object({}) }, async () => ({ receipt: "pat-ok" })),
+export default defineApp({ accounts: {} }, async () => ({  tools: router({
+    echo: mutation({ description: "Return a receipt", input: object({}) }, async () => ({ receipt: "pat-ok" })),
   approved: mutation({ description: "Needs approval", input: object({}), approval: always() }, async () => ({ receipt: "should-not-run" })),
-} }));`,
+  }) }));`,
   },
+  appsManifest,
 ];
 
 layer(HostedLive, { excludeTestServices: true })("Personal access tokens", (it) => {
@@ -191,7 +193,7 @@ layer(HostedLive, { excludeTestServices: true })("Personal access tokens", (it) 
           "A PAT inherits the user's current role and retains tool approvals",
           Effect.gen(function* () {
             const path = `${prefix}/apps/${app.id}/tools/call`;
-            const input = { tool: "mutations.echo", input: {} };
+            const input = { tool: "echo", kind: "mutation", input: {} };
             const response = yield* api.request(anonymous, "POST", path, input, headers(owner.key));
             expect(response.status).toBe(200);
             expect(response.body).toEqual({ receipt: "pat-ok" });
@@ -220,7 +222,7 @@ layer(HostedLive, { excludeTestServices: true })("Personal access tokens", (it) 
               anonymous,
               "POST",
               path,
-              { tool: "mutations.approved", input: {} },
+              { tool: "approved", kind: "mutation", input: {} },
               headers(owner.key),
             );
             expect(approved.status).not.toBe(200);
@@ -232,7 +234,7 @@ layer(HostedLive, { excludeTestServices: true })("Personal access tokens", (it) 
               anonymous,
               "POST",
               `${prefix}/apps/${executor.id}/tools/call`,
-              { tool: "queries.context_get", profile: profile.id, input: {} },
+              { tool: "context.get", kind: "query", profile: profile.id, input: {} },
               headers(owner.key),
             );
             expect(context.status).toBe(200);
@@ -266,7 +268,7 @@ layer(HostedLive, { excludeTestServices: true })("Personal access tokens", (it) 
                     anonymous,
                     "POST",
                     `${prefix}/apps/${app.id}/tools/call`,
-                    { tool: "mutations.echo", input: {} },
+                    { tool: "echo", kind: "mutation", input: {} },
                     headers(admin.key),
                   )
                   .pipe(

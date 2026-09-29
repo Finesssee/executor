@@ -70,14 +70,44 @@ export class AppDeploymentChanged extends Schema.TaggedError<AppDeploymentChange
   },
 ) {}
 
+/**
+ * A source location. Nested, because runtimes such as Bun set their own `line` and `column`
+ * properties on every Error instance.
+ */
+export const SourceLocation = Schema.Struct({
+  file: Schema.String.check(Schema.isMaxLength(1024)),
+  line: Schema.optional(Schema.Int),
+  column: Schema.optional(Schema.Int),
+});
+export type SourceLocation = typeof SourceLocation.Type;
+
+/** The build step that failed. */
+export const BuildStage = Schema.Literals([
+  "source",
+  "dependencies",
+  "compile",
+  "declaration",
+  "retain",
+]);
+
 /** The build did not complete; nothing was retained, created or changed. */
 export class DeploymentBuildFailed extends Schema.TaggedError<DeploymentBuildFailed>()(
   "DeploymentBuildFailed",
-  { owner: OwnerId, name: Schema.NonEmptyString, reason: Schema.String },
+  {
+    owner: OwnerId,
+    name: Schema.NonEmptyString,
+    reason: Schema.String,
+    /** The build step that failed, when the runtime reported it. */
+    stage: Schema.optional(BuildStage),
+    /** The first failing source location, when known. */
+    location: Schema.optional(SourceLocation),
+    /** The stage, location and underlying failure, such as the compiler's own errors. */
+    message: Schema.String,
+  },
   {
     httpApiStatus: 422,
     description:
-      "The build failed: no deployment was retained, no new app was created, and an existing app's active deployment is unchanged. Identified by (owner, name) because a first deploy has no app id yet. `reason` is a safe summary without source or secrets.",
+      "The build failed: no deployment was retained, no new app was created, and an existing app's active deployment is unchanged. Identified by (owner, name) because a first deploy has no app id yet. `message` describes the failing stage, source location and underlying error, such as compiler output or the error the app raised while declaring its requirements. Builds bind no accounts, so it holds no credentials.",
   },
 ) {}
 

@@ -38,7 +38,7 @@ const command = Command.make("e2e-report", {
         ),
       );
       yield* Console.log(`Test evidence: http://127.0.0.1:${port}`);
-      yield* Layer.launch(
+      return yield* Layer.launch(
         HttpRouter.serve(HttpRouter.add("GET", "*", handler)).pipe(
           Layer.provide(NodeHttpServer.layer(createServer, { host: "127.0.0.1", port })),
           Layer.provide(NodeHttpServer.layerHttpServices),

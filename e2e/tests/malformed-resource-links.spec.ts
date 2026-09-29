@@ -50,8 +50,6 @@ layer(HostedLive, { excludeTestServices: true })("Hosted malformed resource link
           `${org}/apps/${malformed}`,
           `${org}/apps/${malformed}/open`,
           `${org}/apps/${malformed}/setup`,
-          `${org}/accounts/${malformed}`,
-          `${org}/accounts/${malformed}/disconnect`,
           `${org}/connections/${malformed}`,
           `${org}/webhooks/${malformed}/${malformed}`,
         ])
@@ -89,7 +87,7 @@ layer(TestLive, { excludeTestServices: true })("Local malformed resource links",
         for (const path of [
           `/apps/${malformed}`,
           `/apps/${malformed}/setup`,
-          `/accounts/${malformed}`,
+          `/accounts/${malformed}/credentials`,
           `/webhooks/${malformed}/${malformed}`,
         ])
           yield* expectNotFound(path);

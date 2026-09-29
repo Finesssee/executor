@@ -3,13 +3,13 @@
 For an installation whose returned app slug is `live-inbox`:
 
 ```js
-return await tools["live-inbox"].queries.listMessages({});
+return await tools["live-inbox"].listMessages({});
 ```
 
 When the user asks to save a message:
 
 ```js
-return await tools["live-inbox"].mutations.receiveMessage({
+return await tools["live-inbox"].receiveMessage({
   subject: "Follow up with the support team",
 });
 ```

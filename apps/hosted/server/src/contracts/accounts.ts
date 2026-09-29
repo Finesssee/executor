@@ -8,6 +8,8 @@ import {
   App,
   Provider,
   Account,
+  AccountHealth,
+  CredentialCheck,
   AccountId,
   AccountNotFound,
   AccountConnection,
@@ -72,6 +74,8 @@ export const BrowserAccountConnection = Schema.Struct({
 export const HostedAccountConnection = Schema.Struct({
   ...AccountConnection.fields,
   redirectUri: HttpUrl,
+  /** The target app's check can validate credentials entered for this connection. */
+  checkable: Schema.Boolean,
 });
 export type HostedAccountConnection = typeof HostedAccountConnection.Type;
 /** Browser return context preserves the callback URL bound into the OAuth attempt. */
@@ -92,6 +96,8 @@ export const HostedAccountDetail = Schema.Struct({
   account: Account,
   provider: Provider,
   apps: Schema.Array(App),
+  /** Checks by the apps in `apps` only; reading it never runs a check. */
+  health: AccountHealth,
   canManage: Schema.Boolean,
 });
 /** Credentials travel directly to the authorized host and never appear in successful responses. */
@@ -102,6 +108,31 @@ export const HostedAccounts = HttpApiGroup.make("accounts")
       success: HostedAccountDetail,
       error: [StorageError, AccountNotFound, ProviderNotFound],
     }).annotate(RequiredAction, "read"),
+  )
+  .add(
+    HttpApiEndpoint.post("checkCredentials", `${prefix}/apps/:app/credential-checks`, {
+      params: app,
+      payload: Schema.Struct({
+        provider: ProviderId,
+        method: AuthMethodName,
+        fields: AccountFieldsInput,
+      }),
+      success: Schema.NullOr(CredentialCheck),
+      error: [
+        StorageError,
+        AppNotFound,
+        AuthMethodInvalid,
+        AccountFieldsInvalid,
+        OrganizationForbidden,
+      ],
+    }).annotate(RequiredAction, "run"),
+  )
+  .add(
+    HttpApiEndpoint.post("check", `${prefix}/accounts/:account/health`, {
+      params: { ...params, account: AccountId },
+      success: AccountHealth,
+      error: [StorageError, AccountNotFound, OrganizationForbidden],
+    }).annotate(RequiredAction, "run"),
   )
   .add(
     HttpApiEndpoint.post("reconnect", `${prefix}/accounts/:account/connections`, {
@@ -164,7 +195,7 @@ export const HostedAccounts = HttpApiGroup.make("accounts")
       params: connection,
       payload: Schema.Struct({
         method: Schema.NonEmptyString,
-        label: Schema.NonEmptyString,
+        label: Schema.optional(Schema.NonEmptyString),
         fields: AccountFieldsInput,
       }),
       success: Account,
@@ -176,7 +207,7 @@ export const HostedAccounts = HttpApiGroup.make("accounts")
       params: connection,
       payload: Schema.Struct({
         method: Schema.NonEmptyString,
-        label: Schema.NonEmptyString,
+        label: Schema.optional(Schema.NonEmptyString),
         client: Schema.optional(OAuthClientInput),
       }),
       success: HostedOAuthStartResult,

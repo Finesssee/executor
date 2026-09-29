@@ -6,14 +6,16 @@ import { App, Resource } from "../support/contracts.ts";
 import { createProfile, selectProfileAccounts } from "../support/profiles.ts";
 import { McpClient } from "../support/mcp-client.ts";
 import { Evidence } from "../support/evidence.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
-const source = `import {defineApp,defineProvider,secrets,defineDatabase,table,query,mutation,object,string,array} from "apps";
+const source = `import {defineApp,defineProvider,secrets,defineDatabase,table,query,mutation,object,string,array, router} from "apps";
 const service=defineProvider({name:"Synthetic discovery",auth:{key:secrets({label:"Key",fields:object({token:string()})})}});
 const database=defineDatabase({records:table({key:string(),value:string()})});
-export default defineApp({accounts:{service},database},{queries:{
-${Array.from({ length: 32 }, (_, i) => `tool${String(i).padStart(2, "0")}:query({description:"Synthetic discovery tool ${i}",input:object({})},async ctx=>({account:ctx.accounts.service.id,value:${i}}))`).join(",\n")},
-count:query({input:object({})},async ctx=>({count:(await ctx.db.records.withIndex("by_creation").collect()).length}))
-},mutations:{seed:mutation({input:object({records:array(object({key:string(),value:string()}))})},async(ctx,input)=>{for(const row of input.records)await ctx.db.records.insert(row);return {inserted:input.records.length};})}});`;
+export default defineApp({accounts:{service},database},{tools: router({
+  ${Array.from({ length: 32 }, (_, i) => `tool${String(i).padStart(2, "0")}:query({description:"Synthetic discovery tool ${i}",input:object({})},async ctx=>({account:ctx.accounts.service.id,value:${i}}))`).join(",\n")},
+count:query({input:object({})},async ctx=>({count:(await ctx.db.records.withIndex("by_creation").collect()).length})),
+  seed:mutation({input:object({records:array(object({key:string(),value:string()}))})},async(ctx,input)=>{for(const row of input.records)await ctx.db.records.insert(row);return {inserted:input.records.length};}),
+})});`;
 const Inventory = Schema.Struct({
   apps: Schema.Array(Resource),
   accounts: Schema.Array(Resource),
@@ -118,7 +120,7 @@ export const discoveryBenchmark = Effect.gen(function* () {
   for (let index = 0; index < 24; index++) {
     const response = yield* api.request(actors.owner, "POST", `${root}/apps/deploy`, {
       name: `Discovery ${String(index + 1).padStart(2, "0")}`,
-      files: [{ path: "index.ts", content: source }],
+      files: [{ path: "index.ts", content: source }, appsManifest],
     });
     yield* requireOk(response.status);
     const app = yield* body(App, response);
@@ -155,7 +157,8 @@ export const discoveryBenchmark = Effect.gen(function* () {
       for (let offset = 0; offset < 1000; offset += 100) {
         const seeded = yield* api.request(actors.owner, "POST", `${appPath}/tools/call`, {
           profile: profile.id,
-          tool: "mutations.seed",
+          tool: "seed",
+          kind: "mutation",
           input: {
             records: Array.from({ length: 100 }, (_, i) => ({
               key: `record-${offset + i}`,
@@ -171,7 +174,8 @@ export const discoveryBenchmark = Effect.gen(function* () {
         Schema.Struct({ count: Schema.Number }),
         yield* api.request(actors.owner, "POST", `${appPath}/tools/call`, {
           profile: profile.id,
-          tool: "queries.count",
+          tool: "count",
+          kind: "query",
           input: {},
         }),
       );

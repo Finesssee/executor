@@ -16,13 +16,16 @@ import { Resource } from "../support/contracts.ts";
 import { Evidence, Telemetry } from "../support/evidence.ts";
 import { createProfile, selectProfileAccounts } from "../support/profiles.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
-const source = `import { defineApp, defineProvider, secrets, object, string, query } from "apps";
+const source = `import { defineApp, defineProvider, secrets, object, string, query, router } from "apps";
 const service = defineProvider({ name: "Snapshot fixture", auth: {
   key: secrets({ label: "API key", fields: object({ token: string() }) })
 } });
 export default defineApp({ accounts: { workspaces: service.many() } }, async ctx => ({
-  queries: { selected: query({ input: object({}) }, async () => ctx.accounts.workspaces.map(account => account.fields.token)) }
+  tools: router({
+    selected: query({ input: object({}) }, async () => ctx.accounts.workspaces.map(account => account.fields.token)),
+  })
 }));`;
 
 layer(HostedLive, { excludeTestServices: true })("Invocation snapshot", (it) => {
@@ -38,7 +41,7 @@ layer(HostedLive, { excludeTestServices: true })("Invocation snapshot", (it) => 
         const accounts: string[] = [];
         const deployed = yield* api.request(actors.owner, "POST", `${prefix}/apps/deploy`, {
           name: `Snapshot ${randomUUID().slice(0, 8)}`,
-          files: [{ path: "index.ts", content: source }],
+          files: [{ path: "index.ts", content: source }, appsManifest],
         });
         expect(deployed.status).toBe(200);
         const app = yield* body(Resource, deployed);
@@ -74,7 +77,8 @@ layer(HostedLive, { excludeTestServices: true })("Invocation snapshot", (it) => 
         const [first, second] = accounts as [string, string];
         const call = api.request(actors.owner, "POST", `${path}/tools/call`, {
           profile: profile.id,
-          tool: "queries.selected",
+          tool: "selected",
+          kind: "query",
           input: {},
         });
 

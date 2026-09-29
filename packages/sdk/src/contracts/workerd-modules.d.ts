@@ -19,11 +19,3 @@ declare module "cloudflare:workers" {
   /** Keep the current Worker or Durable Object invocation alive until the promise settles. */
   export function waitUntil(promise: Promise<unknown>): void;
 }
-/** Runtime-only modules provided by workerd, never imported by the Node host. */
-declare module "executor-framework" {
-  const framework: {
-    readonly server: Readonly<Record<string, string>>;
-    readonly browser: Readonly<Record<string, string>>;
-  };
-  export default framework;
-}

@@ -6,6 +6,7 @@ import { Browser } from "../support/browser.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { oauthSetupIssuer } from "../support/oauth-setup-issuer.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const App = Schema.Struct({
   id: Schema.String,
@@ -33,10 +34,11 @@ layer(HostedLive, { excludeTestServices: true })("OAuth setup errors", (it) => {
           files: [
             {
               path: "index.ts",
-              content: `import { defineApp, defineProvider, oauth2 } from "apps";
+              content: `import { defineApp, defineProvider, oauth2, router } from "apps";
 const service=defineProvider({name:"Sample service",auth:{oauth:oauth2({discover:${JSON.stringify(issuer.origin + "/mcp")}})}});
-export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
+export default defineApp({accounts:{service}},async()=>({tools: router({})}));`,
             },
+            appsManifest,
           ],
         });
         expect(deployed.status).toBe(200);
@@ -107,10 +109,9 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
           );
           yield* browser.use("Add an account", (page) =>
             page
-              .getByRole("button", { name: "Add Sample service account", exact: true })
+              .getByRole("button", { name: "Connect new account", exact: true })
               .click()
-              .then(() => page.getByRole("alert").getByText(title, { exact: true }).waitFor())
-              .then(() => page.getByLabel("Account name", { exact: true }).fill("Work reports")),
+              .then(() => page.getByRole("alert").getByText(title, { exact: true }).waitFor()),
           );
           expect(
             yield* browser.use("Retry follows the cause", (page) =>
@@ -156,7 +157,6 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
             expect(copied).not.toContain("PRIVATE_UPSTREAM_DIAGNOSTIC");
             expect(copied).not.toContain("with its author");
             expect(copied).not.toContain(issuer.origin);
-            expect(copied).not.toContain("Work reports");
             yield* browser.use("Review the full error card on mobile", (page) =>
               page.setViewportSize({ width: 390, height: 844 }),
             );
@@ -185,10 +185,10 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
             );
           }
           expect(
-            yield* browser.use("Reading the error preserves the form", (page) =>
-              page.getByLabel("Account name", { exact: true }).inputValue(),
+            yield* browser.use("Reading the error keeps the connection form open", (page) =>
+              page.getByRole("dialog").getByRole("alert", { name: title, exact: true }).count(),
             ),
-          ).toBe("Work reports");
+          ).toBe(1);
         }
         yield* issuer.configure({ discovery: "available" });
         yield* browser.use("Retry recovers through the real setup endpoint", (page) =>
@@ -200,11 +200,6 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
             )
             .then(() => page.getByRole("alert").waitFor({ state: "hidden" })),
         );
-        expect(
-          yield* browser.use("Retry preserves the name", (page) =>
-            page.getByLabel("Account name", { exact: true }).inputValue(),
-          ),
-        ).toBe("Work reports");
         expect((yield* issuer.metrics).registrations).toBe(0);
         yield* browser.checkpoint("OAuth-setup-recovered");
         // Registration failures are split by who can act. Services that refuse Executor
@@ -225,8 +220,15 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
             true,
           ],
           [
-            "rejected",
+            "metadata-refused",
             { registrationStatus: 400, registrationError: "invalid_client_metadata" },
+            "Service did not accept Executor’s callback URL",
+            "add Executor’s callback URL to its allowed redirect URIs",
+            true,
+          ],
+          [
+            "rejected",
+            { registrationStatus: 400, registrationError: "invalid_request" },
             "Service rejected Executor’s registration",
             "Create an OAuth app with the service and enter its client details",
             true,
@@ -246,9 +248,8 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
           );
           yield* browser.use("Add an account", (page) =>
             page
-              .getByRole("button", { name: "Add Sample service account", exact: true })
+              .getByRole("button", { name: "Connect new account", exact: true })
               .click()
-              .then(() => page.getByLabel("Account name", { exact: true }).fill("Work reports"))
               .then(() =>
                 page.getByRole("button", { name: "Connect Sample service", exact: true }).click(),
               )

@@ -3,7 +3,7 @@
  * the account selected on this configured app.
  */
 import { defineApp, defineProvider, oauth2 } from "apps";
-import { mcpOperations } from "apps/mcp";
+import { mcpRouter } from "apps/mcp";
 
 /** Axiom with one OAuth method; the app sees the access token only. */
 export const axiom = defineProvider({
@@ -14,9 +14,9 @@ export const axiom = defineProvider({
 });
 
 export default defineApp({ accounts: { axiom } }, async ({ accounts, signal }) => ({
-  ...(await mcpOperations({
+  tools: await mcpRouter({
     url: "https://mcp.axiom.co/mcp",
     headers: { Authorization: `Bearer ${accounts.axiom.fields.access_token}` },
     ...(signal === undefined ? {} : { signal }),
-  })),
+  }),
 }));

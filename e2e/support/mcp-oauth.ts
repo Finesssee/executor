@@ -70,6 +70,7 @@ export const oauthCallback = (state: string) =>
               ? "<h1>Connected to Executor</h1><p>You can return to your MCP client.</p>"
               : "<h1>Authorization was not completed</h1>",
           );
+          // oxlint-disable-next-line executor/no-manual-effect-runtime-in-tests -- node:http request handlers are plain callbacks
           if (valid) Effect.runSync(Deferred.succeed(received, Redacted.make(code)));
         }),
       ),

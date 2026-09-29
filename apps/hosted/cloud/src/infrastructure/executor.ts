@@ -45,6 +45,7 @@ import type { ArtifactsTokens } from "@executor-js/app-source/cloudflare";
 import { cloudBlobs } from "./blobs.ts";
 import { cloudWorkflows } from "./workflows.ts";
 import { cloudRuntime } from "./runtime.ts";
+import { durableDeclarations } from "./durable-declarations.ts";
 import { cloudDatabaseConnection } from "./database.ts";
 import { cloudSecrets } from "./secrets.ts";
 import { cloudOrigin } from "./stage.ts";
@@ -142,6 +143,8 @@ export const cloudExecutor = Effect.fn(function* (
           workflows,
           // One store per isolate, shared by every executor built in it.
           declarations: isolateDeclarations,
+          // Every isolate reads the results each app's supervisor keeps when its own store misses.
+          durableDeclarations: durableDeclarations(databases),
           // Background work lasts at most 20 s after its event closes. A listing nobody waits for
           // stops well inside that, so a stalled app is remembered as timed out, not interrupted.
           toolListings: { ...defaultToolListingPolicy, loadMillis: 15_000 },

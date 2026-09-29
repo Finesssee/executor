@@ -197,7 +197,7 @@ export const checkAppLoading = (input: {
         yield* Effect.scoped(
           Effect.gen(function* () {
             const selectedTool = tab.view === "tools" && viewport.width < 740;
-            const title = selectedTool ? "queries.hello" : tab.title;
+            const title = selectedTool ? "hello" : tab.title;
             const metadata = yield* holdQuery(input.metadata, "continue", { allRequests: true });
             const content =
               tab.view === "tools"
@@ -217,7 +217,7 @@ export const checkAppLoading = (input: {
                 : undefined;
             yield* openThroughBrowser(
               `Open ${tab.view}`,
-              `${input.url}?view=${tab.view}${selectedTool ? "&tool=queries.hello" : ""}`,
+              `${input.url}?view=${tab.view}${selectedTool ? "&tool=hello" : ""}`,
             );
             yield* metadata.requested;
             yield* browser.use(`${tab.view} reserves its own content`, (page) =>
@@ -319,7 +319,7 @@ export const checkAppLoading = (input: {
                 yield* browser.use("Overview cards arrive", (page) =>
                   page
                     .getByRole("region", { name: "App tools preview", exact: true })
-                    .getByRole("link", { name: "queries.hello A simple greeting", exact: true })
+                    .getByRole("link", { name: "hello A simple greeting", exact: true })
                     .waitFor(),
                 );
                 break;
@@ -337,7 +337,7 @@ export const checkAppLoading = (input: {
                   );
                 } else {
                   yield* browser.use("Tool discovery completes", (page) =>
-                    page.getByRole("button", { name: "queries.hello", exact: true }).waitFor(),
+                    page.getByRole("button", { name: "hello", exact: true }).waitFor(),
                   );
                   expect(
                     yield* browser.use("The search survives loading", (page) =>

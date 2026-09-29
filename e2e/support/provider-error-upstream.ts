@@ -1,6 +1,9 @@
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import { Effect, Layer, Ref, Schema } from "effect";
 import {
+  HttpBody,
+  HttpClient,
+  HttpClientRequest,
   HttpRouter,
   HttpServer,
   HttpServerRequest,
@@ -14,6 +17,7 @@ export const providerSecretMarker = "synthetic-private-provider-detail";
 /** Provider behavior is controlled outside the real Executor server and app runtime. */
 const makeProviderErrorUpstream = Effect.fn(function* (healthyUpstream: typeof templateUpstream) {
   const healthy = yield* healthyUpstream;
+  const http = yield* HttpClient.HttpClient;
   type Failure = {
     readonly status: number;
     readonly phase?: "call" | "discover";
@@ -83,20 +87,18 @@ const makeProviderErrorUpstream = Effect.fn(function* (healthyUpstream: typeof t
             );
           }
           if (path.startsWith("/custom/")) return yield* HttpServerResponse.json({ ok: true });
-          const response = yield* Effect.tryPromise((signal) =>
-            fetch(`${healthy}${path}`, {
-              method: request.method,
+          const response = yield* http.execute(
+            HttpClientRequest.make(request.method)(`${healthy}${path}`, {
               headers: {
                 "content-type": "application/json",
                 ...(request.headers.authorization === undefined
                   ? {}
                   : { authorization: request.headers.authorization }),
               },
-              ...(text === undefined ? {} : { body: text }),
-              signal,
+              ...(text === undefined ? {} : { body: HttpBody.text(text, "application/json") }),
             }),
           );
-          return HttpServerResponse.fromWeb(response);
+          return HttpServerResponse.fromClientResponse(response);
         }),
       ),
     ),

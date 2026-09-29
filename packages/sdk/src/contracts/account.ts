@@ -3,7 +3,8 @@ import { UserFacingError } from "@executor-js/utils/user-facing-error";
 import { Schema } from "effect";
 import { StorageError, CredentialsError } from "./shared.ts";
 import { HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi";
-import { AccountId, JsonObject, OwnerId, ProviderId } from "./shared.ts";
+import { AccountInfo } from "apps/contracts";
+import { AccountId, AppId, JsonObject, OwnerId, ProviderId } from "./shared.ts";
 import { AuthMethodInvalid, AuthMethodName, Provider, ProviderNotFound } from "./provider.ts";
 
 /**
@@ -21,6 +22,59 @@ export const Account = Schema.Struct({
 });
 
 export type Account = typeof Account.Type;
+
+/**
+ * The outcome of one app's check of an account. Only `credentials_rejected` means the saved
+ * credentials were refused; `check_failed` means the check could not verify the account, such as a
+ * timeout or a failure in the app's check.
+ */
+export const AccountCheckStatus = Schema.Literals([
+  "healthy",
+  "credentials_rejected",
+  "forbidden",
+  "upstream_unavailable",
+  "check_failed",
+]);
+export type AccountCheckStatus = typeof AccountCheckStatus.Type;
+
+/** One app that selects the account, and its latest check. */
+export const AccountAppHealth = Schema.Struct({
+  app: AppId,
+  /** The app's active deployment defines a check for this account's provider. */
+  checkable: Schema.Boolean,
+  /**
+   * The app's latest check. It is not `current` once the account's credentials or the app's
+   * active deployment changed after it ran; recheck before relying on it.
+   */
+  check: Schema.NullOr(
+    Schema.Struct({
+      status: AccountCheckStatus,
+      checkedAt: Schema.Date,
+      current: Schema.Boolean,
+    }),
+  ),
+});
+export type AccountAppHealth = typeof AccountAppHealth.Type;
+
+/**
+ * Checks of an account by the apps that select it. An account no app selects has no checks.
+ * `info` is the upstream identity from the most recent passing check that reported one; it is
+ * kept when later checks fail. It never replaces the account's own label.
+ */
+export const AccountHealth = Schema.Struct({
+  account: AccountId,
+  info: Schema.NullOr(AccountInfo),
+  infoCheckedAt: Schema.NullOr(Schema.Date),
+  apps: Schema.Array(AccountAppHealth),
+});
+export type AccountHealth = typeof AccountHealth.Type;
+
+/** A check of credentials before they are saved; nothing is recorded. */
+export const CredentialCheck = Schema.Struct({
+  status: AccountCheckStatus,
+  info: Schema.NullOr(AccountInfo),
+});
+export type CredentialCheck = typeof CredentialCheck.Type;
 
 /** Plain fields in public SDK calls; redacted immediately at the host boundary. */
 export const AccountFieldsInput = Schema.RedactedFromValue(JsonObject);
@@ -54,7 +108,8 @@ export const AccountInputs = {
     owner: OwnerId,
     provider: ProviderId,
     method: AuthMethodName,
-    label: Schema.String,
+    /** Without a label, the account is named when created and can be renamed once connected. */
+    label: Schema.optional(Schema.String),
     fields: AccountFieldsInput,
   }),
   get: Schema.Struct({ account: AccountId, owner: Schema.optional(OwnerId) }),
@@ -68,6 +123,13 @@ export const AccountInputs = {
     account: AccountId,
     owner: Schema.optional(OwnerId),
     fields: AccountFieldsInput,
+  }),
+  listHealth: Schema.Struct({ owner: Schema.optional(OwnerId) }),
+  check: Schema.Struct({
+    account: AccountId,
+    owner: Schema.optional(OwnerId),
+    /** Check only these apps; otherwise every app that selects the account and can check it. */
+    apps: Schema.optional(Schema.Array(AppId)),
   }),
 };
 const accountParams = { account: AccountInputs.get.fields.account };
@@ -175,6 +237,39 @@ export const AccountsGroup = HttpApiGroup.make("accounts")
     }).annotate(
       OpenApi.Description,
       "Read the provider definition and authentication methods for a saved account.",
+    ),
+  )
+  .add(
+    HttpApiEndpoint.get("health", "/v1/accounts/:account/health", {
+      params: accountParams,
+      query: ownerQuery,
+      success: AccountHealth,
+      error: [StorageError, AccountNotFound],
+    }).annotate(
+      OpenApi.Description,
+      "Read each selecting app's latest check of an account and the identity the checks reported. Does not run a check.",
+    ),
+  )
+  .add(
+    HttpApiEndpoint.post("check", "/v1/accounts/:account/health", {
+      params: accountParams,
+      query: ownerQuery,
+      payload: Schema.Struct({ apps: AccountInputs.check.fields.apps }),
+      success: AccountHealth,
+      error: [StorageError, AccountNotFound],
+    }).annotate(
+      OpenApi.Description,
+      "Run the provider checks of the apps that select this account, using its current credentials. Each app's check is a safe read defined in its source. Apps without a check stay unchecked. A passing check verifies only what that app's check tests.",
+    ),
+  )
+  .add(
+    HttpApiEndpoint.get("listHealth", "/v1/account-health", {
+      query: { owner: Schema.optional(OwnerId) },
+      success: Schema.Array(AccountHealth),
+      error: StorageError,
+    }).annotate(
+      OpenApi.Description,
+      "Read the latest checks and reported identity of every account, optionally for one owner. Does not run checks.",
     ),
   )
   .add(

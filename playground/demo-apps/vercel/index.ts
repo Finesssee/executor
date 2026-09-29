@@ -2,7 +2,17 @@
  * One-tool app sketch, self-contained because the playground deploys only
  * this file. The app host is not implemented yet.
  */
-import { query, array, decodeJson, defineApp, defineProvider, object, secrets, string } from "apps";
+import {
+  query,
+  array,
+  decodeJson,
+  defineApp,
+  defineProvider,
+  object,
+  secrets,
+  string,
+  router,
+} from "apps";
 
 /** Vercel with a single named method: a personal API token. */
 export const vercel = defineProvider({
@@ -29,7 +39,7 @@ const accounts = { vercel };
 export default defineApp(
   { accounts },
   {
-    queries: {
+    tools: router({
       listProjects: query(
         { description: "List the account's Vercel projects.", input: object({}) },
         async ({ accounts, fetch }) => {
@@ -39,6 +49,6 @@ export default defineApp(
           return decodeJson(response, ProjectList);
         },
       ),
-    },
+    }),
   },
 );

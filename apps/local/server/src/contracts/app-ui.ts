@@ -1,22 +1,6 @@
-/** Private local app origins and dashboard-side authentication contracts. */
+/** Private local app origins and the sign-in identifiers they share with the dashboard. */
 import { AppId } from "@executor-js/sdk";
-import { Schema } from "effect";
-import { HttpApi, HttpApiEndpoint, HttpApiGroup } from "effect/unstable/httpapi";
-import { UiFailed, UiForbidden, UiUnauthorized } from "apps/ui/contracts";
-import { AppSignInId } from "apps/ui/auth/contracts";
-export { AppSignInId } from "apps/ui/auth/contracts";
-/** A callback proof is private and short-lived, not a bookmark or app launch URL. */
-export const AppSignInRedirect = Schema.Struct({ url: Schema.RedactedFromValue(Schema.String) });
-/** An existing local login authorizes only an app-originated browser attempt. */
-export const AppAuthenticationApi = HttpApi.make("app-authentication").add(
-  HttpApiGroup.make("appAuthentication").add(
-    HttpApiEndpoint.post("authorize", "/auth/apps/authorize", {
-      payload: Schema.Struct({ request: AppSignInId }),
-      success: AppSignInRedirect,
-      error: [UiUnauthorized, UiForbidden, UiFailed],
-    }),
-  ),
-);
+export { AppSignInFailure, AppSignInId } from "apps/ui/auth/contracts";
 /** DNS labels use the stable UUID, while SDK IDs retain their app_ prefix. */
 export const appOrigin = (app: AppId, port: number) =>
   `http://${app.replace(/^app_/, "app-")}.localhost:${port}`;

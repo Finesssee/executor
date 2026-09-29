@@ -9,6 +9,7 @@ import {
   OwnerId,
   AppNameTaken,
   HttpUrl,
+  ToolApprovalRequired,
   type AppId,
   type ProfileId,
   type AccountId,
@@ -76,7 +77,7 @@ export const dashboard = (
 ) => {
   const owner = OwnerId.make("local");
   const appCatalog = createCatalog(egress, catalog);
-  const db = storage.orm("4.0.2");
+  const db = storage.orm("4.0.3");
   const signIn = accountSignIn(storage, credentials);
   const query = <A, E>(work: () => Effect.Effect<A, E>) =>
     Effect.suspend(work).pipe(Effect.mapError(() => new StorageError()));
@@ -85,27 +86,31 @@ export const dashboard = (
   const access = dashboardAccess(config, auth);
   // Database reads infer dependencies in the shared storage service, including reads in SDK calls.
   const overview = Effect.gen(function* () {
-    const { apps, accounts, providers } = yield* Effect.all(
+    const { apps, accounts, health, providers } = yield* Effect.all(
       {
         apps: executor.apps.list(),
         accounts: executor.accounts.list(),
+        health: executor.accounts.listHealth(),
         providers: query(() => db.findMany("providers", {})).pipe(
           Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(Provider))),
           Effect.mapError(() => new StorageError()),
         ),
       },
-      { concurrency: 3 },
+      { concurrency: 4 },
     );
+    const checks = new Map(health.map((entry) => [entry.account, entry]));
     const definitions = new Map(providers.map((provider) => [provider.id, provider.definition]));
     const display = [];
     for (const account of accounts) {
       const definition = definitions.get(account.provider);
       if (definition === undefined) return yield* Effect.fail(new StorageError());
+      const health = checks.get(account.id);
       display.push({
         ...account,
         providerName: definition.name,
         providerUrl: providerDisplayUrl(definition),
         signIn: yield* signIn(account, definition),
+        ...(health === undefined ? {} : { health }),
       });
     }
     const profiles = (yield* Effect.forEach(apps, (app) =>
@@ -148,6 +153,7 @@ export const dashboard = (
         Effect.mapError(() => new StorageError()),
       );
       const apps = yield* executor.apps.list({ account: account.id });
+      const health = yield* executor.accounts.health({ account: account.id });
       return {
         account: {
           ...account,
@@ -157,6 +163,7 @@ export const dashboard = (
         },
         provider,
         apps,
+        health,
         canManage: account.id !== managedAccount,
       };
     });
@@ -362,6 +369,10 @@ export const dashboard = (
       )
       .handle("addAccount", ({ payload }) => executor.accounts.add({ owner, ...payload }))
       .handle("account", ({ params }) => accountDetail(params.account))
+      .handle("checkAccount", ({ params }) => executor.accounts.check(params))
+      .handle("checkCredentials", ({ params, payload }) =>
+        executor.apps.checkCredentials({ ...params, ...payload }),
+      )
       .handle("renameAccount", ({ params, payload }) =>
         manage(params.account, executor.accounts.update({ ...params, ...payload })),
       )
@@ -439,6 +450,22 @@ export const dashboard = (
         }),
       )
       .handle("completeOAuth", ({ payload }) => executor.accountConnections.completeOAuth(payload))
+      // Approval policy still applies: a call that needs review does not run from the dashboard.
+      .handle("callTool", ({ params, payload }) =>
+        executor.tools.call({ ...params, ...payload }).pipe(
+          Effect.flatMap((result) =>
+            result.status === "approval-required"
+              ? Effect.fail(
+                  new ToolApprovalRequired({
+                    app: result.invocation.app,
+                    deployment: result.invocation.deployment,
+                    tool: result.invocation.tool,
+                  }),
+                )
+              : Effect.succeed(result.value),
+          ),
+        ),
+      )
       .handle("tools", ({ params, query }) =>
         executor.tools.list({ ...params, ...query }).pipe(
           Effect.timeoutOrElse({

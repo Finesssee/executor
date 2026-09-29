@@ -10,6 +10,7 @@ import { BaseUrl, emulatorRequest } from "../support/emulators.ts";
 import { Target } from "../support/platform.ts";
 import { scenarios } from "../test-plan.ts";
 import { Evidence } from "../support/evidence.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const App = Schema.Struct({ id: Schema.String });
 const Instance = Schema.Struct({ providerBaseUrl: BaseUrl });
@@ -69,10 +70,11 @@ layer(HostedLive, { excludeTestServices: true })("OAuth error report", (it) => {
           files: [
             {
               path: "index.ts",
-              content: `import { defineApp, defineProvider, oauth2 } from "apps";
+              content: `import { defineApp, defineProvider, oauth2, router } from "apps";
 const service=defineProvider({name:"Sample service",auth:{oauth:oauth2({discover:${JSON.stringify(`${issuer}/mcp`)}})}});
-export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
+export default defineApp({accounts:{service}},async()=>({tools: router({})}));`,
             },
+            appsManifest,
           ],
         });
         expect(deployed.status).toBe(200);
@@ -90,9 +92,11 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
           page
             .goto(`/org/${actors.organization.slug}/apps/${app.id}?view=accounts`)
             .then(() =>
-              page.getByRole("button", { name: "Add Sample service account", exact: true }).click(),
-            )
-            .then(() => page.getByLabel("Account name", { exact: true }).fill("Work reports")),
+              page
+                .getByRole("region", { name: "Sample service", exact: true })
+                .getByRole("button", { name: "Connect new account", exact: true })
+                .click(),
+            ),
         );
         yield* emulatorRequest(issuer, "/_emulate/faults", {
           match: { method: "POST", pathPattern: "/register" },

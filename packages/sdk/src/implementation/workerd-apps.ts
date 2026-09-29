@@ -126,6 +126,8 @@ export const workerdApps = (options: {
    * resolves to a private address and private app fetch is off.
    */
   readonly selfOrigin?: { readonly origin: string; readonly address: string };
+  /** The npm registry app builds resolve packages from. Defaults to the public registry. */
+  readonly npmRegistry?: string;
 }): Effect.Effect<
   { readonly runtime: ReturnType<typeof runtimeAdapter>; readonly workflows: WorkflowRuntime },
   RuntimeBuildFailed | WorkerdMigrationRequired | WorkflowFailure,
@@ -186,6 +188,7 @@ export const workerdApps = (options: {
           JsonBinding.local("APP_WORKERS", Option.getOrNull(yield* appWorkerLimit)),
           publicEgressBinding,
           JsonBinding.local("SELF_ORIGIN", options.selfOrigin?.origin ?? ""),
+          JsonBinding.local("NPM_REGISTRY", options.npmRegistry ?? ""),
           ...(options.selfOrigin === undefined ? [] : [selfOriginBinding]),
           Loopback.local({ binding: "HOST", name: "executor-workflow-host", handler }),
         ],

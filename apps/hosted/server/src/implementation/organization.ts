@@ -230,7 +230,19 @@ export const inventory = (owner: OwnerId) =>
       else existing.push(profile);
     }
     const profiles = apps.flatMap((app) => byApp.get(app.id) ?? []);
-    if (policy.tools.kind === "all") return { apps, accounts, profiles };
+    const listed = new Set(apps.map((app) => app.id));
+    const health = new Map(
+      (accounts.length === 0 ? [] : yield* executor.accounts.listHealth({ owner })).map((entry) => [
+        entry.account,
+        { ...entry, apps: entry.apps.filter((check) => listed.has(check.app)) },
+      ]),
+    );
+    const withHealth = (listedAccounts: typeof accounts) =>
+      listedAccounts.map((account) => {
+        const checks = health.get(account.id);
+        return checks === undefined ? account : { ...account, health: checks };
+      });
+    if (policy.tools.kind === "all") return { apps, accounts: withHealth(accounts), profiles };
     const selected = new Set(
       profiles.flatMap((profile) =>
         Object.values(profile.accounts).flatMap((value) =>
@@ -238,7 +250,11 @@ export const inventory = (owner: OwnerId) =>
         ),
       ),
     );
-    return { apps, accounts: accounts.filter((account) => selected.has(account.id)), profiles };
+    return {
+      apps,
+      accounts: withHealth(accounts.filter((account) => selected.has(account.id))),
+      profiles,
+    };
   });
 /** Organization routes do not own app/account operations. */
 export const hostedOrganizationHandlers = HttpApiBuilder.group(

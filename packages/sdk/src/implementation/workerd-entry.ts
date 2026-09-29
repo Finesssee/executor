@@ -12,7 +12,9 @@ import type {
 import { RpcTarget, newWorkersRpcResponse, type RpcStub } from "capnweb";
 import { Cause, Effect, Redacted, Schema } from "effect";
 import {
+  DatabaseFieldReserved,
   DeclaredRequirements,
+  HostRequirementsError,
   HostResponse,
   ResolvedAccounts,
   WorkflowRunId,
@@ -37,17 +39,26 @@ import {
   type AppWorkerResidency,
 } from "./app-worker-residency.ts";
 import { compileWorkerApp } from "../workerd-build.ts";
-import { WorkerBundle } from "../contracts/worker-build.ts";
 import {
-  CompiledWorkerApp,
+  CompileWorkerApp,
+  CompileWorkerResult,
   PreparedWorkflow,
   WorkerInvocation,
   type AppHostCallbacks,
   type WorkflowHostCommand,
 } from "../contracts/workerd-host.ts";
-import { SourceFiles } from "../contracts/deployment.ts";
-import { decodeWorkflowFailure, workflowFailureMessage } from "../contracts/workflow-errors.ts";
-import framework from "executor-framework";
+import { LoadedWorkerBuild } from "../contracts/worker-build.ts";
+import {
+  describeBuildCause,
+  RuntimeAppsDependencyMissing,
+  RuntimeBuildFailed,
+  RuntimeProtocolUnsupported,
+} from "../contracts/runtime.ts";
+import {
+  decodeWorkflowFailure,
+  workflowFailureDetail,
+  workflowFailureMessage,
+} from "../contracts/workflow-errors.ts";
 
 declare const WebSocketPair: { new (): { 0: NativeWebSocket; 1: NativeWebSocket } };
 
@@ -95,6 +106,8 @@ interface Environment {
   readonly SELF_ORIGIN: string;
   /** Reaches the product that serves `SELF_ORIGIN` without the network. */
   readonly SELF?: HttpService;
+  /** The npm registry builds resolve packages from, or empty for the public registry. */
+  readonly NPM_REGISTRY: string;
   readonly LOADER: WorkerLoader;
   /** Most app Workers this process keeps loaded, or null for the default. */
   readonly APP_WORKERS?: number | null;
@@ -103,6 +116,13 @@ interface Environment {
   readonly HOST: Fetcher;
 }
 const failure = () => new WorkflowFailure({ reason: "engine", retryable: true });
+/** The deployer sees the underlying failure; builds bind no accounts. */
+const buildFailed = (stage: RuntimeBuildFailed["stage"], cause: unknown) =>
+  new RuntimeBuildFailed({
+    stage,
+    message: describeBuildCause(cause),
+    ...(Schema.is(DatabaseFieldReserved)(cause) ? { declaration: cause } : {}),
+  });
 /**
  * Every app isolate's global `fetch`. `global_fetch_strictly_public` cannot do this here: it
  * routes global fetch through workerd's `internet` service, which this runtime configures to
@@ -152,6 +172,7 @@ const hostRequest = (env: Environment, command: WorkflowHostCommand) =>
  * workerd keeps this isolate, and every app Worker it loads, for the life of the process. One
  * residency, shared by every request, bounds how many app Workers stay loaded.
  */
+// oxlint-disable-next-line executor/no-module-level-mutable-state -- one process-wide residency bounds loaded app Workers across requests
 let residency: AppWorkerResidency | undefined;
 /** The shared runner over this Worker's loader, data supervisors and outbound network. */
 const runner = (env: Environment, context: Pick<ExecutionContext, "waitUntil" | "exports">) =>
@@ -220,20 +241,50 @@ class AppApi extends RpcTarget {
   async compile(input: string): Promise<string> {
     return this.#run(
       Effect.gen({ self: this }, function* () {
-        const files = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(SourceFiles))(input);
-        const { bundle, ui } = yield* compileWorkerApp(files, framework);
-        const response = yield* runner(this.#env, this.#context).declare(bundle, {});
-        const envelope = yield* Schema.decodeUnknownEffect(HostResponse)(response);
-        if (!envelope.ok) return yield* failure();
-        const requirements = yield* Schema.decodeUnknownEffect(DeclaredRequirements)(
-          envelope.value,
+        const request = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(CompileWorkerApp))(
+          input,
+        ).pipe(Effect.mapError((cause) => buildFailed("source", cause)));
+        const compiled = yield* compileWorkerApp(
+          request.files,
+          this.#env.NPM_REGISTRY === "" ? {} : { registry: this.#env.NPM_REGISTRY },
         );
-        return yield* Schema.encodeEffect(Schema.fromJsonString(CompiledWorkerApp))({
-          bundle,
-          requirements: json(yield* Schema.encodeEffect(DeclaredRequirements)(requirements)),
-          ...(ui === undefined ? {} : { ui }),
-        });
-      }),
+        const { bundle, ui } = compiled;
+        const requirements = yield* runner(this.#env, this.#context)
+          .declare({ ...bundle, protocol: compiled.protocol }, {})
+          .pipe(
+            Effect.flatMap(Schema.decodeUnknownEffect(HostResponse)),
+            Effect.flatMap((envelope) =>
+              envelope.ok
+                ? Schema.decodeUnknownEffect(DeclaredRequirements)(envelope.value)
+                : Schema.decodeUnknownEffect(HostRequirementsError)(envelope.error).pipe(
+                    Effect.flatMap(Effect.fail),
+                  ),
+            ),
+            Effect.mapError((cause) => buildFailed("declaration", cause)),
+          );
+        return {
+          ok: true as const,
+          value: {
+            bundle,
+            protocol: compiled.protocol,
+            requirements: json(yield* Schema.encodeEffect(DeclaredRequirements)(requirements)),
+            ...(ui === undefined ? {} : { ui }),
+          },
+        };
+      }).pipe(
+        Effect.catch((error) =>
+          Effect.succeed({
+            ok: false as const,
+            error:
+              Schema.is(RuntimeBuildFailed)(error) ||
+              Schema.is(RuntimeProtocolUnsupported)(error) ||
+              Schema.is(RuntimeAppsDependencyMissing)(error)
+                ? error
+                : buildFailed("compile", error),
+          }),
+        ),
+        Effect.flatMap(Schema.encodeEffect(Schema.fromJsonString(CompileWorkerResult))),
+      ),
     );
   }
   async invoke(value: string, callbacks: RpcStub<AppHostCallbacks>): Promise<string> {
@@ -242,7 +293,9 @@ class AppApi extends RpcTarget {
         Effect.flatMap(({ elicitation, workflowControls, ...invocation }) =>
           runner(this.#env, this.#context).invoke(invocation, {
             load: async () =>
-              Schema.decodeUnknownSync(Schema.fromJsonString(WorkerBundle))(await callbacks.load()),
+              Schema.decodeUnknownSync(Schema.fromJsonString(LoadedWorkerBuild))(
+                await callbacks.load(),
+              ),
             elicit: elicitation
               ? async (input) =>
                   Schema.decodeUnknownSync(encodedJson)(
@@ -393,7 +446,7 @@ export class AppWorkflows extends WorkflowEntrypoint<Environment, { run: string 
                 load: () =>
                   Effect.runPromise(
                     hostRequest(this.env, { operation: "load", run: seed.runId }).pipe(
-                      Effect.flatMap(Schema.decodeUnknownEffect(WorkerBundle)),
+                      Effect.flatMap(Schema.decodeUnknownEffect(LoadedWorkerBuild)),
                     ),
                   ),
                 elicit: null,
@@ -419,11 +472,16 @@ export class AppWorkflows extends WorkflowEntrypoint<Environment, { run: string 
               }),
             );
           if (!result.ok) {
+            const detail = workflowFailureDetail(result.error);
             if (result.error.reason !== "engine" || !result.error.retryable)
               yield* hostRequest(this.env, {
                 operation: "finish",
                 run: seed.runId,
-                result: { ok: false, error: result.error.reason },
+                result: {
+                  ok: false,
+                  error: result.error.reason,
+                  ...(detail === undefined ? {} : { detail }),
+                },
               });
             return yield* result.error;
           }

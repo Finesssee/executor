@@ -1,5 +1,5 @@
 /** Check every test/helper import using Effect's filesystem and scoped Node runtime. */
-import ts from "typescript";
+import ts from "typescript-5";
 import { scenarios, type TestPlan } from "./test-plan.ts";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -19,7 +19,7 @@ const allowed = new Set([
   "effect/unstable/cli",
   "effect",
   "effect/unstable/process",
-  "typescript",
+  "typescript-5",
   "@effect/platform-node/NodeRuntime",
   "@effect/platform-node/NodeServices",
   "@effect/platform-node/NodeHttpServer",
@@ -82,6 +82,19 @@ const check = Effect.gen(function* () {
             return;
           problems.push(`${label}: forbidden E2E import ${specifier}`);
         };
+        // The host's apps release is data in the apps package manifest, imported as JSON: the
+        // fixtures declare the version the hosts ship. No implementation is imported.
+        const appsManifest = (node: ts.ImportDeclaration) =>
+          label === `support${path.sep}apps-release.ts` &&
+          ts.isStringLiteral(node.moduleSpecifier) &&
+          path.resolve(path.dirname(file), node.moduleSpecifier.text) ===
+            path.resolve("packages/apps/package.json") &&
+          node.attributes?.elements.some(
+            (attribute) =>
+              attribute.name.text === "type" &&
+              ts.isStringLiteral(attribute.value) &&
+              attribute.value.text === "json",
+          ) === true;
         const visit = (node: ts.Node) => {
           if (
             label.startsWith(`tests${path.sep}`) &&
@@ -128,7 +141,7 @@ const check = Effect.gen(function* () {
             );
           if (ts.isImportTypeNode(node))
             module(ts.isLiteralTypeNode(node.argument) ? node.argument.literal : undefined);
-          if (ts.isImportDeclaration(node)) module(node.moduleSpecifier);
+          if (ts.isImportDeclaration(node) && !appsManifest(node)) module(node.moduleSpecifier);
           if (ts.isExportDeclaration(node) && node.moduleSpecifier) module(node.moduleSpecifier);
           if (
             ts.isImportEqualsDeclaration(node) &&

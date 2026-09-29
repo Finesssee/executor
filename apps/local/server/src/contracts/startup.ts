@@ -25,6 +25,7 @@ export class StartupFailed extends Schema.TaggedError<StartupFailed>()("StartupF
     "storage",
     "runtime",
     "sdk",
+    "data-steps",
     "composition",
     "listen",
     "browser",

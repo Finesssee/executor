@@ -9,6 +9,7 @@ import { Resource } from "../support/contracts.ts";
 import { createProfile, selectProfileAccounts } from "../support/profiles.ts";
 import { WorkflowRun } from "../support/workflow-app.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const Access = Schema.Struct({ revision: Schema.String });
 const source = `import { defineApp, defineProvider, secrets, workflow, object, string } from "apps";
@@ -30,7 +31,7 @@ layer(HostedLive, { excludeTestServices: true })("Workflow replay access", (it) 
         const prefix = `/api/organizations/${actors.organization.id}`;
         const deployed = yield* api.request(actors.owner, "POST", `${prefix}/apps/deploy`, {
           name: `Replay access ${randomUUID()}`,
-          files: [{ path: "index.ts", content: source }],
+          files: [{ path: "index.ts", content: source }, appsManifest],
         });
         expect(deployed.status, JSON.stringify(deployed.body)).toBe(200);
         const app = yield* body(Resource, deployed);

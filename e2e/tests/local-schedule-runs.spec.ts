@@ -8,6 +8,7 @@ import { TestLive, withCase } from "../support/case.ts";
 import { scenarios } from "../test-plan.ts";
 import { serverControl } from "../support/server-control.ts";
 import { Evidence } from "../support/evidence.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const Run = Schema.Struct({
   id: Schema.String,
@@ -20,7 +21,7 @@ const Run = Schema.Struct({
 });
 const Runs = Schema.Array(Run);
 class Pending extends Schema.TaggedError<Pending>()("Pending", {}) {}
-const source = `import { defineApp, defineDatabase, table, string, object, query, mutation, interval, type MutationContext, type QueryContext } from "apps";
+const source = `import { defineApp, defineDatabase, table, string, object, query, mutation, interval, type MutationContext, type QueryContext, router } from "apps";
 import { always } from "apps/operations/approval";
 const database = defineDatabase({ events: table({ message: string() }) });
 const requirements = { accounts: {}, database };
@@ -32,8 +33,10 @@ const slow = mutation({ input: object({}) }, async ({ signal }) => {
   return { finished: true };
 });
 export default defineApp(requirements, async () => ({
-   queries: { events: query({ input: object({}) }, async (ctx: QueryContext<typeof requirements>) => ctx.db.events.withIndex("by_creation").take(100)) },
-  mutations: { record, blocked, input, slow }, schedules: {
+   tools: router({
+     events: query({ input: object({}) }, async (ctx: QueryContext<typeof requirements>) => ctx.db.events.withIndex("by_creation").take(100)),
+     record, blocked, input, slow,
+   }), schedules: {
     automatic: interval({ minutes: 1 }, record, { message: "automatic" }),
     review: interval({ minutes: 1 }, record, { message: "review" }),
     blocked: interval({ minutes: 1 }, blocked, {}),
@@ -57,7 +60,7 @@ layer(TestLive, { excludeTestServices: true })("Scheduled runs", (it) => {
           {
             owner: "local",
             name: `Scheduled ${randomUUID().slice(0, 8)}`,
-            files: [{ path: "index.ts", content: source }],
+            files: [{ path: "index.ts", content: source }, appsManifest],
           },
           headers,
         );
@@ -220,6 +223,7 @@ layer(TestLive, { excludeTestServices: true })("Scheduled runs", (it) => {
                   "",
                 ),
               },
+              appsManifest,
             ],
           },
           headers,

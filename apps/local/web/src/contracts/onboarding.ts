@@ -24,7 +24,6 @@ export const addAccountAtom = DashboardClient.runtime.fn(
       payload: {
         provider: ProviderId;
         method: string;
-        label: string;
         fields: typeof AccountFieldsInput.Type;
       };
     },

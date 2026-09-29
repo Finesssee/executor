@@ -162,6 +162,7 @@ export const captureUIObservations = (
     };
     const pattern = `${target.metadata.origin}/api/**`;
     const hold = (route: Route) =>
+      // oxlint-disable-next-line executor/no-manual-effect-runtime-in-tests -- Playwright route handlers must return a Promise
       Effect.runPromise(
         Effect.gen(function* () {
           const request = route.request();
@@ -233,8 +234,8 @@ export const captureUIObservations = (
         yield* evidence.json("ui-observations.json", events);
         yield* evidence.json("ui-captures.json", { requestHoldMs, holds, frames });
         cancelled.abort();
-        if (failures[0]) yield* Effect.die(failures[0]);
-        if (invalid > 0) yield* Effect.die(new Error("Invalid UI observation protocol"));
+        if (failures[0]) return yield* Effect.die(failures[0]);
+        if (invalid > 0) return yield* Effect.die(new Error("Invalid UI observation protocol"));
       }).pipe(
         Effect.ensuring(
           Effect.sync(() => {

@@ -8,11 +8,14 @@ import { Actors } from "../support/actors.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { App, Resource, Organization } from "../support/contracts.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 const Access = Schema.Struct({ revision: Schema.String });
 const Group = Schema.Struct({ id: Schema.String, revision: Schema.String });
-const singleSource = `import {defineApp, defineProvider, secrets, query, object, string} from "apps";
+const singleSource = `import {defineApp, defineProvider, secrets, query, object, string, router} from "apps";
 const service=defineProvider({name:"Group isolation fixture",auth:{key:secrets({label:"Key",fields:object({token:string()})})}});
-export default defineApp({accounts:{service}},async ctx=>({name:"Isolation",queries:{identity:query({input:object({})},async()=>ctx.accounts.service.fields.token)}}));`;
+export default defineApp({accounts:{service}},async ctx=>({name:"Isolation",tools: router({
+  identity:query({input:object({})},async()=>ctx.accounts.service.fields.token),
+})}));`;
 layer(HostedLive, { excludeTestServices: true })("Resource isolation", (it) => {
   it.effect(scenarios.resourceIsolation.title, (context) =>
     withHostedCase(
@@ -41,7 +44,7 @@ layer(HostedLive, { excludeTestServices: true })("Resource isolation", (it) => {
           App,
           yield* api.request(actors.owner, "POST", `${prefix}/apps/deploy`, {
             name: `Isolation ${suffix}`,
-            files: [{ path: "index.ts", content: singleSource }],
+            files: [{ path: "index.ts", content: singleSource }, appsManifest],
           }),
         );
         const group = yield* body(
@@ -75,7 +78,7 @@ layer(HostedLive, { excludeTestServices: true })("Resource isolation", (it) => {
           App,
           yield* api.request(actors.owner, "POST", `${foreign}/apps/deploy`, {
             name: `Isolation ${suffix}`,
-            files: [{ path: "index.ts", content: singleSource }],
+            files: [{ path: "index.ts", content: singleSource }, appsManifest],
           }),
         );
         for (const endpoint of ["", "/tools", "/source", "/access"])
@@ -86,7 +89,8 @@ layer(HostedLive, { excludeTestServices: true })("Resource isolation", (it) => {
         expect(
           (yield* api.request(actors.owner, "POST", `${foreign}/apps/${app.id}/tools/call`, {
             profile: profile.id,
-            tool: "queries.identity",
+            tool: "identity",
+            kind: "query",
             input: {},
           })).status,
         ).toBe(403);
@@ -137,7 +141,8 @@ layer(HostedLive, { excludeTestServices: true })("Resource isolation", (it) => {
         expect(
           (yield* api.request(actors.owner, "POST", `${prefix}/apps/${app.id}/tools/call`, {
             profile: profile.id,
-            tool: "queries.identity",
+            tool: "identity",
+            kind: "query",
             input: {},
           })).body,
         ).toBe("synthetic");

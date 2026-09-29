@@ -23,6 +23,8 @@ export const startCloudEnvironment = (input: {
   readonly databasePort: number;
   readonly commit: string;
   readonly observeUI: boolean;
+  /** Registry the local Cloud compiler resolves app packages from. */
+  readonly npmRegistry?: string;
 }) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem,
@@ -91,6 +93,7 @@ export const startCloudEnvironment = (input: {
       CLOUD_DEV_API_PORT: new URL(input.origin).port,
       CLOUD_DEV_APP_UI_PORT: String(input.appPort),
       EXECUTOR_APP_UI_BASE_URL: `http://localhost:${input.appPort}`,
+      ...(input.npmRegistry === undefined ? {} : { EXECUTOR_NPM_REGISTRY: input.npmRegistry }),
       CLOUD_DEV_DATABASE_PORT: String(input.databasePort),
       CLOUD_DEV_DATABASE_PASSWORD: databasePassword,
       CLOUD_DEV_EXTERNAL_DATABASE: "true",

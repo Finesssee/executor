@@ -11,7 +11,15 @@ import { Evidence } from "../support/evidence.ts";
 import { Target } from "../support/platform.ts";
 import { holdQuery } from "../support/query-transition.ts";
 import { oauthRecoveryIssuer, recoveryClients } from "../support/oauth-recovery-issuer.ts";
+import {
+  accountNameField,
+  accountNamePrompt,
+  dismissAccountName,
+  nameAccountDialog,
+  nameConnectedAccount,
+} from "../support/name-account.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const App = Schema.Struct({
   id: Schema.String,
@@ -59,10 +67,11 @@ layer(HostedLive, { excludeTestServices: true })("OAuth storyboard", (it) => {
               files: [
                 {
                   path: "index.ts",
-                  content: `import { defineApp, defineProvider, oauth2 } from "apps";
+                  content: `import { defineApp, defineProvider, oauth2, router } from "apps";
 const service=defineProvider({name:${JSON.stringify(name)},auth:{oauth:oauth2({discover:${JSON.stringify(issuer.origin)},scopes:["reports:read","offline_access"]})}});
-export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
+export default defineApp({accounts:{service}},async()=>({tools: router({})}));`,
                 },
+                appsManifest,
               ],
             });
             expect(response.status).toBe(200);
@@ -117,7 +126,7 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
             return { width: bounds.width, height: bounds.height };
           });
         const connectionLayout = () =>
-          browser.use("Measure the stable dialog and account-name field", (page) => {
+          browser.use("Measure the stable connection dialog", (page) => {
             const dialog = page.getByRole("dialog");
             return dialog
               .evaluate((element) =>
@@ -125,13 +134,9 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
               )
               .then(() => dialog.scrollIntoViewIfNeeded())
               .then(() =>
-                Promise.all([
-                  dialog.boundingBox(),
-                  dialog.getByLabel("Account name", { exact: true }).boundingBox(),
-                ]).then(([dialog, name]) => {
-                  if (dialog === null || name === null)
-                    throw new Error("The connection dialog and name must be visible");
-                  return { dialog, name };
+                dialog.boundingBox().then((dialog) => {
+                  if (dialog === null) throw new Error("The connection dialog must be visible");
+                  return { dialog };
                 }),
               );
           });
@@ -148,14 +153,14 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
         yield* loading.requested;
         yield* capture("App-loading");
         yield* loading.release;
-        yield* ready("Add Sample service account");
+        yield* ready("Connect new account");
         yield* capture("Account-entry");
-        yield* click("Add Sample service account");
+        yield* click("Connect new account");
         expect(
-          yield* browser.use("The first dialog includes the account name", (page) =>
+          yield* browser.use("The connection form does not ask for an account name", (page) =>
             page.getByRole("dialog").getByLabel("Account name", { exact: true }).count(),
           ),
-        ).toBe(1);
+        ).toBe(0);
         expect(
           yield* browser.use("Setup uses a skeleton in the Connect action", (page) =>
             page.getByRole("status", { name: "Preparing connection", exact: true }).count(),
@@ -168,22 +173,19 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
         ).toBe(0);
         const loadingSize = yield* actionSize("status", "Preparing connection");
         const loadingLayout = yield* connectionLayout();
-        yield* capture("Account-name-before-connect");
+        yield* capture("Connection-before-setup");
         yield* browser.use("Show the first connection form on mobile", (page) =>
           page.setViewportSize({ width: 390, height: 844 }),
         );
         const mobileLoadingSize = yield* actionSize("status", "Preparing connection");
         const mobileLoadingLayout = yield* connectionLayout();
-        yield* browser.checkpoint("Account-name-before-connect-mobile");
+        yield* browser.checkpoint("Connection-before-setup-mobile");
         yield* browser.use("Restore desktop for connection setup", (page) =>
           page.setViewportSize({ width: 1440, height: 960 }),
         );
         yield* setup.requested;
         yield* browser.use("Wait for setup pending", (page) =>
           page.getByRole("status", { name: "Preparing connection", exact: true }).waitFor(),
-        );
-        yield* browser.use("Name the account", (page) =>
-          page.getByLabel("Account name", { exact: true }).fill("Work reports"),
         );
         yield* capture("Checking-connection-options");
         yield* issuer.configure({ discoveryFails: true });
@@ -194,7 +196,7 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
             .waitFor(),
         );
         const failedLayout = yield* connectionLayout();
-        expect(failedLayout.name.width).toEqual(loadingLayout.name.width);
+        expect(failedLayout.dialog.width).toEqual(loadingLayout.dialog.width);
         const failedActionSize = yield* actionSize("alert");
         expect(failedActionSize.height).toBeGreaterThan(loadingSize.height);
         yield* capture("Setup-failed-with-retry");
@@ -202,7 +204,7 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
           page.setViewportSize({ width: 390, height: 844 }),
         );
         const mobileFailedLayout = yield* connectionLayout();
-        expect(mobileFailedLayout.name.width).toEqual(mobileLoadingLayout.name.width);
+        expect(mobileFailedLayout.dialog.width).toEqual(mobileLoadingLayout.dialog.width);
         const mobileFailedActionSize = yield* actionSize("alert");
         expect(mobileFailedActionSize.height).toBeGreaterThan(mobileLoadingSize.height);
         yield* browser.checkpoint("Setup-failed-mobile");
@@ -240,11 +242,6 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
             .waitFor()
             .then(() => page.getByRole("alert").waitFor({ state: "hidden" })),
         );
-        expect(
-          yield* browser.use("Setup failure and retry preserve the account name", (page) =>
-            page.getByLabel("Account name", { exact: true }).inputValue(),
-          ),
-        ).toBe("Work reports");
         expect(yield* connectionLayout()).toEqual(loadingLayout);
         expect(yield* actionSize("group", "Connection options")).toEqual(loadingSize);
         expect((yield* actionSize("button", "Connect Sample service")).width).toEqual(
@@ -267,21 +264,14 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
           page.getByText("Advanced", { exact: true }).click(),
         );
         yield* capture("Required-permissions-expanded");
-        yield* browser.use("Empty the required account name", (page) =>
-          page.getByLabel("Account name", { exact: true }).fill(""),
-        );
         expect(
-          yield* browser.use("Connect is disabled without a name", (page) =>
+          yield* browser.use("Connect is ready without naming the account", (page) =>
             page
               .getByRole("dialog")
               .getByRole("button", { name: "Connect Sample service", exact: true })
-              .isDisabled(),
+              .isEnabled(),
           ),
         ).toBe(true);
-        yield* capture("Empty-name-blocked");
-        yield* browser.use("Restore the account name", (page) =>
-          page.getByLabel("Account name", { exact: true }).fill("Work reports"),
-        );
         const failedStart = yield* holdQuery(startPattern, "fail", { method: "POST" });
         yield* click("Connect Sample service");
         yield* failedStart.requested;
@@ -292,9 +282,32 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
           page.getByRole("dialog").getByRole("alert").waitFor(),
         );
         yield* capture("Sign-in-start-failed");
+        // A page with a pending navigation cannot be inspected, so it reports the action itself.
+        const actionLabels: string[] = [];
+        yield* browser.use("Record the Connect action until the page leaves", (page) => {
+          page.on("console", (message) => {
+            if (message.text().startsWith("oauth-action:"))
+              actionLabels.push(message.text().slice("oauth-action:".length));
+          });
+          return page
+            .getByRole("dialog")
+            .getByRole("group", { name: "Connection options" })
+            .evaluate((group) => {
+              new MutationObserver(() =>
+                console.log(`oauth-action:${group.querySelector("button")?.textContent ?? ""}`),
+              ).observe(group, { childList: true, subtree: true, characterData: true });
+            });
+        });
+        const authorization = yield* holdQuery(["/authorize"], "continue");
         yield* click("Connect Sample service");
+        yield* authorization.requested;
+        yield* authorization.release;
         yield* heading("Connect Sample service");
         yield* ready("Allow access");
+        // Once sign-in starts, the action stays busy until the provider page replaces it.
+        const departing = actionLabels.indexOf("Preparing sign-in…");
+        expect(departing, "the action showed sign-in progress").toBeGreaterThanOrEqual(0);
+        expect(new Set(actionLabels.slice(departing))).toEqual(new Set(["Preparing sign-in…"]));
         yield* capture("Provider-consent");
         const completion = yield* holdQuery(completePattern, "continue", { method: "POST" });
         yield* issuer.configure({ tokenFails: true });
@@ -336,25 +349,30 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
           ),
         );
         yield* capture("Connection-retry-dialog");
-        expect(
-          yield* browser.use("Retry retains the name", (page) =>
-            page.getByLabel("Account name", { exact: true }).inputValue(),
-          ),
-        ).toBe("Work reports");
         yield* click("Connect Sample service");
         yield* ready("Allow access");
         yield* click("Allow access");
-        yield* browser.use("Wait for the saved account", (page) =>
-          page.getByRole("link", { name: "Work reports", exact: true }).waitFor(),
-        );
-        yield* capture("Account-connected");
-        yield* click("Switch Sample service account");
-        yield* ready("Connect Sample service");
+        yield* heading("Name this account");
         expect(
-          yield* browser.use("Replacement starts with the account name", (page) =>
-            page.getByRole("dialog").getByLabel("Account name", { exact: true }).inputValue(),
+          yield* browser.use("The connected account starts with the default name", (page) =>
+            accountNamePrompt(page).then(() => accountNameField(page).inputValue()),
           ),
         ).toBe("Default");
+        yield* capture("Name-connected-account");
+        yield* browser.use("Name the connected account", (page) =>
+          nameConnectedAccount(page, "Work reports"),
+        );
+        yield* browser.use("Wait for the saved account", (page) =>
+          page.getByRole("radio", { name: "Work reports", exact: true, checked: true }).waitFor(),
+        );
+        yield* capture("Account-connected");
+        yield* click("Connect new account");
+        yield* ready("Connect Sample service");
+        expect(
+          yield* browser.use("Replacement does not ask for an account name", (page) =>
+            page.getByRole("dialog").getByLabel("Account name", { exact: true }).count(),
+          ),
+        ).toBe(0);
         yield* capture("Replace-account-entry");
         yield* browser.use("Open saved-client options", (page) =>
           page.getByText("Advanced", { exact: true }).click(),
@@ -366,12 +384,16 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
         yield* click("Change OAuth client");
         yield* capture("Manual-client-dialog");
         yield* click("Close");
-        const accountHref = yield* browser.use("Read the saved account link", (page) =>
-          page.getByRole("link", { name: "Work reports", exact: true }).getAttribute("href"),
-        );
-        const accountId = yield* Schema.decodeUnknownEffect(Schema.NonEmptyString)(
-          accountHref?.split("/").at(-1),
-        );
+        const accountId = (yield* body(
+          Schema.Struct({
+            accounts: Schema.Array(Schema.Struct({ id: Schema.String, label: Schema.String })),
+          }),
+          yield* api.request(actors.owner, "GET", `${prefix}/inventory`),
+        )).accounts.find((account) => account.label === "Work reports")?.id;
+        if (accountId === undefined) return yield* Effect.die("The saved account is missing");
+        const accountsPath = `/org/${actors.organization.slug}/accounts`;
+        const onAccount = (url: URL) =>
+          url.pathname === accountsPath && url.searchParams.get("account") === accountId;
         yield* Effect.addFinalizer(() =>
           api.request(actors.owner, "DELETE", `${prefix}/accounts/${accountId}`).pipe(Effect.orDie),
         );
@@ -396,8 +418,7 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
         yield* ready("Reconnect Sample service");
         yield* browser.use("A direct reconnect link opens over its saved account", (page) =>
           page.waitForURL(
-            (url) =>
-              url.pathname === accountHref && url.searchParams.get("connection") === reconnect.id,
+            (url) => onAccount(url) && url.searchParams.get("connection") === reconnect.id,
           ),
         );
         yield* browser.use("Refresh preserves the connection modal", (page) => page.reload());
@@ -411,12 +432,10 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
           page.getByRole("dialog").press("Escape"),
         );
         yield* browser.use("Closing a direct link returns to the saved account", (page) =>
-          page.waitForURL(
-            (url) => url.pathname === accountHref && !url.searchParams.has("connection"),
-          ),
+          page.waitForURL((url) => onAccount(url) && !url.searchParams.has("connection")),
         );
         expect(
-          yield* browser.use("The account page has no remaining modal", (page) =>
+          yield* browser.use("The account list has no remaining modal", (page) =>
             page.getByRole("dialog").count(),
           ),
         ).toBe(0);
@@ -473,7 +492,11 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
         yield* ready("Allow access");
         yield* click("Allow access");
         yield* browser.use("Wait for reconnect success", (page) =>
-          page.getByRole("heading", { name: /Work reports/ }).waitFor(),
+          page
+            .waitForURL((url) => onAccount(url) && !url.searchParams.has("connection"))
+            .then(() =>
+              page.getByRole("button", { name: "Manage Work reports", exact: true }).waitFor(),
+            ),
         );
         yield* capture("Reconnect-completed");
         yield* browser.use("Revisit the completed link", (page) => page.goto(connectionUrl));
@@ -504,13 +527,180 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
         yield* browser.use("Open a provider without automatic registration", (page) =>
           page.goto(`/org/${actors.organization.slug}/apps/${manual.id}?view=accounts`),
         );
-        yield* click("Add Manual service account");
+        yield* click("Connect new account");
         yield* browser.use("Wait for mandatory manual setup", (page) =>
           page.getByLabel("Client secret", { exact: true }).waitFor(),
         );
         yield* capture("Client-required-first-connection");
         yield* evidence.json("oauth-protocol-observations.json", yield* issuer.observations);
         expect(frames.length).toBe(31);
+      }),
+    ),
+  );
+
+  it.effect(scenarios.oauthNameAfterConnect.title, (context) =>
+    withHostedCase(
+      context,
+      Effect.gen(function* () {
+        const api = yield* Api,
+          actors = yield* Actors,
+          browser = yield* Browser,
+          target = yield* Target;
+        const issuer = yield* oauthRecoveryIssuer(target.metadata.origin, true);
+        const prefix = `/api/organizations/${actors.organization.id}`;
+        const deployed = yield* api.request(actors.owner, "POST", `${prefix}/apps/deploy`, {
+          name: `Naming ${randomUUID().slice(0, 8)}`,
+          files: [
+            {
+              path: "index.ts",
+              content: `import { defineApp, defineProvider, oauth2, router } from "apps";
+const service=defineProvider({name:"Sample service",auth:{oauth:oauth2({discover:${JSON.stringify(issuer.origin)},scopes:["reports:read"]})}});
+export default defineApp({accounts:{service}},async()=>({tools:router({})}));`,
+            },
+            appsManifest,
+          ],
+        });
+        expect(deployed.status).toBe(200);
+        const app = yield* body(App, deployed);
+        const accounts: string[] = [];
+        yield* Effect.addFinalizer(() =>
+          Effect.gen(function* () {
+            yield* api.request(actors.owner, "DELETE", `${prefix}/apps/${app.id}`);
+            for (const account of accounts)
+              yield* api.request(actors.owner, "DELETE", `${prefix}/accounts/${account}`);
+          }).pipe(Effect.orDie),
+        );
+        const label = (account: string) =>
+          Effect.gen(function* () {
+            const response = yield* api.request(
+              actors.owner,
+              "GET",
+              `${prefix}/accounts/${account}`,
+            );
+            expect(response.status).toBe(200);
+            return (yield* body(
+              Schema.Struct({ account: Schema.Struct({ label: Schema.String }) }),
+              response,
+            )).account.label;
+          });
+        const appPath = `/org/${actors.organization.slug}/apps/${app.id}`;
+        /** Connect from the app's Accounts tab and return with the naming dialog open. */
+        const connect = () =>
+          Effect.gen(function* () {
+            yield* browser.use("Connect a new account from the list", (page) =>
+              page.getByRole("button", { name: "Connect new account", exact: true }).click(),
+            );
+            yield* browser.use("Start sign-in without naming the account", (page) =>
+              page
+                .getByRole("dialog")
+                .getByRole("button", { name: "Connect Sample service", exact: true })
+                .click(),
+            );
+            const completed = yield* browser.use("Allow access and complete sign-in", (page) =>
+              Promise.all([
+                page.waitForResponse(
+                  (response) =>
+                    response.request().method() === "POST" &&
+                    /\/connections\/[^/]+\/oauth\/complete$/.test(new URL(response.url()).pathname),
+                ),
+                page.getByRole("button", { name: "Allow access", exact: true }).click(),
+              ]).then(([response]) => response.json() as Promise<unknown>),
+            );
+            const account = (yield* Schema.decodeUnknownEffect(
+              Schema.Struct({ id: Schema.String }),
+            )(completed)).id;
+            accounts.push(account);
+            // The prompt belongs to the dashboard layout, not to a URL the app has to carry.
+            const search = yield* browser.use("Return to the app to name the account", (page) =>
+              page
+                .waitForURL(
+                  (url) => url.pathname === appPath && url.searchParams.get("view") === "accounts",
+                )
+                .then(() => accountNamePrompt(page))
+                .then(() => new URL(page.url()).searchParams),
+            );
+            expect(search.has("rename")).toBe(false);
+            return account;
+          });
+        const prefilled = () =>
+          browser.use("Read the prefilled account name", (page) =>
+            accountNameField(page).inputValue(),
+          );
+        const dismissed = () =>
+          browser.use("The naming dialog leaves the app's accounts in place", (page) =>
+            nameAccountDialog(page)
+              .count()
+              .then((count) => ({ count, url: new URL(page.url()) })),
+          );
+        yield* browser.omitNetworkTrace;
+        yield* browser.login(actors.owner);
+        yield* browser.use("Open the app's accounts", (page) =>
+          page.goto(`${appPath}?view=accounts`),
+        );
+
+        const first = yield* connect();
+        expect(yield* prefilled()).toBe("Default");
+        yield* browser.checkpoint("Name a new OAuth account");
+        yield* browser.use("Close the dialog without saving", (page) => dismissAccountName(page));
+        const afterClose = yield* dismissed();
+        expect(afterClose.count).toBe(0);
+        expect(afterClose.url.pathname).toBe(appPath);
+        expect(afterClose.url.searchParams.get("view")).toBe("accounts");
+        yield* browser.use("The account keeps its default name in the app", (page) =>
+          page.getByRole("radio", { name: "Default", exact: true }).waitFor(),
+        );
+        expect(yield* label(first)).toBe("Default");
+
+        const second = yield* connect();
+        expect(second).not.toBe(first);
+        expect(yield* prefilled()).toBe("Default 2");
+        yield* browser.use("Name the second account", (page) =>
+          nameConnectedAccount(page, "Work reports"),
+        );
+        const afterSave = yield* dismissed();
+        expect(afterSave.count).toBe(0);
+        expect(afterSave.url.pathname).toBe(appPath);
+        yield* browser.use("The app shows the saved name", (page) =>
+          page.getByRole("radio", { name: "Work reports", exact: true }).waitFor(),
+        );
+        expect(yield* label(second)).toBe("Work reports");
+        expect(yield* label(first)).toBe("Default");
+        yield* browser.checkpoint("Named OAuth account in the app");
+
+        const reconnect = yield* body(
+          Resource,
+          yield* api.request(actors.owner, "POST", `${prefix}/accounts/${second}/connections`),
+        );
+        yield* browser.use("Open the reconnect link", (page) =>
+          page.goto(`/org/${actors.organization.slug}/connections/${reconnect.id}`),
+        );
+        yield* browser.use("Reconnect the named account", (page) =>
+          page
+            .getByRole("dialog")
+            .getByRole("button", { name: "Reconnect Sample service", exact: true })
+            .click(),
+        );
+        yield* browser.use("Allow access again", (page) =>
+          page.getByRole("button", { name: "Allow access", exact: true }).click(),
+        );
+        yield* browser.use("A reconnect returns to its account", (page) =>
+          page
+            .waitForURL(
+              (url) =>
+                url.pathname === `/org/${actors.organization.slug}/accounts` &&
+                url.searchParams.get("account") === second,
+            )
+            .then(() =>
+              page.getByRole("button", { name: "Manage Work reports", exact: true }).waitFor(),
+            ),
+        );
+        expect(
+          yield* browser.use("A reconnect does not ask for a name", (page) =>
+            nameAccountDialog(page).count(),
+          ),
+        ).toBe(0);
+        expect(yield* label(second)).toBe("Work reports");
+        yield* browser.checkpoint("Reconnected account keeps its name");
       }),
     ),
   );

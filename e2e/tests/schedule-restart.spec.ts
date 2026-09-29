@@ -6,16 +6,17 @@ import { Target } from "../support/platform.ts";
 import { TestLive, withCase } from "../support/case.ts";
 import { serverControl } from "../support/server-control.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const Runs = Schema.Array(
   Schema.Struct({ id: Schema.String, name: Schema.String, status: Schema.String }),
 );
 class Pending extends Schema.TaggedError<Pending>()("Pending", {}) {}
-const source = `import { defineApp, mutation, interval, object } from "apps";
+const source = `import { defineApp, mutation, interval, object, router } from "apps";
 import { always } from "apps/operations/approval";
 const tick = mutation({ input: object({}) }, async () => ({ done: true }));
 const review = mutation({ input: object({}), approval: always() }, async () => ({ done: true }));
-export default defineApp({ accounts: {} }, async () => ({  mutations: { tick, review }, schedules: { tick: interval({ minutes: 1 }, tick, {}), review: interval({ minutes: 1 }, review, {}) } }));`;
+export default defineApp({ accounts: {} }, async () => ({  tools: router({ tick, review }), schedules: { tick: interval({ minutes: 1 }, tick, {}), review: interval({ minutes: 1 }, review, {}) } }));`;
 layer(TestLive, { excludeTestServices: true })("Schedule persistence", (it) => {
   it.effect(scenarios.scheduleRestart.title, (context) =>
     withCase(
@@ -31,7 +32,7 @@ layer(TestLive, { excludeTestServices: true })("Schedule persistence", (it) => {
           {
             owner: "local",
             name: "Restart fixture",
-            files: [{ path: "index.ts", content: source }],
+            files: [{ path: "index.ts", content: source }, appsManifest],
           },
           headers,
         );

@@ -129,6 +129,74 @@ export const defaultDatabaseLimits: DatabaseLimits = {
   indexBytes: 2048,
 };
 
+/**
+ * The budget a query or mutation exhausted. `pageSize` bounds one take(n) or paginate call;
+ * `valueBytes` bounds one stored row; the rest accumulate across the whole invocation.
+ */
+export const DatabaseLimit = Schema.Literals([
+  "scanCalls",
+  "directGets",
+  "rowsRead",
+  "rowsReturned",
+  "pageSize",
+  "bytesRead",
+  "writes",
+  "valueBytes",
+]);
+export type DatabaseLimit = typeof DatabaseLimit.Type;
+
+const count = (value: number) => value.toLocaleString("en-US");
+const limitMessages: Record<DatabaseLimit, (maximum: number, requested: number) => string> = {
+  scanCalls: (maximum, requested) =>
+    `This invocation made ${count(requested)} index queries; the limit is ${count(maximum)}. Each first(), take(), collect(), count() or paginate() call on withIndex(...) counts once. Read related rows with one take() or paginate() over a shared index prefix instead of one first() per item, use get(id) for known IDs, or split the work across workflow steps.`,
+  directGets: (maximum, requested) =>
+    `This invocation made ${count(requested)} get(id) calls, including those made by update and delete; the limit is ${count(maximum)}. Split the work across workflow steps or mutations.`,
+  rowsRead: (maximum, requested) =>
+    `This invocation scanned ${count(requested)} rows; the limit is ${count(maximum)}. Narrow the index range, or page with paginate() across calls or workflow steps.`,
+  rowsReturned: (maximum, requested) =>
+    `This invocation returned ${count(requested)} rows; the limit is ${count(maximum)}. collect() fails rather than truncating. Page with paginate() across calls or workflow steps.`,
+  pageSize: (maximum, requested) =>
+    `One call asked for ${count(requested)} rows; take(n) and paginate({ numItems }) accept at most ${count(maximum)}. Page with paginate() across calls or workflow steps.`,
+  bytesRead: (maximum, requested) =>
+    `This invocation read ${count(requested)} bytes; the limit is ${count(maximum)}. Read fewer or smaller rows per call, or page with paginate() across calls or workflow steps.`,
+  writes: (maximum, requested) =>
+    `This mutation made ${count(requested)} writes; the limit is ${count(maximum)}. Split large ingests into batches, one batch per mutation or workflow step.`,
+  valueBytes: (maximum, requested) =>
+    `A row encodes to ${count(requested)} bytes; each row may use at most ${count(maximum)}. Store large content outside the row or split it across rows.`,
+};
+
+/** A query or mutation exceeded one of its database budgets. Nothing it wrote is committed. */
+export class DatabaseLimitExceeded extends Schema.TaggedError<DatabaseLimitExceeded>()(
+  "DatabaseLimitExceeded",
+  {
+    limit: DatabaseLimit,
+    maximum: Schema.Int,
+    requested: Schema.Int,
+  },
+) {
+  override get message() {
+    return limitMessages[this.limit](this.maximum, this.requested);
+  }
+}
+
+/** Host-owned row metadata that authored tables cannot declare. */
+export const reservedFieldNames = ["id", "createdAt", "updatedAt"] as const;
+/** A table declared a field the host adds to every row. */
+export class DatabaseFieldReserved extends Schema.TaggedError<DatabaseFieldReserved>()(
+  "DatabaseFieldReserved",
+  {
+    table: Schema.String,
+    field: Schema.Literals(reservedFieldNames),
+  },
+) {
+  override get message() {
+    return `Table "${this.table}" declares "${this.field}", which is reserved: the host adds id, createdAt and updatedAt to every row. Rename the field, or use the row's own ${this.field}.`;
+  }
+}
+
+/** Failures a database session reports to authored code and its host. */
+export type DatabaseError = AppDatabaseError | DatabaseLimitExceeded;
+
 /** Host resource bounds outside an individual database transaction. Durations are milliseconds. */
 export const DatabaseRuntimeLimits = Schema.Struct({
   maxCursorChars: Schema.Int.check(Schema.isGreaterThan(0)),
@@ -150,13 +218,11 @@ export interface DatabaseSession {
     key: string,
     fingerprint: string,
     work: () => Effect.Effect<Schema.Json, E, R>,
-  ) => Effect.Effect<Schema.Json, E | AppDatabaseError, R>;
+  ) => Effect.Effect<Schema.Json, E | DatabaseError, R>;
 
   readonly readTables: ReadonlySet<string>;
   readonly changedTables: ReadonlySet<string>;
-  readonly execute: (
-    operation: DatabaseOperation,
-  ) => Effect.Effect<OperationResult, AppDatabaseError>;
+  readonly execute: (operation: DatabaseOperation) => Effect.Effect<OperationResult, DatabaseError>;
 }
 /** Native operation scope owns snapshot consistency, write rollback and commit notifications. */
 export interface AppDatabase {
@@ -164,10 +230,10 @@ export interface AppDatabase {
   readonly schemaHash: string;
   readonly read: <A, E, R>(
     work: (session: DatabaseSession) => Effect.Effect<A, E, R>,
-  ) => Effect.Effect<A, E | AppDatabaseError, R>;
+  ) => Effect.Effect<A, E | DatabaseError, R>;
   readonly mutate: <A, E, R>(
     work: (session: DatabaseSession) => Effect.Effect<A, E, R>,
-  ) => Effect.Effect<A, E | AppDatabaseError, R>;
+  ) => Effect.Effect<A, E | DatabaseError, R>;
 }
 
 /** Product-independent app partitions. A host supplies persistent storage; callers never choose filenames. */
@@ -176,10 +242,10 @@ export interface AppDatabases {
     app: string,
     schema: DatabaseSchema,
     work: (session: DatabaseSession) => Effect.Effect<A, E>,
-  ) => Effect.Effect<A, E | AppDatabaseError>;
+  ) => Effect.Effect<A, E | DatabaseError>;
   readonly mutate: <A, E>(
     app: string,
     schema: DatabaseSchema,
     work: (session: DatabaseSession) => Effect.Effect<A, E>,
-  ) => Effect.Effect<A, E | AppDatabaseError>;
+  ) => Effect.Effect<A, E | DatabaseError>;
 }

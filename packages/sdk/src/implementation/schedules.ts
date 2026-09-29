@@ -1,8 +1,15 @@
 /** Persisted scheduling transitions. App code and external effects run only after a claim commits. */
-import { Clock, Cron, Effect, Result, Schema, SchemaAST, type Crypto } from "effect";
+import { Clock, Cron, Effect, Option, Result, Schema, SchemaAST, type Crypto } from "effect";
 import { ScheduleTiming } from "apps/contracts";
 import type { Executor } from "../contracts/executor.ts";
-import { StorageError, RequestInvalid, type OwnerId } from "../contracts/shared.ts";
+import {
+  StorageError,
+  RequestInvalid,
+  type AppId,
+  type OwnerId,
+  type ProfileId,
+} from "../contracts/shared.ts";
+import { OAuthReconnectRequired } from "../contracts/oauth.ts";
 import {
   AppSchedule,
   ScheduleInputs,
@@ -51,7 +58,7 @@ export const makeSchedules = (
   storage: ExecutorDatabase,
   apps: Pick<Executor["apps"], "get">,
   tools: Pick<Executor["tools"], "call" | "resume"> &
-    Pick<ReturnType<typeof makeTools>, "scheduled">,
+    Pick<ReturnType<typeof makeTools>, "scheduled" | "accountNeedingReconnect">,
   credentials: Credentials,
   crypto: Crypto.Crypto,
 ) => {
@@ -84,6 +91,18 @@ export const makeSchedules = (
       return yield* parse(StoredScheduledRun, row);
     });
   const publicRun = (run: StoredScheduledRun) => ScheduledRun.make(run);
+  /**
+   * The account a profile's schedules wait on. Only a stored grant that must reconnect counts; any
+   * other problem with the profile or its selection is left to the run, which reports it.
+   */
+  const waitingOn = (input: { app: AppId; profile: ProfileId }) =>
+    tools
+      .accountNeedingReconnect(input)
+      .pipe(
+        Effect.catch((error) =>
+          Schema.is(StorageError)(error) ? Effect.fail(error) : Effect.succeed(undefined),
+        ),
+      );
   const definitions = (input: typeof ScheduleInputs.list.Type) =>
     Effect.gen(function* () {
       yield* apps.get(input);
@@ -222,7 +241,16 @@ export const makeSchedules = (
               ),
           }),
         );
-        return yield* parse(Schema.Array(ScheduleSettings), rows);
+        const settings = yield* parse(Schema.Array(ScheduleSettings), rows);
+        // Enabled schedules report the account they wait on, so the owner sees why none run.
+        if (input.profile === undefined || !settings.some((setting) => setting.enabled))
+          return settings;
+        const account = yield* waitingOn({ app: input.app, profile: input.profile });
+        return account === undefined
+          ? settings
+          : settings.map((setting) =>
+              setting.enabled ? { ...setting, reconnectAccount: account } : setting,
+            );
       }),
     configure: (input: typeof ScheduleInputs.configure.Type) =>
       Effect.gen(function* () {
@@ -578,6 +606,45 @@ export const makeSchedules = (
               Effect.gen(function* () {
                 if (setting.nextAt === null) return yield* new StorageError();
                 const scheduledAt = setting.nextAt;
+                // A run cannot use an account whose sign-in must reconnect. Skip the occurrence
+                // without recording a run or contacting the service; the owner sees the account on
+                // the schedule, and the first occurrence after reconnecting runs as usual.
+                const account =
+                  setting.profile === null
+                    ? undefined
+                    : yield* waitingOn({ app: setting.app, profile: setting.profile });
+                if (account !== undefined) {
+                  // Invalid timing is left to the run path, which pauses the schedule.
+                  const following = yield* nextOccurrence(setting.timing, time).pipe(Effect.option);
+                  if (Option.isSome(following)) {
+                    const revision = yield* uuid;
+                    yield* query(() =>
+                      db.updateMany("schedules", {
+                        where: (b) =>
+                          b.and(
+                            b("id", "=", setting.id),
+                            b("revision", "=", setting.revision),
+                            b("activeRun", "is", null),
+                            b("enabled", "=", true),
+                          ),
+                        // Consume the scanned revision as a claim does. Another dispatch holding
+                        // the same due snapshot must not run the skipped occurrence once the
+                        // account reconnects.
+                        set: { nextAt: following.value, revision },
+                      }),
+                    ).pipe(
+                      Effect.withSpan("schedule.skip", {
+                        attributes: {
+                          "executor.schedule.id": setting.id,
+                          "executor.app.id": setting.app,
+                          "executor.account.id": account,
+                          "executor.outcome": "waiting_for_reconnect",
+                        },
+                      }),
+                    );
+                    return;
+                  }
+                }
                 const id = ScheduledRunId.make(`run_${yield* uuid}`);
                 const claim = yield* transaction(db, () =>
                   Effect.gen(function* () {
@@ -674,6 +741,8 @@ export const makeSchedules = (
                     app: setting.app,
                     profile: setting.profile ?? undefined,
                     tool: declared.tool,
+                    // Schedules only target mutations; defineApp checks this.
+                    kind: "mutation",
                     input: declared.input,
                   });
                   if (response.status === "completed") {
@@ -705,6 +774,15 @@ export const makeSchedules = (
                     );
                   }
                 }).pipe(
+                  // The account's sign-in ended during this run. That is an account state the
+                  // owner resolves by reconnecting, not a fault to report; later occurrences are
+                  // skipped until then.
+                  Effect.catchIf(Schema.is(OAuthReconnectRequired), () =>
+                    Effect.annotateCurrentSpan(
+                      "executor.schedule.skip_reason",
+                      "account_reconnect",
+                    ).pipe(Effect.andThen(finish(claim, "failed", "OAuthReconnectRequired"))),
+                  ),
                   Effect.withErrorReporting,
                   Effect.catch((error) =>
                     Effect.gen(function* () {

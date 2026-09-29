@@ -87,15 +87,14 @@ layer(HostedLive, { excludeTestServices: true })("Deferred MCP setup", (it) => {
         yield* initialSetup.release;
         yield* browser.use("Open account setup on the saved app", (page) =>
           page
-            .getByRole("button", { name: `Add ${name} account`, exact: true })
+            .getByRole("button", { name: "Connect new account", exact: true })
             .click()
             .then(() =>
               page
                 .getByRole("alert")
                 .getByText("The connected service’s sign-in is unavailable", { exact: true })
                 .waitFor(),
-            )
-            .then(() => page.getByLabel("Account name", { exact: true }).fill("Work reports")),
+            ),
         );
         expect((yield* api.request(actors.owner, "GET", `${prefix}/apps/${app.id}`)).status).toBe(
           200,
@@ -110,11 +109,6 @@ layer(HostedLive, { excludeTestServices: true })("Deferred MCP setup", (it) => {
         );
         yield* held.requested;
         expect(
-          yield* browser.use("Retry keeps the account draft", (page) =>
-            page.getByLabel("Account name", { exact: true }).inputValue(),
-          ),
-        ).toBe("Work reports");
-        expect(
           yield* browser.use("Retry stays pending", (page) =>
             page.getByRole("button", { name: "Checking…", exact: true }).isDisabled(),
           ),
@@ -124,11 +118,6 @@ layer(HostedLive, { excludeTestServices: true })("Deferred MCP setup", (it) => {
         yield* browser.use("Recovered server offers OAuth sign-in", (page) =>
           page.getByRole("button", { name: `Connect ${name}`, exact: true }).waitFor(),
         );
-        expect(
-          yield* browser.use("Recovery retains the account draft", (page) =>
-            page.getByLabel("Account name", { exact: true }).inputValue(),
-          ),
-        ).toBe("Work reports");
         expect(
           yield* browser.use("Recovery clears the error", (page) =>
             page.getByRole("alert").count(),
@@ -186,9 +175,7 @@ layer(HostedLive, { excludeTestServices: true })("Deferred MCP setup", (it) => {
           page
             .getByRole("button", { name: "Try again", exact: true })
             .click()
-            .then(() =>
-              page.getByRole("heading", { name: "queries.identity", exact: true }).waitFor(),
-            ),
+            .then(() => page.getByRole("heading", { name: "identity", exact: true }).waitFor()),
         );
         expect(
           (yield* api.request(actors.owner, "GET", `${path}/tools?profile=${profile.id}`)).status,

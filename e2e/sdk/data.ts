@@ -6,6 +6,7 @@ import { Actors } from "../support/actors.ts";
 import { App, Resource } from "../support/contracts.ts";
 import { createProfile } from "../support/profiles.ts";
 import { BaseUrl, emulatorRequest } from "../support/emulators.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 /** Bounded volumes are explicit; the seed controls data values while the scenario owns unique identities. */
 export const DataShape = Schema.Struct({
@@ -38,16 +39,16 @@ export const SeedReceipt = Schema.Struct({
 const source = (
   origin: string,
   owner: string,
-) => `import {defineApp,defineProvider,secrets,defineDatabase,table,query,mutation,object,string,array} from "apps";
+) => `import {defineApp,defineProvider,secrets,defineDatabase,table,query,mutation,object,string,array, router} from "apps";
 const service=defineProvider({name:"Scenario GitHub",auth:{token:secrets({label:"GitHub token",fields:object({token:string()})})}});
 const database=defineDatabase({records:table({key:string(),title:string(),status:string(),body:string()})});
 const record=object({key:string(),title:string(),status:string(),body:string()});
 export default defineApp({accounts:{service},database},{
-  queries:{
+  tools: router({
     summary:query({input:object({})},async({db})=>{const rows=await db.records.withIndex("by_creation").collect();return {count:rows.length,open:rows.filter(r=>r.status==="open").length,closed:rows.filter(r=>r.status==="closed").length,keys:rows.map(r=>r.key).sort()};}),
-    repository:query({input:object({})},async ctx=>{const response=await fetch(${JSON.stringify(`${origin}/repos/${owner}/operations`)},{headers:{authorization:"Bearer "+ctx.accounts.service.fields.token}});if(!response.ok)throw new Error("Provider returned "+response.status);const repo=await response.json();return {name:repo.name,private:repo.private,owner:repo.owner.login};})
-  },
-  mutations:{seed:mutation({input:object({records:array(record)})},async({db},input)=>{for(const row of input.records)await db.records.insert(row);return {inserted:input.records.length};})}
+    repository:query({input:object({})},async ctx=>{const response=await fetch(${JSON.stringify(`${origin}/repos/${owner}/operations`)},{headers:{authorization:"Bearer "+ctx.accounts.service.fields.token}});if(!response.ok)throw new Error("Provider returned "+response.status);const repo=await response.json();return {name:repo.name,private:repo.private,owner:repo.owner.login};}),
+    seed:mutation({input:object({records:array(record)})},async({db},input)=>{for(const row of input.records)await db.records.insert(row);return {inserted:input.records.length};}),
+  })
 });`;
 
 /** Seed real apps, native account connections, group access and app storage; own the external emulator until scope exit. */
@@ -108,7 +109,10 @@ export const seedOrganization = (input: typeof DataShape.Type) =>
             api
               .request(actors.owner, "POST", `${prefix}/apps/deploy`, {
                 name: `Operations ${String(index + 1).padStart(2, "0")}`,
-                files: [{ path: "index.ts", content: source(created.providerBaseUrl, login) }],
+                files: [
+                  { path: "index.ts", content: source(created.providerBaseUrl, login) },
+                  appsManifest,
+                ],
               })
               .pipe(Effect.flatMap((response) => body(App, response))),
           { concurrency: 4 },
@@ -201,7 +205,8 @@ export const seedOrganization = (input: typeof DataShape.Type) =>
             `${prefix}/apps/${first.id}/tools/call`,
             {
               profile: primary.profile,
-              tool: "mutations.seed",
+              tool: "seed",
+              kind: "mutation",
               input: { records: rows.slice(offset, offset + 250) },
             },
           );

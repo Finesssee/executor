@@ -11,6 +11,7 @@ import { Evidence } from "../support/evidence.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { App, Inventory, Organization, Resource } from "../support/contracts.ts";
 import { managementApp } from "../support/management-app.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 /** Public projections owned by this scenario; no server or SDK implementation is imported. */
 const Access = Schema.Struct({ organization: Schema.String, role: Schema.String });
@@ -33,18 +34,19 @@ const files = [
   {
     path: "index.ts",
     content: `
-import { mutation, defineApp, defineProvider, secrets, object, string } from "apps";
+import { mutation, defineApp, defineProvider, secrets, object, string, router } from "apps";
 const service = defineProvider({ name: "Removal service", auth: {
   key: secrets({ label: "API key", fields: object({ token: string() }) })
 } });
 export default defineApp({ accounts: { service } }, async ({ accounts }) => ({
-   mutations: {
-    echo: mutation({ description: "Echo with the connected account", input: object({ message: string() })},
-      async (_, input) => ({ message: input.message, connected: accounts.service.fields.token === "synthetic-removal-token" }))
-  }
+   tools: router({
+     echo: mutation({ description: "Echo with the connected account", input: object({ message: string() })},
+      async (_, input) => ({ message: input.message, connected: accounts.service.fields.token === "synthetic-removal-token" })),
+   })
 }));
 `,
   },
+  appsManifest,
 ];
 
 layer(HostedLive, { excludeTestServices: true })("Organization removal", (it) => {

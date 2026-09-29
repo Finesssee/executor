@@ -28,6 +28,8 @@ export const scenarioLifetime = (context: TestContext) => {
   return context.executorScenario;
 };
 
+// Vitest's beforeEach and onTestFinished hooks are Promise APIs; this acquires each scenario's runtime.
+/* oxlint-disable executor/no-manual-effect-runtime-in-tests */
 /** Register bounded native hooks without replacing Effect Vitest's test execution. */
 export const installScenarioLifecycle = () =>
   beforeEach((context) => {
@@ -120,3 +122,4 @@ export const installScenarioLifecycle = () =>
       { signal: context.signal },
     );
   });
+/* oxlint-enable executor/no-manual-effect-runtime-in-tests */

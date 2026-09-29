@@ -10,13 +10,16 @@ import { Resource } from "../support/contracts.ts";
 import { Evidence, Telemetry } from "../support/evidence.ts";
 import { WorkflowRun } from "../support/workflow-app.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
-const source = `import { defineApp, defineProvider, secrets, object, string, query, workflow } from "apps";
+const source = `import { defineApp, defineProvider, secrets, object, string, query, workflow, router } from "apps";
 const service = defineProvider({ name: "Query budget fixture", auth: {
   key: secrets({ label: "API key", fields: object({ token: string() }) })
 } });
 export default defineApp({ accounts: { workspaces: service.many() } }, async ctx => ({
-  queries: { selected: query({ input: object({}) }, async () => ctx.accounts.workspaces.map(account => account.fields.token)) },
+  tools: router({
+    selected: query({ input: object({}) }, async () => ctx.accounts.workspaces.map(account => account.fields.token)),
+  }),
   workflows: { quick: workflow({ input: object({}) }, async () => "finished") }
 }));`;
 
@@ -34,7 +37,7 @@ layer(HostedLive, { excludeTestServices: true })("SDK query budgets", (it) => {
           runs: string[] = [];
         const deployed = yield* api.request(actors.owner, "POST", `${prefix}/apps/deploy`, {
           name: `Query budgets ${randomUUID().slice(0, 8)}`,
-          files: [{ path: "index.ts", content: source }],
+          files: [{ path: "index.ts", content: source }, appsManifest],
         });
         expect(deployed.status).toBe(200);
         const app = yield* body(Resource, deployed);
@@ -116,7 +119,8 @@ layer(HostedLive, { excludeTestServices: true })("SDK query budgets", (it) => {
         ).toBe(200);
         const called = yield* api.request(actors.owner, "POST", `${path}/tools/call`, {
           profile: profile.id,
-          tool: "queries.selected",
+          tool: "selected",
+          kind: "query",
           input: {},
         });
         expect(called.status).toBe(200);
@@ -165,7 +169,8 @@ layer(HostedLive, { excludeTestServices: true })("SDK query budgets", (it) => {
         ).toBe(200);
         const empty = yield* api.request(actors.owner, "POST", `${path}/tools/call`, {
           profile: profile.id,
-          tool: "queries.selected",
+          tool: "selected",
+          kind: "query",
           input: {},
         });
         expect(empty.status).toBe(200);

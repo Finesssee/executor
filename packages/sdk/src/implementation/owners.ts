@@ -125,9 +125,15 @@ export const makeOwners = (db: Query): Executor["owners"] => ({
         yield* query(() => tx.deleteMany("profiles", { where: (b) => b("owner", "=", owner) }));
         if (appIds.length > 0) {
           yield* query(() => tx.deleteMany("appRecords", { where: (b) => b("app", "in", appIds) }));
+          yield* query(() =>
+            tx.deleteMany("accountChecks", { where: (b) => b("app", "in", appIds) }),
+          );
           yield* query(() => tx.deleteMany("apps", { where: (b) => b("owner", "=", owner) }));
         }
         if (accountIds.length > 0) {
+          yield* query(() =>
+            tx.deleteMany("accountChecks", { where: (b) => b("account", "in", accountIds) }),
+          );
           yield* query(() =>
             tx.deleteMany("oauthGrants", { where: (b) => b("id", "in", accountIds) }),
           );

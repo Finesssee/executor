@@ -1,11 +1,13 @@
 import type { AccountSubmission } from "@executor-js/ui/contracts/credentials";
 import { useAtomSet } from "@effect/atom-react";
 import { useState } from "react";
-import type { Account, Provider, ProviderId } from "@executor-js/sdk";
+import type { Account, AppId, Provider, ProviderId } from "@executor-js/sdk";
 import type { OAuthAppReturn } from "../../contracts/oauth.ts";
 import type { DashboardOverview } from "@executor-js/local-server/contracts";
 import { providerDisplayUrl } from "@executor-js/ui/contracts/dashboard";
 import { AccountForm as SharedAccountForm } from "@executor-js/ui/dashboard/account-form";
+import { accountToNameAtom, checkCredentialsAtom } from "../../contracts/accounts.ts";
+import type { DashboardError } from "../../contracts/errors.ts";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { ArrowLeft02Icon, ArrowRight02Icon } from "@hugeicons/core-free-icons";
 import type { AddAccountSearch } from "../../contracts/navigation.ts";
@@ -20,20 +22,35 @@ export function AccountForm({
   provider,
   onSaved,
   returnTo,
+  checkWith,
   onPendingChange,
 }: {
+  /** An app whose check validates entered credentials before they are saved. */
+  readonly checkWith?: AppId | undefined;
   readonly provider: Provider;
   readonly onSaved: (account: Account) => void;
   readonly returnTo?: Omit<typeof OAuthAppReturn.Type, "connection">;
   readonly onPendingChange?: (pending: boolean) => void;
 }) {
   const add = useAtomSet(addAccountAtom, { mode: "promiseExit" });
+  const checkCredentials = useAtomSet(checkCredentialsAtom, { mode: "promiseExit" });
+  const app = checkWith;
+  const requestName = useAtomSet(accountToNameAtom);
+  // This form only creates accounts; each is named once saved.
+  const saved = (account: Account) => {
+    requestName({
+      account: account.id,
+      saved: { account, provider },
+      ...(returnTo === undefined ? {} : { app: returnTo.app }),
+    });
+    onSaved(account);
+  };
   return (
-    <SharedAccountForm
+    <SharedAccountForm<Account, DashboardError>
       provider={provider}
       Failure={Failure}
       submitLabel="Add account"
-      onSaved={onSaved}
+      onSaved={saved}
       {...(onPendingChange ? { onPendingChange } : {})}
       header={
         <div className="setup-provider flex items-center gap-3.25 [&_h2]:text-[16px] [&_h2]:[font-weight:550] [&_>_div]:min-w-0 [&_>_div]:wrap-anywhere">
@@ -46,10 +63,16 @@ export function AccountForm({
         </div>
       }
       submit={(input: AccountSubmission) => add({ payload: { provider: provider.id, ...input } })}
+      {...(app === undefined
+        ? {}
+        : {
+            check: (input: AccountSubmission) =>
+              checkCredentials({ app, provider: provider.id, ...input }),
+          })}
       oauth={(props) => (
         <OAuthFields
           provider={provider}
-          onSaved={onSaved}
+          onSaved={saved}
           {...(returnTo ? { returnTo } : {})}
           {...props}
         />

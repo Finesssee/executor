@@ -1,5 +1,6 @@
 import { LocalTime } from "@executor-js/ui/components/local-time";
 import { usePageUrl } from "@executor-js/dashboard-start/page";
+import { Code } from "@executor-js/ui/dashboard/code";
 import { EmptyState } from "@executor-js/ui/dashboard/empty-state";
 import { PageFrame, PageHeader } from "@executor-js/ui/dashboard/page";
 import { useAtomRefresh, useAtomSet, useAtomValue } from "@effect/atom-react";
@@ -280,15 +281,15 @@ export function ApiKeysPage() {
             )}
             , so no organization header is needed.
           </div>
-          <pre className="overflow-x-auto rounded-lg border bg-muted/30 p-4 text-xs">
-            <code>{mcpExample}</code>
-          </pre>
+          <div className="overflow-hidden rounded-lg border">
+            <Code code={mcpExample} path="mcp.json" lineNumbers={false} copyable />
+          </div>
         </div>
         <div>
           <h2 className="text-sm font-medium">Use the HTTP API</h2>
-          <pre className="mt-2 overflow-x-auto rounded-lg border bg-muted/30 p-4 text-xs">
-            <code>{example}</code>
-          </pre>
+          <div className="mt-2 overflow-hidden rounded-lg border">
+            <Code code={example} path="request.sh" lineNumbers={false} copyable />
+          </div>
         </div>
       </div>
       <Dialog

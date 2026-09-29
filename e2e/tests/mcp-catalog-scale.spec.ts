@@ -13,6 +13,7 @@ import { Evidence } from "../support/evidence.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { McpClient } from "../support/mcp-client.ts";
 import { createProfile, selectProfileAccounts } from "../support/profiles.ts";
+import { appsManifest, withApps } from "../support/apps-release.ts";
 
 /**
  * 28 apps of 175 tools and one imported API of 2,100 tools: 7,000 tools with about 46 MB of JSON
@@ -34,7 +35,7 @@ const profilesPerStalledApp = 2;
 const scaleAppSource = (
   index: number,
   tools: number,
-) => `import { defineApp, query, jsonSchema } from "apps";
+) => `import { defineApp, query, jsonSchema, router } from "apps";
 const app = ${index};
 const verbs = ["List", "Get", "Create", "Update", "Delete", "Search", "Export", "Archive"];
 const resources = ["accounts", "invoices", "orders", "customers", "shipments", "tickets", "reports", "projects", "members", "webhooks", "payouts", "subscriptions"];
@@ -56,19 +57,19 @@ const schema = (t) => {
   }, required: ["path"] };
 };
 export default defineApp({ accounts: {} }, async () => {
-  const queries = {};
+  const tools = {};
   for (let t = 0; t < ${tools}; t++)
-    queries["op" + t] = query(
+    tools["op" + t] = query(
       { description: verbs[t % verbs.length] + " " + resources[t % resources.length] + " in synthetic scale app " + app + " (marker zq" + app + "x" + t + "q).", input: jsonSchema(schema(t)) },
       async (_ctx, input) => ({ app, tool: t, id: input.path.id }),
     );
-  return { queries };
+  return { tools: router(tools) };
 });`;
 
 // An MCP server on a machine that accepts the connection and then never answers.
 const stalledAppSource = (origin: string) => `import { defineApp } from "apps";
-import { mcpOperations } from "apps/mcp";
-export default defineApp({ accounts: {} }, async () => mcpOperations({ url: ${JSON.stringify(`${origin}/mcp`)} }));`;
+import { mcpRouter } from "apps/mcp";
+export default defineApp({ accounts: {} }, async () => ({ tools: await mcpRouter({ url: ${JSON.stringify(`${origin}/mcp`)} }) }));`;
 
 /** A loopback listener that accepts every connection and never responds. */
 const stalledServer = Effect.acquireRelease(
@@ -239,14 +240,14 @@ const slowCatalog = Effect.acquireRelease(
 const slowAppSource = (
   url: string,
   marker = "zqslowq",
-) => `import { defineApp, query, object } from "apps";
+) => `import { defineApp, query, object, router } from "apps";
 export default defineApp({ accounts: {} }, async (ctx) => {
   const response = await ctx.fetch(${JSON.stringify(url)}, { signal: ctx.signal });
   const names = await response.json();
-  return { queries: Object.fromEntries(names.map((name) => [name, query(
+  return { tools: router(Object.fromEntries(names.map((name) => [name, query(
     { description: "Slow catalog tool " + name + " (marker ${marker}).", input: object({}) },
     async () => name,
-  )])) };
+  )]))) };
 });`;
 
 /**
@@ -255,14 +256,14 @@ export default defineApp({ accounts: {} }, async (ctx) => {
  */
 const probeAppSource = (
   version: string,
-) => `import { defineApp, defineProvider, secrets, query, object, string } from "apps";
+) => `import { defineApp, defineProvider, secrets, query, object, string, router } from "apps";
 const service = defineProvider({ name: "Listing fixture", auth: { key: secrets({ label: "Key", fields: object({ token: string() }) }) } });
 export default defineApp({ accounts: { service } }, async (ctx) => {
   const evaluation = crypto.randomUUID();
-  return { queries: { probe: query(
+  return { tools: router({ probe: query(
     { description: "Listing probe ${version} token " + ctx.accounts.service.fields.token + " evaluation " + evaluation + ".", input: object({}) },
     async () => evaluation,
-  ) } };
+  ) }) };
 });`;
 
 const SearchDescriptions = Schema.Struct({
@@ -325,7 +326,9 @@ layer(HostedLive, { excludeTestServices: true })("MCP catalog scale", (it) => {
           Effect.gen(function* () {
             const response = yield* api.request(actors.owner, "POST", `${prefix}/apps/deploy`, {
               name,
-              files,
+              files: files.some((file) => file.path === "package.json")
+                ? files
+                : [...files, appsManifest],
             });
             expect(response.status).toBe(200);
             return yield* body(App, response);
@@ -367,15 +370,15 @@ layer(HostedLive, { excludeTestServices: true })("MCP catalog scale", (it) => {
             };
           });
         const target = apps[17]!;
-        const call = `return await tools[${JSON.stringify(target.slug)}].queries.op123({ path: { id: "rec_1" } });`;
+        const call = `return await tools[${JSON.stringify(target.slug)}].op123({ path: { id: "rec_1" } });`;
         const large = apps[largeApp]!;
         // One tool of a small app, and one on the large app's second tool page.
         const needle = `const small = await tools.search({ query: "zq17x123q" });
 const large = await tools.search({ query: "zq${largeApp}x999q" });
 return { items: [...small.items, ...large.items] };`;
         const found = [
-          `tools[${JSON.stringify(target.slug)}].queries.op123`,
-          `tools[${JSON.stringify(large.slug)}].queries.op999`,
+          `tools[${JSON.stringify(target.slug)}].op123`,
+          `tools[${JSON.stringify(large.slug)}].op999`,
         ];
 
         // A program that uses no app does not pay for the catalog, cold or warm.
@@ -422,7 +425,7 @@ return { items: [...small.items, ...large.items] };`;
                 {
                   path: "package.json",
                   content: JSON.stringify({
-                    dependencies: { "@modelcontextprotocol/sdk": "1.30.0" },
+                    dependencies: withApps({ "@modelcontextprotocol/sdk": "1.30.0" }),
                   }),
                 },
                 { path: "index.ts", content: stalledAppSource(origin) },
@@ -487,7 +490,7 @@ return { items: [...small.items, ...large.items] };`;
         const upstream = yield* slowCatalog;
         const deployed = yield* api.request(actors.owner, "POST", `${prefix}/apps/deploy`, {
           name: `Slow catalog ${randomUUID().slice(0, 8)}`,
-          files: [{ path: "index.ts", content: slowAppSource(upstream.url) }],
+          files: [{ path: "index.ts", content: slowAppSource(upstream.url) }, appsManifest],
         });
         expect(deployed.status).toBe(200);
         const app = yield* body(App, deployed);
@@ -501,7 +504,7 @@ return { items: [...small.items, ...large.items] };`;
             Effect.map(({ items }) => items.map((item) => item.path).sort()),
           );
         const tools = ["alpha", "beta", "gamma"].map(
-          (name) => `tools[${JSON.stringify(app.slug)}].queries.${name}`,
+          (name) => `tools[${JSON.stringify(app.slug)}].${name}`,
         );
 
         // The first search waits for discovery's bound, then reports the slow app unavailable.
@@ -556,7 +559,10 @@ return { items: [...small.items, ...large.items] };`;
           const upstream = yield* heldCatalog;
           const deployed = yield* api.request(actors.owner, "POST", `${prefix}/apps/deploy`, {
             name: `Stalled catalog ${randomUUID().slice(0, 8)}`,
-            files: [{ path: "index.ts", content: slowAppSource(upstream.url, "zqheldq") }],
+            files: [
+              { path: "index.ts", content: slowAppSource(upstream.url, "zqheldq") },
+              appsManifest,
+            ],
           });
           expect(deployed.status).toBe(200);
           const app = yield* body(App, deployed);
@@ -644,9 +650,7 @@ return { items: [...small.items, ...large.items] };`;
               .map((item) => item.path)
               .sort(),
           ).toEqual(
-            ["alpha", "beta", "gamma"].map(
-              (name) => `tools[${JSON.stringify(app.slug)}].queries.${name}`,
-            ),
+            ["alpha", "beta", "gamma"].map((name) => `tools[${JSON.stringify(app.slug)}].${name}`),
           );
           expect(upstream.requests.count).toBe(2);
         }).pipe(Effect.provide(McpClient.layer)),
@@ -663,7 +667,7 @@ return { items: [...small.items, ...large.items] };`;
         const prefix = `/api/organizations/${actors.organization.id}`;
         const deployed = yield* api.request(actors.owner, "POST", `${prefix}/apps/deploy`, {
           name: `Listing inputs ${randomUUID().slice(0, 8)}`,
-          files: [{ path: "index.ts", content: probeAppSource("first") }],
+          files: [{ path: "index.ts", content: probeAppSource("first") }, appsManifest],
         });
         expect(deployed.status).toBe(200);
         const app = yield* body(App, deployed);
@@ -830,7 +834,7 @@ return { items: [...small.items, ...large.items] };`;
 
         // A new deployment.
         const redeployed = yield* saveAndDeploy(actors.owner, path, {
-          files: [{ path: "index.ts", content: probeAppSource("second") }],
+          files: [{ path: "index.ts", content: probeAppSource("second") }, appsManifest],
         });
         expect(redeployed.status).toBe(200);
         seen.push(

@@ -24,6 +24,3 @@ export interface AppOperation<Input = unknown, Output = unknown> {
   readonly approval?: Approval<Input>;
   readonly run: (context: OperationContext, input: Input) => Effect.Effect<Output, unknown>;
 }
-
-/** Agent tool names carry the operation kind; catalogs may reuse the same local name. */
-export const OperationToolPrefixes = { query: "queries.", mutate: "mutations." } as const;

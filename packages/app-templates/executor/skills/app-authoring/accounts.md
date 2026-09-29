@@ -17,6 +17,7 @@ import {
   object,
   secrets,
   string,
+  router,
 } from "apps";
 
 const vercel = defineProvider({
@@ -42,8 +43,66 @@ const listProjects = query(
   },
 );
 
-export default defineApp(requirements, { queries: { listProjects } });
+export default defineApp(requirements, { tools: router({ listProjects }) });
 ```
+
+## Check an account
+
+Give a provider a `health` function so Executor can tell whether a saved account
+works before an agent's tool call fails. Make one safe authenticated read with no
+side effects, such as the service's current-user endpoint. Returning passes.
+Returning `accountInfo` also names the upstream account; Executor offers it as the
+account's name and shows it beside the account. Every field is optional:
+`externalId`, `displayName`, `username`, `email`, `avatarUrl` and `profileUrl`.
+
+```ts
+const User = object({ id: string(), username: string(), name: string(), email: string() });
+
+const vercel = defineProvider({
+  name: "Vercel",
+  auth: {
+    apiKey: secrets({
+      label: "API token",
+      fields: object({ token: string({ minLength: 1 }) }),
+    }),
+  },
+  async health({ account, fetch, signal }) {
+    const response = await fetch("https://api.vercel.com/v2/user", {
+      signal,
+      headers: { Authorization: `Bearer ${account.fields.token}` },
+    });
+    // Vercel answers an unknown or revoked token with 403 and `invalidToken: true`.
+    if (response.status === 403 && (await response.json()).error?.invalidToken === true)
+      throw new ProviderError({ reason: "unauthorized", status: 403 });
+    const { user } = await decodeJson(response, object({ user: User }));
+    return {
+      accountInfo: {
+        externalId: user.id,
+        displayName: user.name,
+        username: user.username,
+        email: user.email,
+      },
+    };
+  },
+});
+```
+
+`account` is typed from `auth`; with several methods, switch on `account.method`.
+A failed `decodeJson` status is classified for you: 401 means the credentials were
+refused, 429 and 5xx mean the service is unavailable. Throw
+`new ProviderError({ reason: "forbidden" })` only with explicit evidence of a
+missing permission, such as an `insufficient_scope` challenge; a bare 403 is not
+enough. Services that answer a bad token with something other than 401, as Vercel does, need
+an explicit `new ProviderError({ reason: "unauthorized" })`. Any other error or a timeout means
+the check could not verify the account.
+Executor never treats that as bad credentials.
+
+Account forms run the same check on entered credentials before saving them, so the user sees
+whether they work, and the name they belong to, before connecting.
+
+Each app checks with its own `health` function, so two apps can verify the same
+account differently. Adding or editing `health` does not change the provider's
+identity or disconnect accounts; it only makes earlier results outdated.
 
 ## OAuth sign-in
 
@@ -107,18 +166,18 @@ instead of reconnecting or changing the provider.
 
 Deploy the source, create a profile, then request a connection for its account requirement.
 The management examples below use the **local** API. For hosted calls, use
-`profiles_create` and `accounts_connect` with `path.organization`, as shown in
+`profiles.create` and `accounts.connect` with `path.organization`, as shown in
 [deploy.md](deploy.md). Hosted calls derive owner and subject from the caller.
 Discover the management profile path with `tools.search` before calling it:
 
 ```js
 const executor = tools.executor.profiles["<management-profile-id>"];
-const app = await executor.queries.apps_get({ path: { app: "<vercel-app-id>" } });
-const profile = await executor.mutations.appProfiles_create({
+const app = await executor.apps.get({ path: { app: "<vercel-app-id>" } });
+const profile = await executor.appProfiles.create({
   path: { app: app.id },
   body: { owner: "alice", subject: "alice", accounts: {}, idempotencyKey: "vercel-setup" },
 });
-return await executor.mutations.accountConnect_issue({
+return await executor.accountConnect.issue({
   body: { owner: "alice", target: { app: app.id, profile: profile.id, requirement: "vercel" } },
 });
 ```
@@ -130,7 +189,7 @@ After the user finishes, check the request in a new execute call:
 
 ```js
 const executor = tools.executor.profiles["<management-profile-id>"];
-const connection = await executor.queries.accountConnections_get({
+const connection = await executor.accountConnections.get({
   path: { connection: "<connection-id>" },
 });
 return connection.state; // { status: "completed", account } means setup finished.
@@ -145,7 +204,7 @@ inspect the profile and request a new link.
 To save an account without selecting it for any app, pass `provider` instead:
 
 ```js
-return await tools.executor.profiles["<management-profile-id>"].mutations.accountConnect_issue({
+return await tools.executor.profiles["<management-profile-id>"].accountConnect.issue({
   body: { owner: "alice", provider: "<provider-reference>" },
 });
 ```
@@ -154,8 +213,8 @@ Supply exactly one of `target` or `provider`. Requests expire after thirty
 minutes. Cancelled or expired requests need a new link. Do not wait or busy-poll
 inside execute.
 
-Use `accounts_list({ query: { provider } })` to find compatible saved accounts first when
-appropriate. `appProfiles_update({ path: { app, profile }, body: { expectedRevision, accounts } })`
+Use `accounts.list({ query: { provider } })` to find compatible saved accounts first when
+appropriate. `appProfiles.update({ path: { app, profile }, body: { expectedRevision, accounts } })`
 replaces the whole profile selection map. Include every slot you want to keep.
 A missing required slot prevents tool discovery and calls for that profile.
 Account-dependent apps without profiles expose no direct MCP tools.
@@ -174,7 +233,7 @@ To use the same app with a second account, call:
 
 ```js
 const executor = tools.executor.profiles["<management-profile-id>"];
-return await executor.mutations.appProfiles_create({
+return await executor.appProfiles.create({
   path: { app: "<vercel-app-id>" },
   body: {
     owner: "alice",

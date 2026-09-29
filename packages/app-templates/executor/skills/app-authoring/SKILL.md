@@ -6,8 +6,8 @@ description: Build and deploy Executor apps with tools, storage, UI, accounts an
 # Build an Executor app
 
 An app is TypeScript source with a default `defineApp` export from `apps`.
-The host supplies the framework unless `package.json` selects an exact Executor
-`apps` version. App authors use ordinary async functions; Effect stays inside
+Its `package.json` declares the exact `apps` version it uses; new apps already
+do. App authors use ordinary async functions; Effect stays inside
 the framework. An app's installed name is separate from its source definition.
 
 ## Read only the topics needed
@@ -43,7 +43,7 @@ Load files through the MCP `skills` tool using the returned app slug, profile, d
 ## Discover exact contracts
 
 Use `tools.search` inside `execute` to find callable app tools and their input
-and output signatures. Discover `framework_search` and `framework_describe`
+and output signatures. Discover `framework.search` and `framework.describe`
 on this Executor app to inspect library functions and methods. These queries
 return generated signatures, related types, examples and documentation links.
 Framework functions are imports or methods used in app source, not MCP tools.
@@ -55,7 +55,7 @@ that identity on subsequent reads. Do not assume a host reference describes a
 different pinned `apps` package; that package ships `framework-reference.json`.
 
 Hosted management calls require an explicit organization. Discover and call
-`context_get({})` first. Local management calls have no organization parameter.
+`context.get({})` first. Local management calls have no organization parameter.
 Read each discovered signature; do not guess route arguments.
 
 ## Build and verify

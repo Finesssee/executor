@@ -88,6 +88,8 @@ export const UnavailableApp = Schema.Struct({
   name: Schema.String,
   reason: Schema.String,
   profile: Schema.optional(Schema.String),
+  /** Only this router's tools are missing; the rest of the app loaded. */
+  router: Schema.optional(Schema.String),
 });
 /**
  * One admitted tool call in call order. `interrupted` calls were still running when the
@@ -146,7 +148,7 @@ export const SearchInput = Schema.Struct({
   namespace: Schema.optionalKey(
     Schema.String.annotate({
       description:
-        "App slug, such as axiom, or a target namespace such as axiom.profiles.ins_id.queries.",
+        "App slug, such as axiom, or a namespace inside it, such as axiom.profiles.ins_id or acme.issues.",
     }),
   ),
   limit: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThan(0))),
@@ -179,7 +181,7 @@ export const defaultMcpLimits: McpLimits = {
 /** Execute programs over the host-provided app catalog. */
 export const ExecuteTool = McpTool.make("execute", {
   description:
-    "Run a JavaScript program over Executor apps. Discover and read the Executor app's app-authoring skill through the skills tool before creating apps. Start with return await tools.search({query: 'Executor'}). Search returns exact callable paths and TypeScript signatures. Each configured app has its own app-slug namespace and saved accounts. Discover again in a new execute after configuration changes. Use await, Promise.all and return only needed data. For user credentials, discover Executor's account connection tool (mutations.accountConnect_issue locally, mutations.accounts_connect on hosted) and give the user its browser link; never ask for secrets in chat or search their files for tokens. No imports, fetch, process or filesystem globals. Apps load when a program uses their namespace or searches them; failed/incomplete apps among those are reported in unavailableApps. If approval-required or input-required is returned, show the elicitation to the user, collect its requested fields, then call resume with the returned requestId and response.action (accept, decline, or cancel). The program waits in memory; do not execute its source again. External effects are not rolled back on error or cancellation.",
+    "Run a JavaScript program over Executor apps. Discover and read the Executor app's app-authoring skill through the skills tool before creating apps. Start with return await tools.search({query: 'Executor'}). Search returns exact callable paths and TypeScript signatures. Each configured app has its own app-slug namespace and saved accounts. Discover again in a new execute after configuration changes. Use await, Promise.all and return only needed data. For user credentials, discover Executor's account connection tool (accountConnect.issue locally, accounts.connect on hosted) and give the user its browser link; never ask for secrets in chat or search their files for tokens. No imports, fetch, process or filesystem globals. Apps load when a program uses their namespace or searches them; failed/incomplete apps among those are reported in unavailableApps. If approval-required or input-required is returned, show the elicitation to the user, collect its requested fields, then call resume with the returned requestId and response.action (accept, decline, or cancel). The program waits in memory; do not execute its source again. External effects are not rolled back on error or cancellation.",
   dependencies: [HttpServerRequest.HttpServerRequest],
   parameters: ExecuteInput,
   success: McpExecutionResult,

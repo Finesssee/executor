@@ -9,6 +9,7 @@ import { Browser } from "../support/browser.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { App, Resource } from "../support/contracts.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const Group = Schema.Struct({ id: Schema.String, revision: Schema.String });
 const Directory = Schema.Struct({
@@ -16,9 +17,9 @@ const Directory = Schema.Struct({
   members: Schema.Array(Schema.Struct({ id: Schema.String, userId: Schema.String })),
 });
 const Access = Schema.Struct({ revision: Schema.String });
-const source = `import {defineApp, defineProvider, secrets, query, object, string} from "apps";
+const source = `import {defineApp, defineProvider, secrets, query, object, string, router} from "apps";
 const service=defineProvider({name:"Group visibility fixture",auth:{key:secrets({label:"Key",fields:object({token:string()})})}});
-export default defineApp({accounts:{service:service.many()}},{queries:{status:query({input:object({})},async()=>"ready")}});`;
+export default defineApp({accounts:{service:service.many()}},{tools: router({ status:query({input:object({})},async()=>"ready") })});`;
 
 layer(HostedLive, { excludeTestServices: true })("Group visibility", (it) => {
   it.effect(scenarios.memberGroupVisibility.title, (context) =>
@@ -63,7 +64,7 @@ layer(HostedLive, { excludeTestServices: true })("Group visibility", (it) => {
           App,
           yield* api.request(actors.member, "POST", `${prefix}/apps/deploy`, {
             name: `Visibility ${suffix}`,
-            files: [{ path: "index.ts", content: source }],
+            files: [{ path: "index.ts", content: source }, appsManifest],
           }),
         );
         const accounts: string[] = [];

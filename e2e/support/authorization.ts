@@ -8,6 +8,7 @@ import { Evidence } from "./evidence.ts";
 import { McpOAuth } from "./mcp-oauth.ts";
 import { McpClient } from "./mcp-client.ts";
 import { deployMcpApp } from "./mcp-app.ts";
+import { appsManifest } from "./apps-release.ts";
 const Tools = Schema.Struct({ items: Schema.Array(Schema.Struct({ name: Schema.String })) });
 /** Grant fixtures use public browser consent and preserve exact tool restrictions. */
 export const authorizationFixture = (audience: "api" | "mcp") =>
@@ -30,7 +31,7 @@ export const authorizationFixture = (audience: "api" | "mcp") =>
     );
     const policy = {
       kind: "tools",
-      apps: [{ app: app.id, tools: { kind: "selected", names: ["mutations.echo"] } }],
+      apps: [{ app: app.id, tools: { kind: "selected", names: ["echo"] } }],
       approval: "client",
     };
     expect(
@@ -51,7 +52,8 @@ export const authorizationFixture = (audience: "api" | "mcp") =>
         anonymous,
         "POST",
         `${prefix}/apps/${app.id}/tools/call`,
-        { tool, input: { message: "shared policy" } },
+        // Both fixture tools are mutations.
+        { tool, kind: "mutation", input: { message: "shared policy" } },
         token,
       );
     const addTool = evidence.step(
@@ -62,12 +64,13 @@ export const authorizationFixture = (audience: "api" | "mcp") =>
             {
               path: "index.ts",
               content: `
-import { defineApp, mutation, object, string } from "apps";
-export default defineApp({ accounts: {} }, async () => ({  mutations: {
-  echo: mutation({ description: "Allowed echo", input: object({ message: string() }) }, async (_, input) => ({ message: input.message, receipt: ${JSON.stringify(receipt)} })),
-  later: mutation({ description: "Added after consent", input: object({ message: string() }) }, async () => ({ forbidden: "later" }))
-} }));`,
+import { defineApp, mutation, object, string, router } from "apps";
+export default defineApp({ accounts: {} }, async () => ({  tools: router({
+    echo: mutation({ description: "Allowed echo", input: object({ message: string() }) }, async (_, input) => ({ message: input.message, receipt: ${JSON.stringify(receipt)} })),
+  later: mutation({ description: "Added after consent", input: object({ message: string() }) }, async () => ({ forbidden: "later" })),
+  }) }));`,
             },
+            appsManifest,
           ],
         });
         expect(updated.status).toBe(200);
@@ -75,7 +78,7 @@ export default defineApp({ accounts: {} }, async () => ({  mutations: {
           Tools,
           yield* api.request(actors.owner, "GET", `${prefix}/apps/${app.id}/tools`),
         );
-        expect(ownerTools.items.map((item) => item.name)).toContain("mutations.later");
+        expect(ownerTools.items.map((item) => item.name)).toContain("later");
         if (audience === "api") {
           const selectedTools = yield* body(
             Tools,
@@ -87,8 +90,8 @@ export default defineApp({ accounts: {} }, async () => ({  mutations: {
               headers,
             ),
           );
-          expect(selectedTools.items.map((item) => item.name)).toEqual(["mutations.echo"]);
-          expect((yield* call("mutations.later")).status).toBe(403);
+          expect(selectedTools.items.map((item) => item.name)).toEqual(["echo"]);
+          expect((yield* call("later")).status).toBe(403);
         }
       }),
     );

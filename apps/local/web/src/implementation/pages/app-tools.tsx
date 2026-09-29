@@ -14,9 +14,10 @@ import {
 import type { DashboardAccount } from "@executor-js/local-server/contracts";
 import { Cause, Option, Schema } from "effect";
 import { ToolBrowser } from "@executor-js/ui/dashboard/tools";
+import { ToolRunner } from "@executor-js/ui/dashboard/tool-runner";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Key01Icon } from "@hugeicons/core-free-icons";
-import { toolDetailAtom, toolsAtom, toolListAtom } from "../../contracts/api.ts";
+import { callToolAtom, toolDetailAtom, toolsAtom, toolListAtom } from "../../contracts/api.ts";
 import {
   appToolReadiness,
   accountSetupFailure,
@@ -170,6 +171,22 @@ function LiveAppTools({ app, accounts, selected, profile, revision, selection }:
           search: { view: "tools", tool, profile },
         });
       }}
+      renderAction={(tool) => (
+        <ToolRunner
+          key={tool.name}
+          tool={tool.name}
+          call={callToolAtom({
+            app: app.id,
+            profile,
+            expectedProfileRevision: revision,
+            deployment: app.activeDeployment ?? undefined,
+            tool: tool.name,
+            kind: tool.readOnly === true ? "query" : "mutation",
+          })}
+          detail={toolDetailAtom({ ...catalog, tool: tool.name })}
+          Failure={Failure}
+        />
+      )}
     />
   );
 }

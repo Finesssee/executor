@@ -3,7 +3,8 @@
  * Worker, and in the trusted apps Worker of self-host and local. It names each Worker, loads it,
  * wraps the authored modules and delivers each call's accounts, run, approval, replay and deadline.
  * A host supplies only its bindings and, per invocation, a build loader that the runner calls from
- * the Worker Loader's cold-start callback, so a warm call reads and transfers no code.
+ * the Worker Loader's cold-start callback, so a warm call reads and transfers no code. Every
+ * request and reply passes through the adapter of the protocol the build's framework speaks.
  */
 import type { Fetcher, WorkerLoader } from "@cloudflare/workers-types";
 import { Effect, Exit, Option, Schema, Semaphore } from "effect";
@@ -29,12 +30,13 @@ import {
   CacheCommand,
   CacheError,
   CacheReply,
-  changesCache,
   type CacheTransport,
 } from "@executor-js/app-cache/contracts";
 import { holdLeases } from "@executor-js/app-cache";
-import { RuntimeProtocolFailed } from "../contracts/runtime.ts";
-import type { WorkerBundle } from "../contracts/worker-build.ts";
+import { discardsEvaluated } from "@executor-js/app-cache/changes";
+import { describeBuildCause, RuntimeProtocolFailed } from "../contracts/runtime.ts";
+import type { LoadedWorkerBuild, WorkerBundle } from "../contracts/worker-build.ts";
+import { appProtocol, type AppProtocol } from "./app-protocols.ts";
 import { appFacetBridge, appRpcBridge } from "./worker-bridge.ts";
 import { AppRpcEntrypoint, AppRpcInvocation } from "./worker-elicitation.ts";
 import { invocationWorkflow } from "./worker-workflow-rpc.ts";
@@ -88,7 +90,7 @@ export interface AppCapabilities {
    * Read this invocation's build. Only the Worker Loader's cold-start callback, inside the runner
    * or the trusted data supervisor, calls it. Authored code never receives it.
    */
-  readonly load: () => Promise<WorkerBundle>;
+  readonly load: () => Promise<LoadedWorkerBuild>;
   readonly elicit: Callback | null;
   readonly controls: Callback | null;
   readonly workflow?: WorkflowExecution;
@@ -131,13 +133,52 @@ interface CacheSession {
   readonly close: Effect.Effect<void>;
 }
 
-const failed = (cause: unknown) =>
-  Effect.annotateCurrentSpan(
-    "executor.runtime.cause",
-    cause instanceof Error ? `${cause.name}: ${cause.message}` : String(cause),
-  ).pipe(Effect.andThen(Effect.fail(new RuntimeProtocolFailed())));
+const failed = (cause: unknown) => {
+  const message = describeBuildCause(cause);
+  return Effect.annotateCurrentSpan("executor.runtime.cause", message).pipe(
+    Effect.andThen(Effect.fail(new RuntimeProtocolFailed({ message }))),
+  );
+};
 const attempt = <A>(work: () => Promise<A>) =>
   Effect.tryPromise({ try: work, catch: (cause) => cause }).pipe(Effect.catch(failed));
+/**
+ * The protocol of each build this process has loaded, least recently used first. Builds are
+ * immutable, so a build's protocol is learned from the load of its first cold start and warm calls
+ * read no code. A self-host or local process holds every app Worker it starts, so it always starts
+ * one before calling it. A Cloud isolate can reach a Worker that another isolate started; it reads
+ * that build once to learn its protocol.
+ */
+const protocols = new Map<string, AppProtocol>();
+const protocolLimit = 4096;
+
+/**
+ * The adapter for an invocation's build, and the loader its cold start uses. When the protocol is
+ * not known yet, the build is read once here and the cold start reuses that read.
+ */
+const protocolOf = (build: string, load: () => Promise<LoadedWorkerBuild>) => {
+  const known = protocols.get(build);
+  if (known !== undefined) {
+    protocols.delete(build);
+    protocols.set(build, known);
+    return Effect.succeed({ protocol: known, load });
+  }
+  return attempt(load).pipe(
+    Effect.flatMap((loaded) =>
+      appProtocol(loaded.protocol).pipe(
+        Effect.catch(failed),
+        Effect.map((protocol) => {
+          protocols.set(build, protocol);
+          if (protocols.size > protocolLimit) {
+            const oldest = protocols.keys().next();
+            if (oldest.done !== true) protocols.delete(oldest.value);
+          }
+          return { protocol, load: async () => loaded };
+        }),
+      ),
+    ),
+  );
+};
+
 /** A call whose Worker failed to load in this isolate. No authored code ran for it. */
 class ColdStartFailed extends Schema.TaggedError<ColdStartFailed>()("ColdStartFailed", {
   cause: Schema.Unknown,
@@ -327,6 +368,8 @@ export const makeAppRunner = (host: AppRunnerHost) => {
     invocation: AppInvocation,
     identity: string,
     capabilities: AppCapabilities,
+    protocol: AppProtocol,
+    load: () => Promise<LoadedWorkerBuild>,
     body: string,
   ) =>
     Effect.gen(function* () {
@@ -343,10 +386,11 @@ export const makeAppRunner = (host: AppRunnerHost) => {
             headers: invocation.headers,
             write:
               writeOperations.has(command.operation) ||
-              (command.operation === "call" && command.tool.startsWith("mutations.")),
+              // A call without a kind is to a tool the catalog does not list; it may write.
+              (command.operation === "call" && command.kind !== "query"),
           },
           async () => {
-            const bundle = await capabilities.load();
+            const bundle = await load();
             return {
               mainModule: "__executor_facet.js",
               modules: {
@@ -365,9 +409,12 @@ export const makeAppRunner = (host: AppRunnerHost) => {
           ),
           Effect.onInterrupt(() => target.cancel(id).pipe(Effect.catchCause(() => Effect.void))),
         );
-      const value = yield* Schema.decodeUnknownEffect(Schema.Record(Schema.String, Schema.Json))(
-        result.value,
-      ).pipe(Effect.catch(failed));
+      const value = yield* protocol
+        .response(command, result.value)
+        .pipe(
+          Effect.flatMap(Schema.decodeUnknownEffect(Schema.Record(Schema.String, Schema.Json))),
+          Effect.catch(failed),
+        );
       return {
         ...value,
         executorRevision: result.revision,
@@ -387,15 +434,24 @@ export const makeAppRunner = (host: AppRunnerHost) => {
           "executor.runtime.mode": mode,
           "executor.worker.identity": name,
         });
-        const body = JSON.stringify({
+        // The build's protocol adapter owns this boundary: requests leave, and replies return, in
+        // the host's current model whichever protocol the retained bundle speaks.
+        const { protocol, load } = yield* protocolOf(invocation.build, capabilities.load);
+        // A command this protocol's bundles would not run as asked fails without reaching them.
+        const refused = protocol.refuse(invocation.command);
+        if (refused !== undefined) return { ok: false, error: refused };
+        const body = protocol.invocation({
           command: invocation.command,
           accounts: invocation.accounts,
-          approval: invocation.approval,
-          replay: invocation.replay,
-          deadline: invocation.deadline,
-          workflowRun: capabilities.workflow?.runId,
+          ...(invocation.approval === undefined ? {} : { approval: invocation.approval }),
+          ...(invocation.replay === undefined ? {} : { replay: invocation.replay }),
+          ...(invocation.deadline === undefined ? {} : { deadline: invocation.deadline }),
+          ...(capabilities.workflow === undefined
+            ? {}
+            : { workflowRun: capabilities.workflow.runId }),
         });
-        if (mode === "facet") return yield* facet(invocation, identity, capabilities, body);
+        if (mode === "facet")
+          return yield* facet(invocation, identity, capabilities, protocol, load, body);
         const data = host.data(invocation.app);
         const services = yield* Effect.context<never>();
         // Cache writes after the result (background refreshes) are not reported to the host.
@@ -424,7 +480,7 @@ export const makeAppRunner = (host: AppRunnerHost) => {
                   Effect.flatMap(leases.transport),
                   Effect.tap(() =>
                     Effect.sync(() => {
-                      if (changesCache(command)) cacheChanged = true;
+                      if (discardsEvaluated(command)) cacheChanged = true;
                     }),
                   ),
                   Effect.match({
@@ -437,15 +493,18 @@ export const makeAppRunner = (host: AppRunnerHost) => {
             close: leases.close,
           })),
         );
-        const result = yield* start(name, capabilities.load, {
+        const reply = yield* start(name, load, {
           body,
           headers: invocation.headers,
           globalOutbound: host.outbound,
           elicit: capabilities.elicit,
           controls: capabilities.controls,
-          ...(capabilities.workflow === undefined ? {} : { workflow: capabilities.workflow }),
+          ...(capabilities.workflow === undefined
+            ? {}
+            : { workflow: protocol.workflow(capabilities.workflow) }),
           cache,
         });
+        const result = yield* protocol.response(invocation.command, reply);
         return cacheChanged &&
           typeof result === "object" &&
           result !== null &&
@@ -457,17 +516,19 @@ export const makeAppRunner = (host: AppRunnerHost) => {
      * Evaluate a new build's declarations before it is retained. No later call can reuse this
      * Worker, so it is not named and the runtime does not keep it; it has no network or cache.
      */
-    declare: (bundle: WorkerBundle, headers: Readonly<Record<string, string>>) =>
-      start(null, async () => bundle, {
-        body: JSON.stringify({
-          command: { operation: "requirements" },
-          accounts: {},
-        }),
-        headers,
-        globalOutbound: null,
-        elicit: null,
-        controls: null,
-        cache: null,
+    declare: (bundle: LoadedWorkerBuild, headers: Readonly<Record<string, string>>) =>
+      Effect.gen(function* () {
+        const protocol = yield* appProtocol(bundle.protocol).pipe(Effect.catch(failed));
+        const command = { operation: "requirements" } as const;
+        const reply = yield* start(null, async () => bundle, {
+          body: protocol.invocation({ command, accounts: {} }),
+          headers,
+          globalOutbound: null,
+          elicit: null,
+          controls: null,
+          cache: null,
+        });
+        return yield* protocol.response(command, reply);
       }).pipe(Effect.withSpan("runtime.app.declare")),
   };
 };

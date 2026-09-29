@@ -1,6 +1,7 @@
 import { hostedAppCapabilities } from "@executor-js/hosted-server/app-management";
 import { executorSelfHostApiDocument } from "../contracts/api.ts";
 import { AppManagementHost } from "@executor-js/app-management";
+import { runStartupDataSteps } from "@executor-js/app-management/data-steps";
 import { hostedExecutorOrigin, remoteRegistry } from "@executor-js/app-registry";
 import { gitSourceStorage } from "@executor-js/app-source";
 import type { RepositoryBackend } from "@executor-js/app-source";
@@ -14,7 +15,6 @@ import {
   makeDeclarationCache,
   declarationConfig,
   type Executor,
-  type SourceFile,
 } from "@executor-js/sdk/core";
 import {
   HostedExecutor,
@@ -50,7 +50,6 @@ export class SelfHostWorkflowRequests extends Context.Service<
 
 /** Database initialization finishes before this service is acquired. */
 export const selfHostExecutorServices = <E, R>(
-  skills: readonly SourceFile[],
   egress: HostEgress,
   acquire: (executor: Effect.Effect<Executor>) => Effect.Effect<SelfHostPlatform, E, R>,
 ) =>
@@ -94,6 +93,8 @@ export const selfHostExecutorServices = <E, R>(
         },
       );
       yield* Deferred.succeed(ready, executor);
+      // The schema is current and nothing serves or builds yet; the caller holds the data lock.
+      yield* runStartupDataSteps({ executor, repositories }, "private_hosted");
       yield* Effect.forkScoped(
         recoverAppRepositories({ database: storage, sources, blobs }).pipe(
           Effect.catch(() => Effect.logWarning("App repository recovery failed")),
@@ -110,7 +111,6 @@ export const selfHostExecutorServices = <E, R>(
         executor,
         origin,
         storage,
-        skills,
         lazyHostedApiDocument(() => executorSelfHostApiDocument(origin)).document,
         // Password registration is admitted locally; self-host does not send verification mail.
         false,

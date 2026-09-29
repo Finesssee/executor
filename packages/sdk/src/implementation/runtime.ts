@@ -5,8 +5,8 @@ import {
   ResolvedAccounts,
   type HostContext,
   type AppStorage,
-  type HostedTool,
-  type HostedToolSummary,
+  type HostedCatalog,
+  type HostedCatalogSummary,
   type AppSkillSource,
   type ResolvedAccountsInput,
 } from "apps/contracts";
@@ -46,12 +46,12 @@ export interface ResolvedAppRuntime {
     readonly accounts: ResolvedAccountsInput;
     readonly tools?: readonly string[];
     readonly scheduled?: true;
-  }) => Promise<readonly HostedTool[]>;
+  }) => Promise<HostedCatalog>;
   readonly index: (input: {
     readonly app: string;
     readonly build: BuildId;
     readonly accounts: ResolvedAccountsInput;
-  }) => Promise<readonly HostedToolSummary[]>;
+  }) => Promise<HostedCatalogSummary>;
   readonly query: (input: {
     readonly app: string;
     readonly build: BuildId;
@@ -86,6 +86,7 @@ export interface ResolvedAppRuntime {
     readonly database: boolean;
     readonly accounts: ResolvedAccountsInput;
     readonly tool: string;
+    readonly kind?: "query" | "mutation";
     readonly input: Json;
   }) => Promise<Json>;
 }
@@ -210,5 +211,6 @@ export const toEffectRuntime = (
     workflow: (input) => runtime.workflow(input).pipe(provide),
     webhook: (input) => runtime.webhook(input).pipe(provide),
     call: (input) => runtime.call(input).pipe(provide),
+    checkAccount: (input) => runtime.checkAccount(input).pipe(provide),
   };
 };

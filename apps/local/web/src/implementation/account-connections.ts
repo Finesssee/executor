@@ -4,6 +4,7 @@ import { AccountConnectionId } from "@executor-js/sdk";
 import { ConnectionGrant } from "@executor-js/local-server/account-connections";
 import { OAuthCallbackPath } from "@executor-js/local-server/contracts";
 import type { ConnectionEntry } from "../contracts/account-connections.ts";
+import { oauthCallbackUrl } from "./oauth.ts";
 
 const key = (id: string) => `executor.account-connect.${id}`;
 const oauthKey = (state: string) => `executor.account-connect.oauth.${state}`;
@@ -36,7 +37,7 @@ export const readAccountConnection = Effect.sync((): ConnectionEntry | undefined
   if (Option.isNone(grant)) return undefined;
   sessionStorage.removeItem(oauthKey(state));
   window.history.replaceState(null, "", `/account-connect/${grant.value.connection}`);
-  return { ...grant.value, callbackUrl: Redacted.make(url.href) };
+  return { ...grant.value, callbackUrl: oauthCallbackUrl(url) };
 });
 /** Match only this OAuth attempt on return, so ordinary dashboard sign-in cannot be intercepted. */
 export const openConnectionOAuth = (authorizationUrl: string, grant: ConnectionGrant) =>

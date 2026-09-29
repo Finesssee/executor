@@ -21,7 +21,12 @@ import {
   SelectValue,
 } from "@executor-js/ui/components/select";
 import { SearchInput } from "@executor-js/ui/dashboard/common";
-import { ArrowDown01Icon, ArrowUp01Icon, Delete02Icon } from "@hugeicons/core-free-icons";
+import {
+  ArrowDown01Icon,
+  ArrowUp01Icon,
+  Delete02Icon,
+  Tick02Icon,
+} from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Exit, Option, type Schema } from "effect";
 import { QueryResult } from "@executor-js/ui/dashboard/context";
@@ -86,7 +91,7 @@ export function OrganizationMembers({ emailInvitations }: { readonly emailInvita
   const revoking = useAtomValue(revokeInvitationAtom(organization.organization));
   const changingRole = useAtomValue(updateMemberRoleAtom(organization.organization));
   const [error, setError] = useState<string | null>(null);
-  const [link, setLink] = useState<string | null>(null);
+  const [sent, setSent] = useState<SentInvitation | null>(null);
   const [search, setSearch] = useState("");
   const [descending, setDescending] = useState(false);
   const [invitationOpen, setInvitationOpen] = useState(false);
@@ -118,15 +123,26 @@ export function OrganizationMembers({ emailInvitations }: { readonly emailInvita
         .filter((row) => matches(`${row.name} ${row.email}`))
         .sort((a, b) => a.name.localeCompare(b.name) * (descending ? -1 : 1))
     : [];
-  const sendInvite = async (email: string, role: "admin" | "member") => {
+  const sendInvite = async (email: string, role: "admin" | "member", resent: boolean) => {
     setError(null);
-    setLink(null);
+    setSent(null);
     const result = await invite({ email, role });
     if (Exit.isFailure(result)) setError(organizationError(result.cause));
-    else if (result.value !== null)
-      setLink(
-        new URL(`/invite?invitation=${encodeURIComponent(result.value.id)}`, location.origin).href,
-      );
+    else if (result.value !== null) {
+      setSent({
+        email,
+        role,
+        resent,
+        link: new URL(`/invite?invitation=${encodeURIComponent(result.value.id)}`, location.origin)
+          .href,
+      });
+      setInvitationOpen(true);
+    }
+  };
+  // The success view stays mounted while the dialog animates closed; opening resets it.
+  const closeInvitation = () => {
+    setInvitationOpen(false);
+    setError(null);
   };
 
   return (
@@ -157,7 +173,7 @@ export function OrganizationMembers({ emailInvitations }: { readonly emailInvita
                 if (inviting.waiting) return;
                 setInvitationOpen(open);
                 setError(null);
-                setLink(null);
+                if (open) setSent(null);
               }}
             >
               <DialogTrigger asChild>
@@ -166,65 +182,76 @@ export function OrganizationMembers({ emailInvitations }: { readonly emailInvita
                 </Button>
               </DialogTrigger>
               <DialogContent className="membership-invite-dialog max-h-[calc(100dvh_-_32px)] overflow-y-auto [&_.settings-form]:[margin:4px_0_0] [&_.settings-form]:max-w-none">
-                <DialogTitle>Add member</DialogTitle>
-                <DialogDescription>Invite someone to {organization.name}.</DialogDescription>
-                <form
-                  className="settings-form [&_h2]:text-[15px] [&_h2]:font-medium flex flex-col gap-4 w-full max-w-100 mt-7 [&_label]:flex [&_label]:flex-col [&_label]:gap-1.5 [&_label]:text-[13px] [&_>_button]:self-start"
-                  onSubmit={async (event) => {
-                    event.preventDefault();
-                    const form = new FormData(event.currentTarget);
-                    await sendInvite(
-                      String(form.get("email")).trim(),
-                      form.get("role") === "admin" ? "admin" : "member",
-                    );
-                  }}
-                >
-                  <label>
-                    Email
-                    <Input
-                      name="email"
-                      type="email"
-                      placeholder="name@example.com"
-                      required
-                      disabled={inviting.waiting}
-                    />
-                  </label>
-                  <label>
-                    Role
-                    <Select name="role" defaultValue="member" disabled={inviting.waiting}>
-                      <SelectTrigger aria-label="Invitation role" className="w-full">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="member">Member</SelectItem>
-                        <SelectItem value="admin">Admin</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </label>
-                  {link && <InvitationLink link={link} emailInvitations={emailInvitations} />}
-                  {error && (
-                    <p className="auth-error text-destructive text-[13px]" role="alert">
-                      {error}
-                    </p>
-                  )}
-                  <DialogFooter>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      disabled={inviting.waiting}
-                      onClick={() => {
-                        setInvitationOpen(false);
-                        setError(null);
-                        setLink(null);
+                {sent ? (
+                  <InvitationSent
+                    sent={sent}
+                    emailInvitations={emailInvitations}
+                    onInviteAnother={() => {
+                      setError(null);
+                      setSent(null);
+                    }}
+                    onDone={closeInvitation}
+                  />
+                ) : (
+                  <>
+                    <DialogTitle>Add member</DialogTitle>
+                    <DialogDescription>Invite someone to {organization.name}.</DialogDescription>
+                    <form
+                      className="settings-form [&_h2]:text-[15px] [&_h2]:font-medium flex flex-col gap-4 w-full max-w-100 mt-7 [&_label]:flex [&_label]:flex-col [&_label]:gap-1.5 [&_label]:text-[13px] [&_>_button]:self-start"
+                      onSubmit={async (event) => {
+                        event.preventDefault();
+                        const form = new FormData(event.currentTarget);
+                        await sendInvite(
+                          String(form.get("email")).trim(),
+                          form.get("role") === "admin" ? "admin" : "member",
+                          false,
+                        );
                       }}
                     >
-                      {link ? "Done" : "Cancel"}
-                    </Button>
-                    <Button loading={inviting.waiting}>
-                      {emailInvitations ? "Send invitation" : "Create invite link"}
-                    </Button>
-                  </DialogFooter>
-                </form>
+                      <label>
+                        Email
+                        <Input
+                          name="email"
+                          type="email"
+                          placeholder="name@example.com"
+                          required
+                          autoFocus
+                          disabled={inviting.waiting}
+                        />
+                      </label>
+                      <label>
+                        Role
+                        <Select name="role" defaultValue="member" disabled={inviting.waiting}>
+                          <SelectTrigger aria-label="Invitation role" className="w-full">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="member">Member</SelectItem>
+                            <SelectItem value="admin">Admin</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </label>
+                      {error && (
+                        <p className="auth-error text-destructive text-[13px]" role="alert">
+                          {error}
+                        </p>
+                      )}
+                      <DialogFooter>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          disabled={inviting.waiting}
+                          onClick={closeInvitation}
+                        >
+                          Cancel
+                        </Button>
+                        <Button loading={inviting.waiting}>
+                          {emailInvitations ? "Send invitation" : "Create invite link"}
+                        </Button>
+                      </DialogFooter>
+                    </form>
+                  </>
+                )}
               </DialogContent>
             </Dialog>
           ) : (
@@ -372,7 +399,7 @@ export function OrganizationMembers({ emailInvitations }: { readonly emailInvita
                                 disabled={inviting.waiting || revoking.waiting}
                                 onClick={async () => {
                                   if (invitation.role === "admin" || invitation.role === "member")
-                                    await sendInvite(invitation.email, invitation.role);
+                                    await sendInvite(invitation.email, invitation.role, true);
                                 }}
                               >
                                 {emailInvitations ? "Resend" : "Get invite link"}
@@ -448,11 +475,6 @@ export function OrganizationMembers({ emailInvitations }: { readonly emailInvita
           {error}
         </p>
       )}
-      {link && !invitationOpen && (
-        <div className="membership-invite-result max-w-140 mt-4">
-          <InvitationLink link={link} emailInvitations={emailInvitations} />
-        </div>
-      )}
       <Dialog
         open={revocation !== undefined}
         onOpenChange={(open) => {
@@ -494,7 +516,6 @@ export function OrganizationMembers({ emailInvitations }: { readonly emailInvita
                 if (Exit.isFailure(result)) setError(organizationError(result.cause));
                 else {
                   setRevocation(undefined);
-                  setLink(null);
                 }
               }}
             >
@@ -630,28 +651,100 @@ function MembersSkeleton() {
   );
 }
 
-function InvitationLink({
-  link,
-  emailInvitations,
-}: {
+interface SentInvitation {
+  readonly email: string;
+  readonly role: "admin" | "member";
   readonly link: string;
+  readonly resent: boolean;
+}
+
+/** Success view that replaces the invitation form, so a sent invitation cannot be resubmitted by accident. */
+function InvitationSent({
+  sent,
+  emailInvitations,
+  onInviteAnother,
+  onDone,
+}: {
+  readonly sent: SentInvitation;
   readonly emailInvitations: boolean;
+  readonly onInviteAnother: () => void;
+  readonly onDone: () => void;
 }) {
+  const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState<string | null>(null);
+  const role = sent.role === "admin" ? "an admin" : "a member";
   return (
-    <label className="membership-invite-link flex flex-col gap-2 text-[13px]">
-      <span role="status">
-        {emailInvitations ? "Invitation sent. You can also share this link" : "Share this link"}
-      </span>
-      <Input
-        aria-label="Invitation link"
-        readOnly
-        value={link}
-        onFocus={(event) => event.target.select()}
-      />
-      <span className="muted text-muted-foreground">
-        The recipient must sign in with the invited email.
-      </span>
-    </label>
+    <>
+      <div className="flex items-center gap-2.5">
+        <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-[color-mix(in_srgb,_var(--foreground)_8%,_transparent)]">
+          <HugeiconsIcon icon={Tick02Icon} size={14} aria-hidden />
+        </span>
+        <DialogTitle>
+          {emailInvitations
+            ? sent.resent
+              ? "Invitation resent"
+              : "Invitation sent"
+            : "Invite link ready"}
+        </DialogTitle>
+      </div>
+      <DialogDescription>
+        {emailInvitations ? (
+          <>
+            We emailed <span className="text-foreground">{sent.email}</span>. They will join as{" "}
+            {role} once they accept.
+          </>
+        ) : (
+          <>
+            Share this link with <span className="text-foreground">{sent.email}</span>. They will
+            join as {role} once they accept.
+          </>
+        )}
+      </DialogDescription>
+      <div className="membership-invite-link mt-2 flex flex-col gap-2 text-[13px]">
+        <span className="text-muted-foreground">
+          {emailInvitations ? "Or share the invite link directly" : "Invite link"}
+        </span>
+        <div className="flex gap-2">
+          <Input
+            aria-label="Invitation link"
+            readOnly
+            value={sent.link}
+            className="font-mono text-xs"
+            onFocus={(event) => event.target.select()}
+          />
+          <Button
+            type="button"
+            variant="outline"
+            className="shrink-0"
+            onClick={async () => {
+              try {
+                await navigator.clipboard.writeText(sent.link);
+                setCopied(true);
+                setCopyError(null);
+              } catch {
+                setCopyError("Could not copy. Select the link above and copy it manually.");
+              }
+            }}
+          >
+            {copied ? "Copied" : "Copy link"}
+          </Button>
+        </div>
+        <span className="text-muted-foreground">The recipient must sign in with {sent.email}.</span>
+        {copyError && (
+          <p className="text-destructive" role="alert">
+            {copyError}
+          </p>
+        )}
+      </div>
+      <DialogFooter>
+        <Button type="button" variant="outline" onClick={onInviteAnother}>
+          Invite another
+        </Button>
+        <Button type="button" onClick={onDone} autoFocus>
+          Done
+        </Button>
+      </DialogFooter>
+    </>
   );
 }
 

@@ -8,16 +8,40 @@ import type { JsonObject } from "../contracts/schema.ts";
 import { decoderOf, type Schema } from "./schema.ts";
 
 const NativeOperation = Symbol("apps.Operation");
-declare const HandlerContext: unique symbol;
-/** A server-only declaration with its category preserved for catalog validation. */
+declare const QueryHandlerContext: unique symbol;
+declare const MutationHandlerContext: unique symbol;
+/**
+ * A server-only declaration with its category preserved for catalog validation. Queries and
+ * mutations carry their handler context under different phantom keys, so a router can type a
+ * query's handler from its query context alone.
+ */
 export interface OperationDeclaration<Kind extends "query" | "mutation", Context = never> {
-  readonly [HandlerContext]?: (context: Context) => void;
+  readonly [QueryHandlerContext]?: "query" extends Kind ? (context: Context) => void : never;
+  readonly [MutationHandlerContext]?: "mutation" extends Kind ? (context: Context) => void : never;
   readonly kind: Kind;
   readonly [NativeOperation]: Omit<AppOperation<never>, "kind" | "input"> & {
     readonly kind: Kind;
     readonly input: EffectSchema.Decoder<unknown>;
   };
 }
+/**
+ * A router declaration. The phantom contexts let `defineApp` type inline handlers; protocol
+ * routers accept any context because their operations only use the framework's own capabilities.
+ * The native router is held under a private key in implementation/router.ts.
+ */
+export interface RouterDeclaration<Query = unknown, Mutation = unknown> {
+  readonly [QueryHandlerContext]?: (context: Query) => void;
+  readonly [MutationHandlerContext]?: (context: Mutation) => void;
+  readonly [NativeRouterKey]: unknown;
+}
+/** An operation or nested router under one key. Each child is typed only by its own kind's context. */
+export interface RouterChild<Query, Mutation> {
+  readonly [QueryHandlerContext]?: (context: Query) => void;
+  readonly [MutationHandlerContext]?: (context: Mutation) => void;
+}
+/** Private key for a router's native definition. */
+export const NativeRouterKey = Symbol("apps.Router");
+
 /** Typed operation handles drive browser reference inference without bundling handlers. */
 export interface Operation<
   Input,

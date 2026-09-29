@@ -129,7 +129,8 @@ layer(HostedLive, { excludeTestServices: true })("OpenAPI User-Agent", (it) => {
         for (const userAgent of [undefined, "Custom REST client"]) {
           const result = yield* api.request(actors.owner, "POST", `${path}/tools/call`, {
             profile,
-            tool: "queries.currentUser",
+            tool: "user.currentUser",
+            kind: "query",
             input: {
               accountId: account,
               input: userAgent === undefined ? {} : { headers: { "User-Agent": userAgent } },

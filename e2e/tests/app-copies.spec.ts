@@ -9,6 +9,7 @@ import { Workspace, saveAndDeploy } from "../support/app-authoring.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { Browser } from "../support/browser.ts";
 import { holdQuery } from "../support/query-transition.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const App = Schema.Struct({
   id: Schema.String,
@@ -26,8 +27,11 @@ const App = Schema.Struct({
 const files = (message: string) => [
   {
     path: "index.ts",
-    content: `import {defineApp,object,query} from 'apps'; export default defineApp({accounts:{}},async()=>({queries:{hello:query({input:object({})},async()=>${JSON.stringify(message)})}}));`,
+    content: `import {defineApp,object,query, router} from 'apps'; export default defineApp({accounts:{}},async()=>({tools: router({
+  hello:query({input:object({})},async()=>${JSON.stringify(message)}),
+})}));`,
   },
+  appsManifest,
 ];
 
 layer(HostedLive, { excludeTestServices: true })("Independent app copies", (it) => {
@@ -122,7 +126,7 @@ layer(HostedLive, { excludeTestServices: true })("Independent app copies", (it) 
           App,
           yield* api.request(actors.owner, "POST", `${prefix}/apps`, {
             name: `${name} unfinished`,
-            files: [{ path: "index.ts", content: "Unfinished source" }],
+            files: [{ path: "index.ts", content: "Unfinished source" }, appsManifest],
           }),
         );
         yield* remember(unfinished);

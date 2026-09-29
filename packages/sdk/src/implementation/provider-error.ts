@@ -7,6 +7,7 @@ import type { snapshot } from "./tools.ts";
 export function appProviderFailure(
   state: Effect.Success<ReturnType<typeof snapshot>>,
   error: ProviderError,
+  credentialsRenewed = false,
 ) {
   const selected = state.selections.flatMap(({ required, accounts }) =>
     accounts.map((account) => ({ account, provider: required.definition.name })),
@@ -17,6 +18,7 @@ export function appProviderFailure(
     deployment: state.deployment.id,
     reason: error.reason,
     status: error.status,
+    ...(credentialsRenewed ? { credentialsRenewed: true as const } : {}),
     ...(match === undefined
       ? {}
       : {

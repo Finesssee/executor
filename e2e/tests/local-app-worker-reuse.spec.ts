@@ -23,6 +23,7 @@ import {
   RunObservation,
 } from "../support/worker-observer.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 /** Key replacements, each followed by one tool call and one workflow run. */
 const rotations = 12;
@@ -81,6 +82,7 @@ const localApp = (options: { readonly database: boolean; readonly resource: stri
           path: "index.ts",
           content: observerApp({ name, ...options }),
         },
+        appsManifest,
       ],
     });
     expect(deployed.status, JSON.stringify(deployed.body)).toBe(200);
@@ -107,10 +109,13 @@ const localApp = (options: { readonly database: boolean; readonly resource: stri
       });
     const observe = (profile: string) =>
       Effect.gen(function* () {
+        // The call names its kind, as agents do. Without one the host first describes the tool,
+        // which cold-starts the app Worker beside the data facet that runs the query.
         const response = yield* api.request(agent, "POST", "/v1/tools/call", {
           app: app.id,
           profile,
-          tool: "queries.probe",
+          tool: "probe",
+          kind: "query",
           input: {},
         });
         expect(response.status, JSON.stringify(response.body)).toBe(200);

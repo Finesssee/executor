@@ -202,9 +202,8 @@ The handler evaluates the app factory for every inspect/call, validates native
 tool input, and returns parsed JSON. Error envelopes contain fixed error tags,
 never author exceptions or credentials. It does not add app-authored HTTP routes.
 
-Builds use the host's Effect and platform installations and remain tied to their
-location and compatibility. Dependencies that install a second copy of the
-host framework or Effect are rejected. Native dependencies or packages needing install
+Builds use the `apps` release the app declares and remain tied to their location
+and compatibility. Dependencies that install the Executor SDK are rejected. Native dependencies or packages needing install
 scripts are not covered by this first adapter. JSON Schema metadata preserves
 defaults, but Effect v4 can represent optional undefined branches as nullable;
 native decoding remains authoritative. Outbound MCP works through this same
@@ -255,8 +254,8 @@ MCP supports model-mediated resume and native client prompts; browser approval
 pages remain separate work. See [MCP approvals](notes/mcp-resume.md).
 
 App authors import schema helpers such as `object`, `string`, and `array`
-from `apps`. Effect validation stays internal. The host supplies `apps` to
-basic source deployments; extra dependencies can use an optional package.json.
+from `apps`. Effect validation stays internal. Every app's `package.json`
+declares the exact `apps` version it uses, alongside any other dependencies.
 
 ## Boundaries and deferred work
 

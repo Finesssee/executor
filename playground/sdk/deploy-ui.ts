@@ -5,6 +5,7 @@ import { Config, Console, Effect, FileSystem, Path, Schema } from "effect";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http";
 import { HttpApiClient } from "effect/unstable/httpapi";
 import { ExecutorApi, OwnerId, SourceFiles } from "@executor-js/sdk";
+import apps from "apps/package.json" with { type: "json" };
 
 NodeRuntime.runMain(
   Effect.gen(function* () {
@@ -40,9 +41,8 @@ NodeRuntime.runMain(
     files.push({
       path: "package.json",
       content: JSON.stringify({
-        dependencies: Object.fromEntries(
-          Object.entries(manifest.dependencies).filter(([name]) => name !== "apps"),
-        ),
+        // The workspace reference becomes the exact apps release this checkout builds.
+        dependencies: { ...manifest.dependencies, apps: apps.version },
       }),
     });
     const port = yield* Config.Number("EXECUTOR_PORT").pipe(Config.withDefault(4312));

@@ -1,14 +1,16 @@
 /** Shared SQLite engine. Drivers, persistent paths and app ownership belong to the host. */
-import { Clock, Effect, Encoding, Schema, Semaphore } from "effect";
+import { Cause, Clock, Effect, Encoding, Schema, Semaphore } from "effect";
 import type { SqlClient } from "effect/unstable/sql/SqlClient";
 import {
   AppDatabaseError,
+  DatabaseLimitExceeded,
   DatabaseLimits,
   DatabaseOperation,
   Row,
   RowMetadata,
   defaultDatabaseLimits,
   type AppDatabase,
+  type DatabaseError,
   type DatabaseSession,
   type OperationResult,
   type Table,
@@ -35,7 +37,12 @@ export const makeSqliteDatabase = (options: {
 }): Effect.Effect<AppDatabase, AppDatabaseError> =>
   Effect.gen(function* () {
     const { sql, crypto } = options;
-    const schema = yield* parseDatabaseSchema(options.schema);
+    // Declarations are validated before deployment; a stored schema that fails here is invalid.
+    const schema = yield* parseDatabaseSchema(options.schema).pipe(
+      Effect.catchTag("DatabaseFieldReserved", () =>
+        Effect.fail(new AppDatabaseError({ reason: "schema" })),
+      ),
+    );
     const limits = yield* Schema.decodeUnknownEffect(DatabaseLimits)(
       options.limits ?? defaultDatabaseLimits,
     ).pipe(Effect.mapError(() => new AppDatabaseError({ reason: "limit" })));
@@ -71,7 +78,7 @@ export const makeSqliteDatabase = (options: {
     const run = <A, E, R>(
       writable: boolean,
       work: (session: DatabaseSession) => Effect.Effect<A, E, R>,
-    ): Effect.Effect<A, E | AppDatabaseError, R> =>
+    ): Effect.Effect<A, E | DatabaseError, R> =>
       sql
         .withTransaction(
           Effect.gen(function* () {
@@ -81,7 +88,7 @@ export const makeSqliteDatabase = (options: {
             const reads = new Set<string>();
             const changes = new Set<string>();
             let active = true;
-            let failed: AppDatabaseError | undefined;
+            let failed: DatabaseError | undefined;
             const used = {
               rowsRead: 0,
               rowsReturned: 0,
@@ -94,7 +101,13 @@ export const makeSqliteDatabase = (options: {
               Effect.suspend(() => {
                 used[name] += amount;
                 return used[name] > limits[name]
-                  ? Effect.fail(new AppDatabaseError({ reason: "limit" }))
+                  ? Effect.fail(
+                      new DatabaseLimitExceeded({
+                        limit: name,
+                        maximum: limits[name],
+                        requested: used[name],
+                      }),
+                    )
                   : Effect.void;
               });
             const get = (table: string, id: string) =>
@@ -115,8 +128,13 @@ export const makeSqliteDatabase = (options: {
               Effect.gen(function* () {
                 const meta = yield* Schema.decodeUnknownEffect(RowMetadata)(row);
                 const body = JSON.stringify(row);
-                if (new TextEncoder().encode(body).length > limits.valueBytes)
-                  return yield* new AppDatabaseError({ reason: "limit" });
+                const bytes = new TextEncoder().encode(body).length;
+                if (bytes > limits.valueBytes)
+                  return yield* new DatabaseLimitExceeded({
+                    limit: "valueBytes",
+                    maximum: limits.valueBytes,
+                    requested: bytes,
+                  });
                 // Encode all index keys before the first write. Failure also poisons the outer mutation.
                 const keys = yield* Effect.forEach(indexesFor(table), (index) =>
                   encodeIndexKey(
@@ -135,7 +153,7 @@ export const makeSqliteDatabase = (options: {
               });
             const execute = (
               input: DatabaseOperation,
-            ): Effect.Effect<OperationResult, AppDatabaseError> =>
+            ): Effect.Effect<OperationResult, DatabaseError> =>
               gate.withPermits(1)(
                 Effect.gen(function* () {
                   if (!active) return yield* new AppDatabaseError({ reason: "closed" });
@@ -191,7 +209,9 @@ export const makeSqliteDatabase = (options: {
                       const bounds = yield* queryBounds(table, plan, limits.indexBytes);
                       reads.add(tableName);
                       yield* charge("scanCalls", 1);
-                      const maximum =
+                      // Remaining budget for this terminal. Rows are charged as they are
+                      // actually returned, so earlier small results do not reserve budget.
+                      const remaining =
                         terminal.kind === "count"
                           ? limits.rowsRead - used.rowsRead
                           : limits.rowsReturned - used.rowsReturned;
@@ -202,8 +222,16 @@ export const makeSqliteDatabase = (options: {
                             ? terminal.count
                             : terminal.kind === "paginate"
                               ? terminal.numItems
-                              : maximum;
-                      if (count > maximum) return yield* new AppDatabaseError({ reason: "limit" });
+                              : remaining;
+                      if (
+                        (terminal.kind === "take" || terminal.kind === "paginate") &&
+                        count > limits.rowsReturned
+                      )
+                        return yield* new DatabaseLimitExceeded({
+                          limit: "pageSize",
+                          maximum: limits.rowsReturned,
+                          requested: count,
+                        });
                       if (count === 0 && terminal.kind === "take") return [];
                       const query = yield* fingerprint(
                         crypto,
@@ -239,8 +267,11 @@ export const makeSqliteDatabase = (options: {
                       const direction =
                         plan.order === "asc" ? sql.literal("ASC") : sql.literal("DESC");
                       // One look-ahead entry distinguishes an exact bound from silent truncation.
-                      const limit =
-                        terminal.kind === "first" || terminal.kind === "take" ? count : count + 1;
+                      // Reading one row past the remaining budget is enough to report overflow.
+                      const limit = Math.min(
+                        terminal.kind === "first" || terminal.kind === "take" ? count : count + 1,
+                        remaining + 1,
+                      );
                       if (terminal.kind === "count") {
                         const rows =
                           yield* sql`SELECT i.sort_key FROM app_indexes i WHERE ${sql.and(predicates)} ORDER BY i.sort_key ${direction} LIMIT ${limit}`.pipe(
@@ -269,7 +300,11 @@ export const makeSqliteDatabase = (options: {
                         ),
                       );
                       if (terminal.kind === "collect" && rows.length > count)
-                        return yield* new AppDatabaseError({ reason: "limit" });
+                        return yield* new DatabaseLimitExceeded({
+                          limit: "rowsReturned",
+                          maximum: limits.rowsReturned,
+                          requested: used.rowsReturned + rows.length,
+                        });
                       const page = rows.slice(0, count);
                       yield* charge("rowsReturned", page.length);
                       const values = yield* Effect.forEach(page, (row) => decodeBody(row.body));
@@ -340,6 +375,13 @@ export const makeSqliteDatabase = (options: {
                 }),
             };
             return yield* Effect.suspend(() => work(session)).pipe(
+              // A failed database call poisons the session. Report that failure even when
+              // authored code caught it or threw something else in its place.
+              Effect.catchCause((cause): Effect.Effect<never, E | DatabaseError> =>
+                failed === undefined || Cause.hasInterrupts(cause)
+                  ? Effect.failCause(cause)
+                  : Effect.fail(failed),
+              ),
               Effect.tap(() =>
                 gate.withPermits(1)(
                   Effect.suspend(() => (failed === undefined ? Effect.void : Effect.fail(failed))),

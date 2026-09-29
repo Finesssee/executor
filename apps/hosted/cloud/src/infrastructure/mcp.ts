@@ -19,7 +19,7 @@ import { HttpServer, HttpServerRequest } from "effect/unstable/http";
 import { cloudAuth } from "./auth.ts";
 import { cloudExecutor } from "./executor.ts";
 import { cloudAuthDatabase } from "./auth-database.ts";
-import { AppDataSupervisor, AppDataSupervisorLive } from "./app-data.ts";
+import { appDataSupervisors } from "./app-data.ts";
 import { unavailableAuthEmail } from "../contracts/email.ts";
 import { forwardMcpRequest } from "../implementation/mcp-forward.ts";
 import { observeMcpStream } from "../implementation/mcp-stream-observability.ts";
@@ -27,7 +27,7 @@ import { observeMcpStream } from "../implementation/mcp-stream-observability.ts"
 const makeMcpSessions = Effect.gen(function* () {
   const reportErrors = yield* cloudSentry;
   const auth = yield* cloudAuth(unavailableAuthEmail);
-  const executor = yield* cloudExecutor(yield* AppDataSupervisor, yield* cloudArtifactsTokensLive);
+  const executor = yield* cloudExecutor(yield* appDataSupervisors, yield* cloudArtifactsTokensLive);
   const analytics = yield* cloudAnalytics;
   return Effect.gen(function* () {
     const state = yield* Cloudflare.DurableObjectState;
@@ -74,10 +74,7 @@ const makeMcpSessions = Effect.gen(function* () {
       ),
     };
   });
-}).pipe(
-  Effect.provide(Layer.mergeAll(AppDataSupervisorLive, cloudAuthDatabase, cloudTelemetry)),
-  Effect.orDie,
-);
+}).pipe(Effect.provide(Layer.mergeAll(cloudAuthDatabase, cloudTelemetry)), Effect.orDie);
 
 /** The gateway selects one private object per authenticated user/client/organization. */
 export class McpSessions extends Cloudflare.DurableObject<

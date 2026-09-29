@@ -1,7 +1,7 @@
 # Scheduled notes
 
 Deploy `index.ts` as an app, open its Schedules tab, and enable a schedule.
-Use Run now to try it without waiting. Call `queries.list` to read recorded notes.
+Use Run now to try it without waiting. Call `list` to read recorded notes.
 
 The mutation requests approval. The default Skip approvals setting accepts it.
 Switch to Browser approvals, then use Run now and review it on the Approvals page.

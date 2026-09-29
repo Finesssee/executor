@@ -29,7 +29,7 @@ import { appSessionCookie } from "../contracts/app-ui.ts";
 import type { ServerConfig } from "../contracts/config.ts";
 import type { LocalAuth } from "./auth.ts";
 import { appRequest } from "./app-auth.ts";
-import { AppReturnPath, appPrivateHeaders as privateHeaders, appSignInPage } from "apps/ui/auth";
+import { AppReturnPath, appPrivateHeaders as privateHeaders } from "apps/ui/auth";
 
 const failed = (reason: UiFailed["reason"] = "unavailable") => new UiFailed({ reason });
 const UiBuild = Schema.Struct({ id: DeploymentId, build: Deployment.fields.build });
@@ -41,9 +41,14 @@ export const appUi = (
   runtime: Runtime,
   config: ServerConfig,
   auth: LocalAuth,
+  beginSignIn: Effect.Effect<
+    HttpServerResponse.HttpServerResponse,
+    UiForbidden | UiFailed,
+    HttpServerRequest.HttpServerRequest
+  >,
 ) => {
   const native = runtime;
-  const db = storage.orm("4.0.2");
+  const db = storage.orm("4.0.3");
   const current = (id: AppId) =>
     executor.apps
       .get({ app: id, owner: OwnerId.make("local") })
@@ -110,21 +115,23 @@ export const appUi = (
           const source = yield* safeOperation(executor.appData.subscribe(input));
           return source.pipe(
             Stream.mapError(operationFailure),
-            Stream.map(({ value }) => ({ type: "snapshot" as const, value })),
+            Stream.map(({ value, revision }) => ({ type: "snapshot" as const, value, revision })),
             Stream.merge(
               Stream.tick("15 seconds").pipe(Stream.map(() => ({ type: "heartbeat" as const }))),
             ),
             Stream.mapEffect((frame) =>
               Effect.gen(function* () {
-                yield* operation(payload).pipe(
-                  Effect.withSpan(
-                    frame.type === "snapshot"
-                      ? "app.ui.snapshot.authorize"
-                      : "app.ui.heartbeat.authorize",
-                  ),
-                );
+                // The first result belongs to this request, which was just authorized.
+                if (frame.type === "heartbeat" || frame.revision > 0)
+                  yield* operation(payload).pipe(
+                    Effect.withSpan(
+                      frame.type === "snapshot"
+                        ? "app.ui.snapshot.authorize"
+                        : "app.ui.heartbeat.authorize",
+                    ),
+                  );
                 if (frame.type === "heartbeat") return frame;
-                return { ...frame, trace: yield* currentTraceContext };
+                return { type: frame.type, value: frame.value, trace: yield* currentTraceContext };
               }).pipe(
                 Effect.withSpan(
                   frame.type === "snapshot" ? "app.ui.snapshot.send" : "app.ui.heartbeat",
@@ -255,8 +262,8 @@ export const appUi = (
         const navigation =
           request.headers["sec-fetch-mode"] === "navigate" ||
           request.headers.accept?.includes("text/html");
-        // This handler is registered only for the SPA, so APIs and retained assets never return a login document.
-        if (request.method === "GET" && navigation) return appSignInPage();
+        // This handler is registered only for the SPA, so APIs and retained assets never start sign-in.
+        if (request.method === "GET" && navigation) return yield* beginSignIn;
         return yield* error;
       }),
     ),

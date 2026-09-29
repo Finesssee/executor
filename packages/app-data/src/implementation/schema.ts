@@ -2,15 +2,18 @@
 import { Effect, Schema } from "effect";
 import {
   AppDatabaseError,
+  DatabaseFieldReserved,
   DatabaseSchema,
   RowMetadata,
   type Field,
   type Row,
   type Scalar,
   type Table,
+  reservedFieldNames,
 } from "../contracts/database.ts";
 
-const metadata = new Set(["id", "createdAt", "updatedAt"]);
+const metadata = new Set<string>(reservedFieldNames);
+const reserved = (name: string): name is (typeof reservedFieldNames)[number] => metadata.has(name);
 /** Built-in creation ordering and stable tie-breakers apply to every index. */
 export const indexesFor = (table: Table) =>
   [{ name: "by_creation", fields: [] as readonly string[] }, ...table.indexes].map((index) => ({
@@ -40,15 +43,17 @@ export const validScalar = (field: Field, value: unknown): value is Scalar =>
         });
 
 /** Parse the whole schema, including references and composite-index definitions. */
-export const parseDatabaseSchema = (input: unknown) =>
+export const parseDatabaseSchema = (
+  input: unknown,
+): Effect.Effect<DatabaseSchema, AppDatabaseError | DatabaseFieldReserved> =>
   Schema.decodeUnknownEffect(DatabaseSchema)(input).pipe(
+    Effect.mapError(() => new AppDatabaseError({ reason: "schema" })),
     Effect.flatMap((schema) =>
       Effect.gen(function* () {
-        for (const table of Object.values(schema)) {
-          if (
-            Object.keys(table.fields).some((name) => metadata.has(name)) ||
-            new Set(table.indexes.map((index) => index.name)).size !== table.indexes.length
-          )
+        for (const [name, table] of Object.entries(schema)) {
+          const field = Object.keys(table.fields).find(reserved);
+          if (field !== undefined) return yield* new DatabaseFieldReserved({ table: name, field });
+          if (new Set(table.indexes.map((index) => index.name)).size !== table.indexes.length)
             return yield* new AppDatabaseError({ reason: "schema" });
           for (const field of Object.values(table.fields)) {
             if (
@@ -71,7 +76,6 @@ export const parseDatabaseSchema = (input: unknown) =>
         return schema;
       }),
     ),
-    Effect.mapError(() => new AppDatabaseError({ reason: "schema" })),
   );
 
 /** Canonical ordering for schema fingerprints and query-bound cursors. */

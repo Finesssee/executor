@@ -20,6 +20,7 @@ import { App, Resource } from "../support/contracts.ts";
 import { createProfile, selectProfileAccounts } from "../support/profiles.ts";
 import { McpClient } from "../support/mcp-client.ts";
 import { Evidence, Telemetry } from "../support/evidence.ts";
+import { withApps } from "../support/apps-release.ts";
 
 const Counters = Schema.Struct({
   initialize: Schema.Number,
@@ -168,27 +169,28 @@ const control = (origin: string, data?: Schema.Json) =>
 const source = (url: string, cached: boolean, accounts: boolean) => [
   {
     path: "package.json",
-    content: JSON.stringify({ dependencies: { "@modelcontextprotocol/sdk": "1.30.0" } }),
+    content: JSON.stringify({ dependencies: withApps({ "@modelcontextprotocol/sdk": "1.30.0" }) }),
   },
   {
     path: "index.ts",
     content: `
-import { defineApp, defineProvider, accountOperations, secrets, object, string, query } from "apps";
-import { mcpOperations } from "apps/mcp";
+import { defineApp, defineProvider, accountRouter, secrets, object, string, query, router } from "apps";
+import { mcpRouter } from "apps/mcp";
 const provider = defineProvider({ name: "Cache fixture", auth: { key: secrets({ label: "Variant", fields: object({ token: string() }) }) } });
 export default defineApp({ accounts: ${accounts ? "{ service: provider.many() }" : "{}"} }, async ctx => {
   const options = account => ({ url: ${JSON.stringify(url)}, signal: ctx.signal,
     ${cached ? "cache: account ? ctx.cache.forAccount(account) : ctx.cache," : ""}
     ...(account ? { accountId: account.id, headers: { "X-Fixture-Variant": account.fields.token } } : {}),
   });
-  const tools = ${accounts ? "await accountOperations(ctx.accounts.service, account => mcpOperations(options(account)), { signal: ctx.signal })" : "await mcpOperations(options(undefined))"};
-  return { ...tools, queries: { ...tools.queries,
+  const tools = ${accounts ? "await accountRouter(ctx.accounts.service, account => mcpRouter(options(account)), { signal: ctx.signal })" : "await mcpRouter(options(undefined))"};
+  return { tools: router({
+    upstream: tools,
     refresh: query({ input: object({ id: string() }) }, async (_, { id }) => {
       const account = ${accounts ? "ctx.accounts.service.find(account => account.id === id)" : "undefined"};
       ${accounts ? 'if (!account) throw new Error("Missing account");' : ""}
-      await mcpOperations({ ...options(account), revalidate: true }); return true;
+      await mcpRouter({ ...options(account), revalidate: true }); return true;
     }),
-  } };
+  }) };
 });`,
   },
 ];
@@ -207,10 +209,13 @@ const deploy = (url: string, cached: boolean, accounts = false) =>
     const path = `${prefix}/apps/${id}`;
     yield* Effect.addFinalizer(() => api.request(actors.owner, "DELETE", path).pipe(Effect.orDie));
     const profile = yield* createProfile(actors.owner, path);
+    // The server's tools are mounted under "upstream" beside the app's own refresh query.
+    // Every fixture tool is read-only.
     const call = (name: string, input: Schema.Json = {}, profileId = profile.id) =>
       api.request(actors.owner, "POST", `${path}/tools/call`, {
         profile: profileId,
-        tool: `queries.${name}`,
+        tool: name === "refresh" ? name : `upstream.${name}`,
+        kind: "query",
         input,
       });
     return { api, actors, id, path, prefix, profile, call };
@@ -303,7 +308,7 @@ layer(HostedLive, { excludeTestServices: true })("MCP cache", (it) => {
         expect(index.items.some((tool) => "inputSchema" in tool || "outputSchema" in tool)).toBe(
           false,
         );
-        const selected = index.items.find((tool) => tool.name !== "queries.refresh")?.name;
+        const selected = index.items.find((tool) => tool.name !== "refresh")?.name;
         expect(typeof selected).toBe("string");
         const describeStart = performance.now();
         const described = yield* app.api.request(
@@ -326,7 +331,7 @@ layer(HostedLive, { excludeTestServices: true })("MCP cache", (it) => {
           (yield* app.api.request(
             app.actors.owner,
             "GET",
-            `${app.path}/tools/queries.missing_tool?profile=${app.profile.id}`,
+            `${app.path}/tools/missing_tool?profile=${app.profile.id}`,
           )).status,
         ).toBe(404);
         expect((yield* control(origin)).counters.list).toBe(1);

@@ -8,6 +8,7 @@ import { Api, body } from "../support/api.ts";
 import { Actors } from "../support/actors.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { App, Resource } from "../support/contracts.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const files = [
   {
@@ -70,13 +71,14 @@ export const messages = {
   },
   {
     path: "index.ts",
-    content: `import { defineApp } from "apps";
+    content: `import { defineApp, router } from "apps";
 import { requirements } from "./context.ts";
 import { list, save, broken, invalid, guarded, forbidden, messages } from "./handlers.ts";
 export default defineApp(requirements, {
-  queries: { list, forbidden }, mutations: { save, broken, invalid, guarded }
+  tools: router({ list, forbidden, save, broken, invalid, guarded }),
 });`,
   },
+  appsManifest,
 ];
 
 const Rows = Schema.Array(Schema.Struct({ body: Schema.String, source: Schema.String }));
@@ -181,13 +183,22 @@ layer(HostedLive, { excludeTestServices: true })("App handler context", (it) => 
         const saved = yield* submit((yield* body(Resource, connection)).id, "synthetic-context-a");
         expect(saved.status).toBe(200);
         created.account = (yield* body(Resource, saved)).id;
-        const call = (tool: string, input: Record<string, string> = {}) =>
+        const kinds = {
+          list: "query",
+          forbidden: "query",
+          save: "mutation",
+          broken: "mutation",
+          invalid: "mutation",
+          guarded: "mutation",
+        } as const;
+        const call = (tool: keyof typeof kinds, input: Record<string, string> = {}) =>
           api.request(actors.owner, "POST", `${prefix}/apps/${app}/tools/call`, {
             profile: profile.id,
             tool,
+            kind: kinds[tool],
             input,
           });
-        expect((yield* call("mutations.save", { body: "before" })).status).toBe(200);
+        expect((yield* call("save", { body: "before" })).status).toBe(200);
         const reconnected = yield* api.request(
           actors.owner,
           "POST",
@@ -197,16 +208,11 @@ layer(HostedLive, { excludeTestServices: true })("App handler context", (it) => 
         expect(
           (yield* submit((yield* body(Resource, reconnected)).id, "synthetic-context-b")).status,
         ).toBe(200);
-        expect((yield* call("mutations.save", { body: "after" })).status).toBe(200);
-        for (const tool of [
-          "queries.forbidden",
-          "mutations.broken",
-          "mutations.invalid",
-          "mutations.guarded",
-        ]) {
+        expect((yield* call("save", { body: "after" })).status).toBe(200);
+        for (const tool of ["forbidden", "broken", "invalid", "guarded"] as const) {
           expect((yield* call(tool, { body: tool })).status).toBeGreaterThanOrEqual(400);
         }
-        const list = yield* call("queries.list");
+        const list = yield* call("list");
         expect(list.status).toBe(200);
         expect(yield* body(Rows, list)).toEqual([
           { body: "before", source: "first" },
@@ -220,8 +226,8 @@ layer(HostedLive, { excludeTestServices: true })("App handler context", (it) => 
               ? {
                   ...file,
                   content: file.content.replace(
-                    "mutations: { save, broken, invalid, guarded }",
-                    "mutations: { save, broken, invalid, guarded }, webhooks: { messages }",
+                    "tools: router({ list, forbidden, save, broken, invalid, guarded }),",
+                    "tools: router({ list, forbidden, save, broken, invalid, guarded }), webhooks: { messages },",
                   ),
                 }
               : file,
@@ -259,7 +265,7 @@ layer(HostedLive, { excludeTestServices: true })("App handler context", (it) => 
         );
         expect(delivered.status).toBe(200);
         expect(delivered.body).toEqual({ source: "second" });
-        expect(yield* body(Rows, yield* call("queries.list"))).toEqual([
+        expect(yield* body(Rows, yield* call("list"))).toEqual([
           { body: "before", source: "first" },
           { body: "after", source: "second" },
           { body: "registered", source: "second" },

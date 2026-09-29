@@ -14,6 +14,7 @@ export const dashboardLoadingProbe = Effect.gen(function* () {
   const requests: string[] = [];
   const active = new Set<Promise<void>>();
   const hold = (route: Route) => {
+    // oxlint-disable-next-line executor/no-manual-effect-runtime-in-tests -- Playwright route handlers must return a Promise
     const pending = Effect.runPromise(
       Effect.gen(function* () {
         const path = new URL(route.request().url()).pathname;

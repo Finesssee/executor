@@ -9,6 +9,7 @@ import { HostedLive, withHostedCase } from "../support/case.ts";
 import { McpClient } from "../support/mcp-client.ts";
 import { McpOAuth } from "../support/mcp-oauth.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsVersion, declaredApps } from "../support/apps-release.ts";
 
 const Organization = Schema.Struct({
   type: Schema.Literal("string"),
@@ -39,13 +40,21 @@ layer(HostedLive, { excludeTestServices: true })("Executor organization default"
           mcp = yield* McpClient;
         const { app, profile } = yield* managementApp(actors.owner);
         const path = `/api/organizations/${actors.organization.id}/apps/${app.id}`;
+        // The organization's Executor app is generated with the exact apps release this host ships.
+        const deployed = yield* body(
+          Schema.Struct({
+            files: Schema.Array(Schema.Struct({ path: Schema.String, content: Schema.String })),
+          }),
+          yield* api.request(actors.owner, "GET", `${path}/source`),
+        );
+        expect(declaredApps(deployed.files)).toBe(appsVersion);
 
         const tool = yield* body(
           ListTool,
           yield* api.request(
             actors.owner,
             "GET",
-            `${path}/tools/queries.appManagement_list?profile=${profile.id}`,
+            `${path}/tools/appManagement.list?profile=${profile.id}`,
           ),
         );
         expect(tool.inputSchema.required ?? []).not.toContain("path");
@@ -54,7 +63,7 @@ layer(HostedLive, { excludeTestServices: true })("Executor organization default"
           tool.inputSchema.properties.path.properties.organization,
         ).pipe(Effect.orElseSucceed(() => undefined));
         expect(organization?.default).toBe(actors.organization.id);
-        expect(organization?.description).toContain("context_get");
+        expect(organization?.description).toContain("context.get");
 
         yield* browser.login(actors.owner);
         const grant = yield* oauth.authorize;
@@ -70,7 +79,7 @@ layer(HostedLive, { excludeTestServices: true })("Executor organization default"
               {
                 name: "execute",
                 arguments: {
-                  code: `return await tools[${JSON.stringify(app.slug)}].profiles[${JSON.stringify(profile.id)}].queries.appManagement_list({});`,
+                  code: `return await tools[${JSON.stringify(app.slug)}].profiles[${JSON.stringify(profile.id)}].appManagement.list({});`,
                 },
               },
               undefined,

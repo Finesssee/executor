@@ -1,7 +1,13 @@
 /** Typed database authoring. Declarations are pure; only invocation-scoped methods return Promises. */
 import { Effect, Schema as EffectSchema } from "effect";
-import { DatabaseSchema, promiseTable, type DatabaseSession } from "@executor-js/app-data";
-import { parseDatabaseSchema } from "@executor-js/app-data/schema";
+import {
+  DatabaseSchema,
+  promiseTable,
+  type DatabaseSession,
+  type reservedFieldNames,
+} from "@executor-js/app-data";
+
+type ReservedFieldName = (typeof reservedFieldNames)[number];
 import { AppStorageUnavailable, type AppStorage } from "../contracts/storage.ts";
 import type { DatabaseDefinition, Database, Table, Tables } from "../contracts/storage.ts";
 import { storageFieldOf, type Fields } from "./schema.ts";
@@ -13,8 +19,11 @@ export type {
   Tables,
   RowOf,
 } from "../contracts/storage.ts";
-/** Declare scalar columns using the same schemas as operation inputs. */
-export const table = <const F extends Fields>(fields: F): Table<F> => tableWithIndexes(fields, []);
+/** Declare scalar columns using the same schemas as operation inputs. The host adds `id`,
+ * `createdAt` and `updatedAt` to every row, so tables cannot declare those names. */
+export const table = <const F extends Fields & { readonly [K in ReservedFieldName]?: never }>(
+  fields: F,
+): Table<F> => tableWithIndexes(fields, []);
 const tableWithIndexes = <F extends Fields, Index extends string>(
   fields: F,
   indexes: Table<F, Index>["indexes"],
@@ -40,7 +49,9 @@ const serialize = (tables: Tables): DatabaseSchema => {
       },
     ]),
   );
-  return Effect.runSync(parseDatabaseSchema(definitions));
+  // Declaring must not throw during module evaluation. The host validates this schema when it
+  // reads requirements, so a deploy reports the precise problem, such as a reserved field name.
+  return EffectSchema.decodeUnknownSync(DatabaseSchema)(definitions);
 };
 /** Build a fresh Promise database facade for one authorized invocation. */
 export const authorDatabase = <T extends Tables>(

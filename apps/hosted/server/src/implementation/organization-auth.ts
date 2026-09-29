@@ -31,6 +31,11 @@ const InviteMember = Schema.Struct({
 });
 const Membership = Schema.Struct({ role: OrganizationRole });
 const StoredInvitation = Schema.Struct({ role: InviteMember.fields.role });
+const SentInvitation = Schema.Struct({
+  id: Schema.NonEmptyString,
+  email: Schema.NonEmptyString,
+  organizationId: Schema.NonEmptyString,
+});
 
 /**
  * Constrain the native organization's HTTP surface to Executor's explicit operations.
@@ -140,6 +145,27 @@ export const explicitOrganizationAuth = {
                 message: "This organization operation is not available.",
               });
           }
+        }),
+      },
+    ],
+    after: [
+      {
+        matcher: (context) => context.path === "/organization/invite-member",
+        // Native resend only reuses an unexpired invitation, so resending an expired one
+        // creates a new row. The sent invitation supersedes every other pending one.
+        handler: createAuthMiddleware(async (context) => {
+          const sent = Schema.decodeUnknownOption(SentInvitation)(context.context.returned);
+          if (Option.isNone(sent)) return;
+          await context.context.adapter.updateMany({
+            model: "invitation",
+            where: [
+              { field: "organizationId", value: sent.value.organizationId },
+              { field: "email", value: sent.value.email.toLowerCase() },
+              { field: "status", value: "pending" },
+              { field: "id", operator: "ne", value: sent.value.id },
+            ],
+            update: { status: "canceled" },
+          });
         }),
       },
     ],

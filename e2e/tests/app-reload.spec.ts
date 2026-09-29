@@ -12,12 +12,13 @@ import { HostedLive, withHostedCase } from "../support/case.ts";
 import { App } from "../support/contracts.ts";
 import { Target } from "../support/platform.ts";
 import { Evidence, Telemetry } from "../support/evidence.ts";
+import { withApps } from "../support/apps-release.ts";
 
 const Deployed = Schema.Struct({ ...App.fields, activeDeployment: Schema.String });
 const files = (live: boolean) => [
   {
     path: "index.ts",
-    content: `import { defineApp, query, object, string } from "apps";
+    content: `import { defineApp, query, object, string, router } from "apps";
 export const version = query({ input: object({}), output: string() }, async () => "${live ? "Live version" : "Static version"}");
 export const hostCache = query({ input: object({ key: string() }), output: string() }, async (_, { key }) => {
   try {
@@ -25,11 +26,11 @@ export const hostCache = query({ input: object({ key: string() }), output: strin
     return (await cache.match(key)) === undefined ? "isolated" : "visible";
   } catch { return "unavailable"; }
 });
-export default defineApp({ accounts: {} }, { queries: { version, hostCache } });`,
+export default defineApp({ accounts: {} }, { tools: router({ version, hostCache }) });`,
   },
   {
     path: "package.json",
-    content: JSON.stringify({ dependencies: { react: "19.2.0", "react-dom": "19.2.0" } }),
+    content: JSON.stringify({ dependencies: withApps({ react: "19.2.0", "react-dom": "19.2.0" }) }),
   },
   {
     path: "ui/index.html",

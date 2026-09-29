@@ -236,7 +236,7 @@ export function appConnectionAtoms(key: {
     request,
     profile,
     submit: HostedClient.runtime.fn(
-      (payload: { method: string; label: string; fields: typeof AccountFieldsInput.Type }, get) =>
+      (payload: { method: string; fields: typeof AccountFieldsInput.Type }, get) =>
         Effect.gen(function* () {
           const pending = yield* connection(get);
           const client = yield* HostedClient;
@@ -247,7 +247,7 @@ export function appConnectionAtoms(key: {
         }),
     ),
     startOAuth: HostedClient.runtime.fn(
-      (payload: { method: string; label: string; client?: OAuthClientInput }, get) =>
+      (payload: { method: string; client?: OAuthClientInput }, get) =>
         Effect.gen(function* () {
           const pending = yield* connection(get);
           const client = yield* HostedClient;
@@ -277,7 +277,7 @@ export function appConnectionAtoms(key: {
 
 const submitConnection = Atom.family((key: ConnectionKey) =>
   HostedClient.runtime.fn(
-    (payload: { method: string; label: string; fields: typeof AccountFieldsInput.Type }, get) =>
+    (payload: { method: string; fields: typeof AccountFieldsInput.Type }, get) =>
       Effect.flatMap(HostedClient, (client) =>
         client.accounts.submit({ params: key, payload }),
       ).pipe(
@@ -324,7 +324,6 @@ const startOAuth = Atom.family((key: ConnectionKey) =>
     (
       payload: {
         readonly method: string;
-        readonly label: string;
         readonly client?: OAuthClientInput;
       },
       get,
@@ -357,21 +356,16 @@ class CallKey extends Data.Class<{
   readonly organization: OrganizationReference;
   readonly app: AppId;
   readonly profile?: ProfileId | undefined;
+  readonly expectedProfileRevision?: number | undefined;
+  readonly deployment?: DeploymentId | undefined;
   readonly tool: ToolName;
+  readonly kind: "query" | "mutation";
 }> {}
-const calls = Atom.family((key: CallKey) =>
-  HostedClient.runtime.fn(
-    (input: {
-      input: Json;
-      deployment?: DeploymentId | undefined;
-      expectedProfileRevision?: number | undefined;
-    }) =>
-      Effect.flatMap(HostedClient, (client) =>
-        client.tools.call({
-          params: key,
-          payload: { ...input, tool: key.tool, profile: key.profile },
-        }),
-      ),
+const calls = Atom.family(({ organization, app, ...target }: CallKey) =>
+  HostedClient.runtime.fn((input: Json) =>
+    Effect.flatMap(HostedClient, (client) =>
+      client.tools.call({ params: { organization, app }, payload: { ...target, input } }),
+    ),
   ),
 );
 /** Each account and operation owns its invocation state. */
@@ -386,7 +380,8 @@ export const PendingOAuth = Schema.Struct({
   app: Schema.NullOr(AppId),
   profile: Schema.optional(ProfileId),
   redirectUri: HttpUrl,
-  label: Schema.optionalKey(Schema.String),
+  /** A reconnect keeps its account name, so completion does not ask for one. */
+  reconnect: Schema.optionalKey(Schema.Boolean),
   manualClient: Schema.optionalKey(Schema.Boolean),
 });
 export { appError } from "./errors.ts";

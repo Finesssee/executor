@@ -8,13 +8,15 @@ import { Actors } from "../support/actors.ts";
 import { Browser } from "../support/browser.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { App, Resource } from "../support/contracts.ts";
+import { nameConnectedAccount } from "../support/name-account.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const Access = Schema.Struct({ revision: Schema.String });
 const Group = Schema.Struct({ id: Schema.String, revision: Schema.String });
-const source = `import {defineApp, defineProvider, secrets, query, object, string} from "apps";
+const source = `import {defineApp, defineProvider, secrets, query, object, string, router} from "apps";
 const service=defineProvider({name:"Sharing fixture",auth:{key:secrets({label:"Key",fields:object({token:string()})})}});
-export default defineApp({accounts:{service:service.many()}},{name:"Sharing fixture",queries:{identity:query({input:object({})},async()=>"allowed")}});`;
+export default defineApp({accounts:{service:service.many()}},{name:"Sharing fixture",tools: router({ identity:query({input:object({})},async()=>"allowed") })});`;
 
 layer(HostedLive, { excludeTestServices: true })("Resource sharing", (it) => {
   it.effect(scenarios.resourceSharing.title, (context) =>
@@ -39,7 +41,7 @@ layer(HostedLive, { excludeTestServices: true })("Resource sharing", (it) => {
           App,
           yield* api.request(actors.owner, "POST", `${prefix}/apps/deploy`, {
             name: `Sharing ${suffix}`,
-            files: [{ path: "index.ts", content: source }],
+            files: [{ path: "index.ts", content: source }, appsManifest],
           }),
         );
         const connected: string[] = [];
@@ -143,9 +145,7 @@ layer(HostedLive, { excludeTestServices: true })("Resource sharing", (it) => {
               page.goto(`/org/${actors.organization.slug}/apps/${app.id}?view=accounts`),
             );
             yield* browser.use("Add a personal account", (page) =>
-              page
-                .getByRole("button", { name: "Add Sharing fixture account", exact: true })
-                .click(),
+              page.getByRole("button", { name: "Connect new account", exact: true }).click(),
             );
           } else {
             const profile = yield* createProfile(actors.owner, `${prefix}/apps/${app.id}`);
@@ -161,20 +161,18 @@ layer(HostedLive, { excludeTestServices: true })("Resource sharing", (it) => {
               page.goto(`/org/${actors.organization.slug}/connections/${connection.id}`),
             );
           }
-          yield* browser.use("Name the account", (page) =>
-            page.getByLabel("Account name", { exact: true }).fill(label),
-          );
           yield* browser.use("Enter a synthetic token", (page) =>
             page.getByLabel("Token", { exact: true }).fill("synthetic"),
           );
           yield* browser.use("Authenticate the new account", (page) =>
             page.getByRole("button", { name: "Connect account", exact: true }).click(),
           );
+          yield* browser.use("Name the account", (page) => nameConnectedAccount(page, label));
           yield* browser.use("Wait for account setup to finish", (page) =>
             page.getByRole("dialog").waitFor({ state: "hidden" }),
           );
           yield* browser.use("See the connected account", (page) =>
-            page.getByRole("link", { name: label, exact: true }).waitFor(),
+            page.getByRole("checkbox", { name: label, exact: true, checked: true }).waitFor(),
           );
           const profile = yield* Schema.decodeUnknownEffect(Schema.String)(
             yield* browser.use("Read the selected profile", (page) =>
@@ -194,15 +192,17 @@ layer(HostedLive, { excludeTestServices: true })("Resource sharing", (it) => {
         );
         for (const kind of ["personal", "shared"])
           yield* browser.use("Personal and shared accounts appear together", (page) =>
-            page.getByRole("link", { name: `${kind} ${suffix}`, exact: true }).waitFor(),
+            page.getByRole("button", { name: `Manage ${kind} ${suffix}`, exact: true }).waitFor(),
           );
         const deleting = connected[0];
         if (!deleting) throw new Error("The connected personal account is missing");
-        yield* browser.use("Open the personal account", (page) =>
-          page.goto(`/org/${actors.organization.slug}/accounts/${deleting}`),
-        );
-        yield* browser.use("Start deleting the account", (page) =>
-          page.getByRole("link", { name: "Delete account", exact: true }).click(),
+        yield* browser.use("Start deleting the personal account", (page) =>
+          page
+            .getByRole("button", { name: `Manage personal ${suffix}`, exact: true })
+            .click()
+            .then(() =>
+              page.getByRole("menuitem", { name: "Delete account", exact: true }).click(),
+            ),
         );
         const deleted = yield* browser.use("Confirm account deletion", (page) =>
           Promise.all([
@@ -215,23 +215,26 @@ layer(HostedLive, { excludeTestServices: true })("Resource sharing", (it) => {
                     `/api/organizations/${organization}/accounts/${deleting}`,
                 ),
             ),
-            page.getByRole("button", { name: "Delete account", exact: true }).click(),
+            page
+              .getByRole("dialog")
+              .getByRole("button", { name: "Delete account", exact: true })
+              .click(),
           ]).then(([response]) => response.status()),
         );
         expect(deleted).toBe(200);
-        yield* browser.use("Deletion returns to the account list", (page) =>
-          page.waitForURL(`**/org/${actors.organization.slug}/accounts`),
+        yield* browser.use("Deletion closes the dialog on the account list", (page) =>
+          page.getByRole("dialog").waitFor({ state: "hidden" }),
         );
         yield* browser.use("Deleted accounts leave the list", (page) =>
           page
-            .getByRole("link", { name: `personal ${suffix}`, exact: true })
+            .getByRole("button", { name: `Manage personal ${suffix}`, exact: true })
             .waitFor({ state: "hidden" }),
         );
         const after = yield* api.request(actors.owner, "GET", `${prefix}/accounts/${deleting}`);
         expect([403, 404]).toContain(after.status);
         connected.splice(0, 1);
         yield* browser.use("The team account remains", (page) =>
-          page.getByRole("link", { name: `shared ${suffix}`, exact: true }).waitFor(),
+          page.getByRole("button", { name: `Manage shared ${suffix}`, exact: true }).waitFor(),
         );
       }),
     ),

@@ -3,7 +3,6 @@ import type { DatabaseDefinition } from "./storage.ts";
 /** Native app contracts; factories and handlers compose in the host's Effect runtime. */
 import { type Effect, Schema } from "effect";
 import type { OperationSchedule } from "./schedules.ts";
-import type { AppOperation } from "./operations.ts";
 import type { AccountOf, AuthMethods, ManyAccounts, Provider } from "./provider.ts";
 import type { AppWorkflow, WorkflowReads } from "./workflows.ts";
 import type { Elicit } from "./elicitation.ts";
@@ -13,8 +12,8 @@ type Handler<Context> = (context: Context, input: never) => Effect.Effect<unknow
 
 /** App capabilities share one account context. Package metadata belongs in package.json. */
 export interface AppDefinition<Context> {
-  /** Optional dynamic tools; resolution does not enumerate the catalog. */
-  readonly dynamicTools?: import("./dynamic-tools.ts").DynamicTools;
+  /** The app's root router. Its keys form tool paths such as `issues.list`. */
+  readonly tools?: import("./router.ts").AppRouter | import("./router.ts").DynamicRouter;
   /** Omission reads packaged skills/. An explicit catalog replaces that default, including []. */
   readonly skills?: readonly AppSkillSource[];
   /** Optional lazy skills, added to the static catalog. Only skill reads call them. */
@@ -23,8 +22,6 @@ export interface AppDefinition<Context> {
   readonly schedules?: Readonly<
     Record<string, Omit<OperationSchedule, "name"> & { readonly tool: string }>
   >;
-  readonly queries?: Readonly<Record<string, AppOperation>>;
-  readonly mutations?: Readonly<Record<string, AppOperation>>;
   readonly webhooks?: Readonly<
     Record<
       string,

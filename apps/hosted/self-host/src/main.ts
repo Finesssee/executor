@@ -44,9 +44,7 @@ export const selfHostRoutes = Effect.gen(function* () {
   const skills = yield* readExecutorSkills;
   const policy = yield* urlPolicyConfig;
   const egress: HostEgress = { policy, client: yield* safeHttpClient(policy) };
-  const executorServices = Layer.succeedContext(
-    yield* Layer.build(selfHostExecutor(skills, egress)),
-  );
+  const executorServices = Layer.succeedContext(yield* Layer.build(selfHostExecutor(egress)));
   const path = yield* Path.Path;
   // The renderer is imported from the same package build; see `dashboardFiles`.
   const dashboard = yield* dashboardFiles(

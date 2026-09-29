@@ -343,7 +343,7 @@ const command = Command.make("sso-idp", {
         yield* fs.writeFileString(`${directory}/sso-idp.json`, JSON.stringify({ origin }), {
           mode: 0o600,
         });
-        yield* Effect.never;
+        return yield* Effect.never;
       }),
     ),
   ),

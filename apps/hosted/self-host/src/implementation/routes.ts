@@ -6,7 +6,7 @@ import {
 import { Schedule } from "effect";
 import { executorSelfHostApiDocument } from "../contracts/api.ts";
 import { startScheduleWorker, defaultScheduleWorkerOptions } from "@executor-js/sdk/scheduling";
-import { gitRoutes } from "@executor-js/app-management";
+import { frameworkDocumentation, gitRoutes } from "@executor-js/app-management";
 import { hostedAppGitAccess } from "@executor-js/hosted-server/app-management";
 /** The route map is shared by native development and the packaged Worker. */
 import {
@@ -28,7 +28,7 @@ import {
 } from "@executor-js/hosted-server";
 import { recordRequestRejections, requestTiming } from "@executor-js/telemetry/http";
 import { appAddresses, hostedAppUi } from "@executor-js/hosted-server/app-ui";
-import { AppSignInApi, appSignInPage, appSignInScript } from "apps/ui/auth";
+import { appSignInCallbackPath } from "apps/ui/auth";
 import { AppUiApi } from "apps/ui/contracts";
 import { HttpApiBuilder } from "effect/unstable/httpapi";
 import { appUiBaseUrl } from "../contracts/config.ts";
@@ -81,9 +81,10 @@ export const selfHostRouteMap = <DashboardE, DashboardR>(options: {
     const mcp = yield* selfHostMcp.pipe(Effect.provide(HttpServer.layerServices));
     const document = lazyHostedApiDocument(() => executorSelfHostApiDocument(auth.origin));
     const api = selfHostApi(document).pipe(
+      Layer.provide(frameworkDocumentation(Effect.succeed(skills))),
       Layer.provide(appUi.dashboard),
       HttpRouter.provideRequest(auth.appSessions),
-      HttpRouter.provideRequest(catalogLive(Effect.succeed(skills), document.document, egress)),
+      HttpRouter.provideRequest(catalogLive(document.document, egress)),
       Layer.provide(requireUserLive),
       Layer.provide(requireOrganizationLive),
       HttpRouter.provideRequest(executorServices),
@@ -136,18 +137,22 @@ export const selfHostRouteMap = <DashboardE, DashboardR>(options: {
         HttpRouter.add("GET", "/api", apiChallenge),
         HttpRouter.add("GET", "/.well-known/oauth-protected-resource/api", apiProtectedResource),
       ).pipe(HttpRouter.provideRequest(auth.apiIdentity)),
+      // Resolved on the server so opening an app never renders an intermediate dashboard page.
+      HttpRouter.add("GET", "/app-auth", appUi.signIn(dashboard)).pipe(
+        HttpRouter.provideRequest(auth.appSessions),
+        HttpRouter.provideRequest(executorServices),
+        HttpRouter.provideRequest(auth.identity),
+      ),
       HttpRouter.add("GET", "*", dashboard),
     );
     const notFound = HttpServerResponse.empty({ status: 404 });
     const appServices = requestServices(Layer.mergeAll(auth.appSessions, executorServices));
     const appRoutes = Layer.mergeAll(
-      HttpApiBuilder.layer(AppSignInApi).pipe(Layer.provide(appUi.appAuth)),
       HttpApiBuilder.layer(AppUiApi).pipe(
         Layer.provide(appUi.calls),
         Layer.provide(appUi.sessionAccess.combine(appServices).layer),
       ),
-      HttpRouter.add("GET", "/_executor/auth/callback", appSignInPage()),
-      HttpRouter.add("GET", "/_executor/auth/browser.js", appSignInScript()),
+      HttpRouter.add("GET", appSignInCallbackPath, appUi.callback),
       HttpRouter.add("GET", "/_executor/assets/:deployment/*", appUi.asset),
       HttpRouter.add("GET", "/_executor/watch.js", appUi.watch),
       HttpRouter.add("GET", "/_executor/version", appUi.versions),

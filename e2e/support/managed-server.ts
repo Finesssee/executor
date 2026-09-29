@@ -52,6 +52,8 @@ export const startManagedServer = (
     const packagedEntry = yield* Config.NonEmptyString("EXECUTOR_E2E_LOCAL_ENTRY").pipe(
       Config.option,
     );
+    // The suite's loopback registry serves this checkout's apps release; see npm-registry.ts.
+    const npmRegistry = yield* Config.NonEmptyString("E2E_NPM_REGISTRY").pipe(Config.option);
     const entry =
       target.metadata.target === "local" && Option.isSome(packagedEntry)
         ? { command: [packagedEntry.value, "serve"], cwd: target.directory }
@@ -93,6 +95,7 @@ export const startManagedServer = (
       EXECUTOR_ENVIRONMENT: "e2e",
       EXECUTOR_BUILD_VERSION: target.metadata.commit,
       EXECUTOR_WORKER_BUNDLE: path.resolve(".local/test-runtime/host.json"),
+      ...(Option.isSome(npmRegistry) ? { EXECUTOR_NPM_REGISTRY: npmRegistry.value } : {}),
       EXECUTOR_TEST_CLOCK_OFFSET_MS: "0",
       ...environment,
     };
@@ -252,6 +255,30 @@ export const startManagedServer = (
               if (offset > 86_400_000) return HttpServerResponse.empty({ status: 400 });
               env.EXECUTOR_TEST_CLOCK_OFFSET_MS = String(offset);
               return HttpServerResponse.jsonUnsafe({ offset });
+            }),
+          );
+        }),
+      ),
+      // A later start runs pending data steps in another mode.
+      HttpRouter.add(
+        "POST",
+        "/data-steps",
+        Effect.gen(function* () {
+          const request = yield* HttpServerRequest.HttpServerRequest;
+          if (request.headers.authorization !== `Bearer ${Redacted.value(target.apiKey)}`)
+            return HttpServerResponse.empty({ status: 401 });
+          const body = yield* request.json.pipe(
+            Effect.flatMap(
+              Schema.decodeUnknownEffect(
+                Schema.Struct({ mode: Schema.Literals(["report", "apply"]) }),
+              ),
+            ),
+          );
+          return yield* gate.withPermits(1)(
+            Effect.sync(() => {
+              if (current !== undefined) return HttpServerResponse.empty({ status: 409 });
+              Object.assign(env, { EXECUTOR_DATA_STEPS: body.mode });
+              return HttpServerResponse.jsonUnsafe({ ok: true });
             }),
           );
         }),

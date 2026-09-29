@@ -8,6 +8,7 @@ import { Target } from "../support/platform.ts";
 import { TestLive, withCase } from "../support/case.ts";
 import { Resource } from "../support/contracts.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const Profile = Schema.Struct({
   id: Schema.String,
@@ -45,7 +46,7 @@ const files = [
   {
     path: "index.ts",
     content: `
-import { defineApp, defineProvider, secrets, object, string, query, mutation, workflow, defineDatabase, table, interval } from "apps";
+import { defineApp, defineProvider, secrets, object, string, query, mutation, workflow, defineDatabase, table, interval, router } from "apps";
 const service = defineProvider({ name: "Profile fixture", auth: { key: secrets({ label: "Key", fields: object({ token: string() }) }) } });
 const database = defineDatabase({ rows: table({ account: string(), body: string() }).index("by_account", ["account"]), registrations: table({ subscription: string(), context: string(), source: string() }).index("by_subscription", ["subscription"]) });
 const shape = ctx => ({ auth: "auth" in ctx, profile: "profile" in ctx });
@@ -75,9 +76,13 @@ const incoming = { account: "mail", config: empty, state: empty,
    if (found) await ctx.db.registrations.delete(found.id);
  }
 };
-export default defineApp({ accounts: { mail: service.many(), sink: service }, database }, { queries: { inspect }, mutations: { write, mark }, workflows: { capture, pauseable }, webhooks: { incoming }, schedules: { summary: interval({ minutes: 1 }, write, { body: "scheduled" }) } });
+export default defineApp({ accounts: { mail: service.many(), sink: service }, database }, { tools: router({
+   inspect,
+   write, mark,
+ }), workflows: { capture, pauseable }, webhooks: { incoming }, schedules: { summary: interval({ minutes: 1 }, write, { body: "scheduled" }) } });
 `,
   },
+  appsManifest,
 ];
 
 layer(TestLive, { excludeTestServices: true })("Profiles", (it) => {
@@ -200,11 +205,18 @@ layer(TestLive, { excludeTestServices: true })("Profiles", (it) => {
         expect(
           (yield* body(Hooks, yield* api.request(agent, "GET", `${path}/webhooks`))).length,
         ).toBe(3);
-        const call = (profile: string, tool: string, input = {}) =>
-          api.request(agent, "POST", "/v1/tools/call", { app: app.id, profile, tool, input });
-        expect((yield* call(alice.id, "mutations.write", { body: "alice" })).status).toBe(200);
-        expect((yield* call(bob.id, "mutations.write", { body: "bob" })).status).toBe(200);
-        const identity = yield* body(Completed, yield* call(alice.id, "queries.inspect"));
+        const kinds = { write: "mutation", inspect: "query" } as const;
+        const call = (profile: string, tool: keyof typeof kinds, input = {}) =>
+          api.request(agent, "POST", "/v1/tools/call", {
+            app: app.id,
+            profile,
+            tool,
+            kind: kinds[tool],
+            input,
+          });
+        expect((yield* call(alice.id, "write", { body: "alice" })).status).toBe(200);
+        expect((yield* call(bob.id, "write", { body: "bob" })).status).toBe(200);
+        const identity = yield* body(Completed, yield* call(alice.id, "inspect"));
         expect(identity.value).toMatchObject({
           context: { auth: false, profile: false },
           mail: [mailA, mailB],
@@ -239,7 +251,8 @@ layer(TestLive, { excludeTestServices: true })("Profiles", (it) => {
         ).toBe(404);
         const withoutProfile = yield* api.request(agent, "POST", "/v1/tools/call", {
           app: app.id,
-          tool: "queries.inspect",
+          tool: "inspect",
+          kind: "query",
           input: {},
         });
         expect(withoutProfile.status).toBe(409);
@@ -286,7 +299,7 @@ layer(TestLive, { excludeTestServices: true })("Profiles", (it) => {
               {
                 name: "execute",
                 arguments: {
-                  code: `return [await tools[${JSON.stringify(app.slug)}].profiles[${JSON.stringify(alice.id)}].queries.inspect({}),await tools[${JSON.stringify(app.slug)}].profiles[${JSON.stringify(bob.id)}].queries.inspect({})];`,
+                  code: `return [await tools[${JSON.stringify(app.slug)}].profiles[${JSON.stringify(alice.id)}].inspect({}),await tools[${JSON.stringify(app.slug)}].profiles[${JSON.stringify(bob.id)}].inspect({})];`,
                 },
               },
               undefined,
@@ -331,7 +344,8 @@ layer(TestLive, { excludeTestServices: true })("Profiles", (it) => {
             app: app.id,
             profile: alice.id,
             expectedProfileRevision: alice.revision,
-            tool: "queries.inspect",
+            tool: "inspect",
+            kind: "query",
             input: {},
           })).status,
         ).toBe(409);
@@ -424,12 +438,15 @@ layer(TestLive, { excludeTestServices: true })("Profiles", (it) => {
         const activated = yield* body(Deployed, newer);
         expect(activated.app.id).toBe(app.id);
         expect(activated.app.activeDeployment).not.toBe(app.activeDeployment);
-        expect(
-          (yield* body(Completed, yield* call(bob.id, "queries.inspect"))).value,
-        ).toMatchObject({ version: "two", sink: sinkB, totalRows: 3 });
-        expect(
-          (yield* body(Completed, yield* call(alice.id, "queries.inspect"))).value,
-        ).toMatchObject({ version: "two", sink: sinkB });
+        expect((yield* body(Completed, yield* call(bob.id, "inspect"))).value).toMatchObject({
+          version: "two",
+          sink: sinkB,
+          totalRows: 3,
+        });
+        expect((yield* body(Completed, yield* call(alice.id, "inspect"))).value).toMatchObject({
+          version: "two",
+          sink: sinkB,
+        });
         for (const profile of [alice.id, bob.id]) {
           const setupDeadline = (yield* Clock.currentTimeMillis) + 30000;
           for (;;) {
@@ -461,7 +478,7 @@ layer(TestLive, { excludeTestServices: true })("Profiles", (it) => {
         );
         const sleepDeadline = (yield* Clock.currentTimeMillis) + 15000;
         for (;;) {
-          const response = yield* body(Completed, yield* call(bob.id, "queries.inspect"));
+          const response = yield* body(Completed, yield* call(bob.id, "inspect"));
           const markers = yield* Schema.decodeUnknownEffect(
             Schema.Struct({
               registrations: Schema.Array(Schema.Struct({ subscription: Schema.String })),
@@ -487,7 +504,7 @@ layer(TestLive, { excludeTestServices: true })("Profiles", (it) => {
         );
         expect(paused.enabled).toBe(false);
         expect(paused.accounts).toEqual(beforePause.accounts);
-        expect((yield* call(bob.id, "queries.inspect")).status).toBe(409);
+        expect((yield* call(bob.id, "inspect")).status).toBe(409);
         const disabledDiscovery = yield* client.use(
           "Disabled accounts leave the MCP catalog",
           (client, signal) =>
@@ -560,7 +577,7 @@ layer(TestLive, { excludeTestServices: true })("Profiles", (it) => {
         expect(resumed.id).toBe(bob.id);
         expect(resumed.accounts).toEqual(beforePause.accounts);
         yield* ready(bob.id);
-        expect((yield* call(bob.id, "queries.inspect")).status).toBe(200);
+        expect((yield* call(bob.id, "inspect")).status).toBe(200);
         expect(
           (yield* body(Hooks, yield* api.request(agent, "GET", `${path}/webhooks`))).filter(
             (hook) => hook.profile === bob.id && hook.status === "active",
@@ -568,8 +585,8 @@ layer(TestLive, { excludeTestServices: true })("Profiles", (it) => {
         ).toHaveLength(1);
         const removed = yield* api.request(agent, "DELETE", `${path}/profiles/${alice.id}`);
         expect((yield* body(Profile, removed)).status).toBe("removed");
-        expect((yield* call(alice.id, "queries.inspect")).status).toBe(409);
-        expect((yield* call(bob.id, "queries.inspect")).status).toBe(200);
+        expect((yield* call(alice.id, "inspect")).status).toBe(409);
+        expect((yield* call(bob.id, "inspect")).status).toBe(200);
       }).pipe(Effect.provide(McpClient.layer)),
     ),
   );

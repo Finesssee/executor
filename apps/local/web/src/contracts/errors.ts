@@ -3,7 +3,6 @@ import type { LocalAppManagementApi } from "@executor-js/local-server/app-manage
 import type { LocalWebhookSetupApi } from "@executor-js/local-server/webhook-setup";
 import type { DashboardApi } from "@executor-js/local-server/contracts";
 import type { AccountConnectApi } from "@executor-js/local-server/account-connections";
-import type { AppAuthenticationApi } from "@executor-js/local-server/app-ui";
 import type { AccountId } from "@executor-js/sdk";
 import { Cause, Match, Option, type Schema } from "effect";
 import type { HttpApiEndpoint, HttpApiGroup } from "effect/unstable/httpapi";
@@ -16,8 +15,7 @@ type Groups =
   | (typeof LocalAppManagementApi.groups)[keyof typeof LocalAppManagementApi.groups]
   | (typeof LocalWebhookSetupApi.groups)[keyof typeof LocalWebhookSetupApi.groups]
   | (typeof DashboardApi.groups)[keyof typeof DashboardApi.groups]
-  | (typeof AccountConnectApi.groups)[keyof typeof AccountConnectApi.groups]
-  | (typeof AppAuthenticationApi.groups)[keyof typeof AppAuthenticationApi.groups];
+  | (typeof AccountConnectApi.groups)[keyof typeof AccountConnectApi.groups];
 /** Derived from the public HTTP contracts; adding a failure requires a presentation below. */
 export type DashboardError =
   | HttpApiEndpoint.Errors<HttpApiGroup.Endpoints<Groups>>
@@ -190,6 +188,49 @@ const errorMessage = Match.type<DashboardError>().pipe(
         "Check the setup details and connected accounts, then try again.",
       ),
     RequestInvalid: () => message("Check the setup details", "Correct the fields and try again."),
+    ToolNotFound: () =>
+      message("Tool unavailable", "This tool is no longer in the app’s catalog. Choose another."),
+    ToolKindMismatch: () =>
+      message(
+        "Tool changed",
+        "This tool changed between a query and a mutation. Reload the app’s tools and try again.",
+      ),
+    InputInvalid: () =>
+      message(
+        "Check the input",
+        "The input does not match this tool’s schema. The tool did not run.",
+      ),
+    ToolCallFailed: () =>
+      message("The tool failed", "It may have already made changes. Check before trying again."),
+    ToolBlocked: () =>
+      message("Tool call blocked", "The tool’s approval policy blocked this call. It did not run."),
+    ToolApprovalRequired: () =>
+      message(
+        "Approval required",
+        "This call needs approval, which the dashboard cannot give yet. Run it from an MCP client.",
+      ),
+    ToolPolicyFailed: () =>
+      message(
+        "Approval policy failed",
+        "The tool’s approval policy could not be evaluated. The tool did not run.",
+      ),
+    ToolElicitationFailed: ({ reason }) =>
+      message(
+        "The tool needed more input",
+        `${Match.value(reason).pipe(
+          Match.when("transaction", () => "It requested input inside a database transaction."),
+          Match.when(
+            "unavailable",
+            () => "Run it from an MCP client that supports input requests.",
+          ),
+          Match.when("invalid-request", () => "It requested an invalid input form."),
+          Match.when("invalid-response", () => "The response did not match the requested form."),
+          Match.when("transport", () => "The input request could not be completed."),
+          Match.when("expired", () => "The input request expired."),
+          Match.when("forbidden", () => "Access changed while the tool was waiting."),
+          Match.exhaustive,
+        )} Earlier tool actions may have completed.`,
+      ),
     StorageError: () => message("Data could not load", "Check the local server, then retry."),
     CredentialsError: () =>
       message(
@@ -248,13 +289,6 @@ const errorMessage = Match.type<DashboardError>().pipe(
       message(
         "Sign-in required",
         "Open Executor desktop, or run the CLI’s pair command to sign in.",
-      ),
-    UiUnauthorized: () => message("Session ended", "Reopen the app URL to sign in again."),
-    UiForbidden: () => message("App access denied", "This sign-in request cannot access the app."),
-    UiFailed: () =>
-      message(
-        "App could not open",
-        "Check the app’s deployment and account selection, then retry.",
       ),
   }),
 );

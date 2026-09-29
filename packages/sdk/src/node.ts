@@ -32,6 +32,7 @@ export const nodeRuntime = (options: NodeRuntimeOptions): AppRuntime => {
     workflow: (input) => runtime.workflow(input).pipe(provideNode),
     webhook: (input) => runtime.webhook(input).pipe(provideNode),
     call: (input) => runtime.call(input).pipe(provideNode),
+    checkAccount: (input) => runtime.checkAccount(input).pipe(provideNode),
   });
 };
 

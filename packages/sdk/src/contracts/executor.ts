@@ -55,6 +55,8 @@ export interface ExecutorOptions {
    * Defaults to this executor.
    */
   readonly declarations?: import("./declarations.ts").DeclarationCache;
+  /** Evaluated results kept beyond this process or isolate, read when `declarations` misses. */
+  readonly durableDeclarations?: import("./declarations.ts").DurableDeclarations;
   /** How long evaluated tool listings are reused. Defaults to `defaultToolListingPolicy`. */
   readonly toolListings?: import("./declarations.ts").ToolListingPolicy;
   /**

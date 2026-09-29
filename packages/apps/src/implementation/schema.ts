@@ -9,7 +9,7 @@ import {
   SchemaParser,
 } from "effect";
 import { dereference, validate } from "@cfworker/json-schema";
-import { ValidationError, type JsonObject, type JsonValue } from "../contracts/schema.ts";
+import { JsonObject, ValidationError, type JsonValue } from "../contracts/schema.ts";
 
 import type { Field } from "@executor-js/app-data/contracts";
 const StorageField = Symbol("apps.StorageField");
@@ -509,3 +509,15 @@ export const id = (table: string): Schema<string> =>
 /** A host user identifier, stored as a string without imposing a product auth model. */
 export const userId = (): Schema<string> =>
   wrap(EffectSchema.NonEmptyString, false, { kind: "userId" });
+
+/** Render a decoder as a JSON Schema document, keeping an imported upstream document as-is. */
+export const jsonSchemaDocument = (decoder: EffectSchema.Decoder<unknown>) => {
+  const imported = importedJsonSchema(decoder);
+  if (imported !== undefined) return EffectSchema.decodeUnknownEffect(JsonObject)(imported);
+  const document = EffectSchema.toJsonSchemaDocument(decoder);
+  return EffectSchema.decodeUnknownEffect(JsonObject)({
+    ...document.schema,
+    $defs: document.definitions,
+    $schema: "https://json-schema.org/draft/2020-12/schema",
+  });
+};

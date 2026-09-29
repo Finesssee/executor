@@ -36,7 +36,6 @@ export const startOAuthAtom = DashboardClient.runtime.fn(
       payload: {
         provider: ProviderId;
         method: string;
-        label: string;
         client?: OAuthClientInput;
       };
     },

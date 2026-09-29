@@ -2,6 +2,8 @@
  * App source written the way the app-authoring skill tells an agent to write it. The product
  * deploys and runs it through the ordinary deployment API; nothing here imports product code.
  */
+import { withApps } from "./apps-release.ts";
+
 export type AuthoredKind = "openapi" | "mcp" | "graphql";
 
 const serialize = (value: unknown) => JSON.stringify(value, null, 2);
@@ -18,7 +20,12 @@ export const provider = defineProvider({
 
 const packageFile = (dependencies: Record<string, string>) => ({
   path: "package.json",
-  content: serialize({ name: "authored-app", private: true, type: "module", dependencies }),
+  content: serialize({
+    name: "authored-app",
+    private: true,
+    type: "module",
+    dependencies: withApps(dependencies),
+  }),
 });
 
 /**
@@ -44,18 +51,18 @@ const openapiIndex = (options: {
       : {},
     oauth: [],
   };
-  return `import { ${authenticated ? "accountOperations, " : ""}defineApp } from "apps";
-import { liveOpenapiOperations } from "apps/openapi";
+  return `import { ${authenticated ? "accountRouter, " : ""}defineApp } from "apps";
+import { liveOpenapiRouter } from "apps/openapi";
 ${authenticated ? 'import { provider } from "./provider.ts";\n' : ""}
 const configuration = ${serialize(configuration)} as const;
 
-export default defineApp({ accounts: ${authenticated ? "{ service: provider.many() }" : "{}"} }, async ({ accounts, cache, fetch, signal }) =>
-  ${
+export default defineApp({ accounts: ${authenticated ? "{ service: provider.many() }" : "{}"} }, async ({ accounts, cache, fetch, signal }) => ({
+  tools: ${
     authenticated
-      ? "accountOperations(accounts.service, async (account) => liveOpenapiOperations({ ...configuration, cache, fetch, signal, account }), { signal })"
-      : "liveOpenapiOperations({ ...configuration, cache, fetch, signal })"
+      ? "await accountRouter(accounts.service, async (account) => liveOpenapiRouter({ ...configuration, cache, fetch, signal, account }), { signal })"
+      : "liveOpenapiRouter({ ...configuration, cache, fetch, signal })"
   },
-);
+}));
 `;
 };
 
@@ -76,11 +83,11 @@ export const authoredAppFiles = (
   const authenticated = access === "apiKey";
   const wrap = (call: string) =>
     authenticated
-      ? `accountOperations(accounts.service, async (account) => ${call}, { signal })`
+      ? `accountRouter(accounts.service, async (account) => ${call}, { signal })`
       : call;
   const imports = (helper: string, path: string) =>
     [
-      `import { ${authenticated ? "accountOperations, " : ""}defineApp } from "apps";`,
+      `import { ${authenticated ? "accountRouter, " : ""}defineApp } from "apps";`,
       `import { ${helper} } from "${path}";`,
       ...(authenticated ? ['import { provider } from "./provider.ts";'] : []),
     ].join("\n");
@@ -100,18 +107,18 @@ export const authoredAppFiles = (
         });
       case "mcp":
       case "graphql": {
-        const helper = kind === "mcp" ? "mcpOperations" : "graphqlOperations";
+        const helper = kind === "mcp" ? "mcpRouter" : "graphqlRouter";
         return `${imports(helper, `apps/${kind}`)}
 
-export default defineApp({ accounts: ${accountsDeclaration} }, async ({ accounts, cache, signal }) =>
-  ${wrap(`${helper}({
+export default defineApp({ accounts: ${accountsDeclaration} }, async ({ accounts, cache, signal }) => ({
+  tools: await ${wrap(`${helper}({
     url: ${serialize(`${origin}/${kind}`)},
     cache: ${authenticated ? "cache.forAccount(account)" : "cache"},
     ${authenticated ? "accountId: account.id," : ""}
     ${headers}
     signal,
   })`)},
-);
+}));
 `;
       }
     }
@@ -133,19 +140,19 @@ export default defineApp({ accounts: ${accountsDeclaration} }, async ({ accounts
 export const oauthMcpAppFiles = (name: string, url: string) => [
   {
     path: "index.ts",
-    content: `import { accountOperations, defineApp } from "apps";
-import { mcpOperations } from "apps/mcp";
+    content: `import { accountRouter, defineApp } from "apps";
+import { mcpRouter } from "apps/mcp";
 import { provider } from "./provider.ts";
 
-export default defineApp({ accounts: { service: provider.many() } }, async ({ accounts, cache, signal }) =>
-  accountOperations(accounts.service, async (account) => mcpOperations({
+export default defineApp({ accounts: { service: provider.many() } }, async ({ accounts, cache, signal }) => ({
+  tools: await accountRouter(accounts.service, async (account) => mcpRouter({
     url: ${serialize(url)},
     cache: cache.forAccount(account),
     accountId: account.id,
     headers: { Authorization: "Bearer " + account.fields.access_token },
     signal,
   }), { signal }),
-);
+}));
 `,
   },
   {

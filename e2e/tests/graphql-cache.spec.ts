@@ -16,6 +16,7 @@ import { Api, body } from "../support/api.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { App, Resource } from "../support/contracts.ts";
 import { createProfile, selectProfileAccounts } from "../support/profiles.ts";
+import { withApps } from "../support/apps-release.ts";
 
 const fixture = () =>
   Effect.gen(function* () {
@@ -148,26 +149,30 @@ const fixture = () =>
   });
 
 const source = (url: string, cached: boolean, accounts: boolean) => [
-  { path: "package.json", content: JSON.stringify({ dependencies: { graphql: "16.11.0" } }) },
+  {
+    path: "package.json",
+    content: JSON.stringify({ dependencies: withApps({ graphql: "16.11.0" }) }),
+  },
   {
     path: "index.ts",
     content: `
-import { defineApp, defineProvider, accountOperations, secrets, object, string, query } from "apps";
-import { graphqlOperations } from "apps/graphql";
+import { defineApp, defineProvider, accountRouter, secrets, object, string, query, router } from "apps";
+import { graphqlRouter } from "apps/graphql";
 const provider = defineProvider({ name: "GraphQL fixture", auth: { key: secrets({ label: "Variant", fields: object({ token: string() }) }) } });
 export default defineApp({ accounts: ${accounts ? "{ service: provider.many() }" : "{}"} }, async ctx => {
   const options = account => ({ url: ${JSON.stringify(url)}, signal: ctx.signal,
     ${cached ? "cache: account ? ctx.cache.forAccount(account) : ctx.cache," : ""}
     ...(account ? { accountId: account.id, headers: { "X-Fixture-Variant": account.fields.token } } : {}),
   });
-  const tools = ${accounts ? "await accountOperations(ctx.accounts.service, account => graphqlOperations(options(account)), { signal: ctx.signal })" : "await graphqlOperations(options(undefined))"};
-  return { ...tools, queries: { ...tools.queries,
+  const tools = ${accounts ? "await accountRouter(ctx.accounts.service, account => graphqlRouter(options(account)), { signal: ctx.signal })" : "await graphqlRouter(options(undefined))"};
+  return { tools: router({
+    upstream: tools,
     refresh: query({ input: object({ id: string() }) }, async (_, { id }) => {
       const account = ${accounts ? "ctx.accounts.service.find(account => account.id === id)" : "undefined"};
       ${accounts ? 'if (!account) throw new Error("Missing account");' : ""}
-      await graphqlOperations({ ...options(account), revalidate: true }); return true;
+      await graphqlRouter({ ...options(account), revalidate: true }); return true;
     }),
-  } };
+  }) };
 });`,
   },
 ];
@@ -184,10 +189,12 @@ const deploy = (url: string, cached: boolean, accounts = false) =>
     const path = `${prefix}/apps/${(yield* body(App, response)).id}`;
     yield* Effect.addFinalizer(() => api.request(actors.owner, "DELETE", path).pipe(Effect.orDie));
     const profile = yield* createProfile(actors.owner, path);
+    // Introspected operations are mounted under "upstream" beside the app's own refresh query.
     const call = (name: string, input: Schema.Json = {}, profileId = profile.id) =>
       api.request(actors.owner, "POST", `${path}/tools/call`, {
         profile: profileId,
-        tool: name.startsWith("mutation_") ? `mutations.${name}` : `queries.${name}`,
+        tool: name === "refresh" ? name : `upstream.${name}`,
+        kind: name.startsWith("mutation_") ? "mutation" : "query",
         input,
       });
     return { api, actors, path, prefix, profile, call };

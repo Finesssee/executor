@@ -1,5 +1,5 @@
 import { authorizeTarget, authorizeTool } from "./authorization.ts";
-import { permitsTool } from "@executor-js/authorization";
+import { permitsRouter, permitsTool, requiresToolMetadata } from "@executor-js/authorization";
 import {
   ToolApprovalRequired,
   ToolNotFound,
@@ -28,6 +28,13 @@ export const listTools = (
       items: page.items.filter((tool) =>
         permitsTool(policy, { app: input.app, profile: input.profile, tool }, "discover"),
       ),
+      routers: page.routers.filter((router) =>
+        permitsRouter(
+          policy,
+          { app: input.app, profile: input.profile, path: router.path },
+          page.items,
+        ),
+      ),
     };
   });
 /** Names and descriptions for browsing; schemas are read per tool. */
@@ -43,6 +50,13 @@ export const indexTools = (input: Parameters<Executor["tools"]["index"]>[0]) =>
       items: index.items.filter((tool) =>
         permitsTool(policy, { app: input.app, profile: input.profile, tool }, "discover"),
       ),
+      routers: index.routers.filter((router) =>
+        permitsRouter(
+          policy,
+          { app: input.app, profile: input.profile, path: router.path },
+          index.items,
+        ),
+      ),
     };
   });
 /** One tool's schemas, hidden exactly like the tools discovery omits. */
@@ -52,6 +66,17 @@ export const getTool = (input: Parameters<Executor["tools"]["get"]>[0]) =>
     const owner = yield* currentOwner;
     const executor = yield* Effect.flatten(HostedExecutor);
     const deployment = yield* selectedActiveDeployment(executor, owner, input);
+    // When names decide, check before evaluating, so a hidden tool's source failure is not
+    // reported either. A read-only rule needs the catalog's flag, so it is checked after.
+    if (
+      !requiresToolMetadata(policy.tools, input.app) &&
+      !permitsTool(
+        policy,
+        { app: input.app, profile: input.profile, tool: { name: input.tool } },
+        "discover",
+      )
+    )
+      return yield* new ToolNotFound({ app: input.app, deployment, tool: input.tool });
     const tool = yield* executor.tools.get({ ...input, deployment });
     if (!permitsTool(policy, { app: input.app, profile: input.profile, tool }, "discover"))
       return yield* new ToolNotFound({

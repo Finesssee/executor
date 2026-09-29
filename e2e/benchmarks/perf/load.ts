@@ -215,7 +215,8 @@ export const runLoad = (target: PerfTarget, config: LoadConfig) =>
             Effect.flatMap((client) =>
               client.request("POST", `${org(entry)}/apps/${selected.id}/tools/call`, {
                 profile: selected.profile,
-                tool: "queries.list_account_0000",
+                tool: "list_account_0000",
+                kind: "query",
                 input: {},
               }),
             ),

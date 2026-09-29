@@ -8,6 +8,7 @@ import { HostedLive, withHostedCase } from "../support/case.ts";
 import { Resource } from "../support/contracts.ts";
 import { oauthSetupIssuer } from "../support/oauth-setup-issuer.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 layer(HostedLive, { excludeTestServices: true })("OAuth permissions", (it) => {
   it.effect(scenarios.oauthPermissionsLayout.title, (context) =>
@@ -29,10 +30,11 @@ layer(HostedLive, { excludeTestServices: true })("OAuth permissions", (it) => {
           files: [
             {
               path: "index.ts",
-              content: `import { defineApp, defineProvider, oauth2 } from "apps";
+              content: `import { defineApp, defineProvider, oauth2, router } from "apps";
 const service = defineProvider({name: "Permissions fixture", auth: {oauth: oauth2({discover: ${JSON.stringify(issuer.origin + "/mcp")}, scopes: ${JSON.stringify(scopes)}})}});
-export default defineApp({accounts: {service}}, async () => ({queries: {}}));`,
+export default defineApp({accounts: {service}}, async () => ({tools: router({})}));`,
             },
+            appsManifest,
           ],
         });
         expect(response.status).toBe(200);
@@ -45,9 +47,7 @@ export default defineApp({accounts: {service}}, async () => ({queries: {}}));`,
           page.goto(`/org/${actors.organization.slug}/apps/${app.id}?view=accounts`),
         );
         yield* browser.use("Choose an account for the app", (page) =>
-          page
-            .getByRole("button", { name: "Add Permissions fixture account", exact: true })
-            .click(),
+          page.getByRole("button", { name: "Connect new account", exact: true }).click(),
         );
         yield* browser.use("Wait for advanced connection options", (page) =>
           page.getByText("Advanced", { exact: true }).waitFor({ state: "visible" }),
@@ -132,9 +132,18 @@ export default defineApp({accounts: {service}}, async () => ({queries: {}}));`,
             return advanced
               .focus()
               .then(() => advanced.press("Space"))
-              .then(() => dialog.getByLabel("Account name", { exact: true }).inputValue())
-              .then((label) => {
-                expect(label).toBe("Default");
+              .then(() =>
+                page
+                  .getByRole("region", { name: "Required permissions", exact: true })
+                  .waitFor({ state: "hidden" }),
+              )
+              .then(() =>
+                dialog
+                  .getByRole("button", { name: "Connect Permissions fixture", exact: true })
+                  .isVisible(),
+              )
+              .then((open) => {
+                expect(open).toBe(true);
               });
           });
         }

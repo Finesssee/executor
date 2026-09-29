@@ -18,11 +18,15 @@ import {
   type DeploymentMetadata,
 } from "@executor-js/sdk/core";
 import {
-  AppSignInApi,
+  AppSignInCallback,
   AppSignInCode,
+  AppSignInId,
   AppReturnPath,
   appPrivateHeaders,
-  appSignInPage,
+  appRedirect,
+  appSignInCallback,
+  appSignInFailed,
+  type AppSignInFailure,
 } from "apps/ui/auth";
 import {
   AppUiApi,
@@ -45,7 +49,7 @@ import {
   type AppUiAddressInvalid,
   type AppUiTarget,
 } from "../contracts/app-ui.ts";
-import { CurrentPrincipal, CurrentUserId } from "../contracts/auth.ts";
+import { Authentication, CurrentUserId, type Principal } from "../contracts/auth.ts";
 import { HostedExecutor } from "../contracts/executor.ts";
 import {
   CurrentOrganization,
@@ -53,7 +57,7 @@ import {
   organizationOwner,
   type OrganizationAccess,
 } from "../contracts/organization.ts";
-import { checkAccounts, ownProfile } from "./access.ts";
+import { checkAccounts, selectedProfile } from "./access.ts";
 import type { appAddresses } from "./app-addresses.ts";
 
 /** Authorization belongs to one HTTP request, never a shared or timed cache. */
@@ -143,12 +147,6 @@ export const hostedAppUi = (
         Schema.is(AppNotFound)(error) ? new UiForbidden() : unavailable(),
       ),
     );
-  const usable = (app: App) =>
-    Effect.gen(function* () {
-      const version = yield* deployment(app);
-      if ((yield* assets(version, "index.html")) === undefined) return yield* unavailable();
-      return app;
-    });
   const secure = (origin: string) => new URL(origin).protocol === "https:";
   const sessionCookie = (origin: string) => `${secure(origin) ? "__Host-" : ""}executor_app`;
   const attemptCookie = (origin: string, request: string) =>
@@ -157,24 +155,27 @@ export const hostedAppUi = (
     path: "/",
     httpOnly: true,
     secure: secure(origin),
-    sameSite: "strict" as const,
+    // Lax, not Strict: the attempt cookie must reach the callback when the dashboard redirects
+    // there from its own site. Redeeming a code still needs this browser's attempt proof.
+    sameSite: "lax" as const,
   });
-  const authorize = Effect.gen(function* () {
-    const resolved = yield* target;
-    const token = Schema.decodeUnknownOption(AppSignInCode)(
-      resolved.request.cookies[sessionCookie(resolved.target.origin)],
-    );
-    if (Option.isNone(token)) return yield* new UiUnauthorized();
-    const sessions = yield* HostedAppSessions;
-    const identity = yield* sessions.current(resolved.target, token.value);
-    const app = resolved.app;
-    const access = yield* requireAppUse(app, resolved.target.organization, identity.userId).pipe(
-      Effect.mapError((error) =>
-        Schema.is(OrganizationForbidden)(error) ? new UiForbidden() : unavailable(),
-      ),
-    );
-    return { ...resolved, access, app };
-  });
+  const authorizeTarget = (resolved: Effect.Success<typeof target>) =>
+    Effect.gen(function* () {
+      const token = Schema.decodeUnknownOption(AppSignInCode)(
+        resolved.request.cookies[sessionCookie(resolved.target.origin)],
+      );
+      if (Option.isNone(token)) return yield* new UiUnauthorized();
+      const sessions = yield* HostedAppSessions;
+      const identity = yield* sessions.current(resolved.target, token.value);
+      const app = resolved.app;
+      const access = yield* requireAppUse(app, resolved.target.organization, identity.userId).pipe(
+        Effect.mapError((error) =>
+          Schema.is(OrganizationForbidden)(error) ? new UiForbidden() : unavailable(),
+        ),
+      );
+      return { ...resolved, access, app };
+    });
+  const authorize = Effect.flatMap(target, authorizeTarget);
   const assets = (version: DeploymentMetadata, path: string) =>
     Effect.gen(function* () {
       const runtime = yield* HostedAppRuntime;
@@ -183,118 +184,108 @@ export const hostedAppUi = (
         .asset({ build: version.build, path })
         .pipe(Effect.mapError(unavailable));
     });
-  const appAuth = HttpApiBuilder.group(AppSignInApi, "appSignIn", (handlers) =>
-    handlers
-      .handle("start", ({ payload }) =>
-        Effect.gen(function* () {
-          const resolved = yield* target;
-          yield* usable(resolved.app);
-          const sessions = yield* HostedAppSessions;
-          const attempt = yield* sessions.begin(resolved.target, payload.returnTo);
-          const login = new URL("/app-auth", addresses.dashboardOrigin);
-          login.searchParams.set("request", attempt.request);
-          return yield* privateJson({ url: login.href }).pipe(
-            HttpServerResponse.setCookie(
-              attemptCookie(resolved.target.origin, attempt.request),
-              Redacted.value(attempt.proof),
-              {
-                ...cookieOptions(resolved.target.origin),
-                maxAge: "10 minutes",
-              },
-            ),
-            Effect.orDie,
-          );
-        }),
+  /** A page visit without an app session starts an attempt and goes straight to the dashboard. */
+  const beginSignIn = (resolved: Effect.Success<typeof target>) =>
+    Effect.gen(function* () {
+      if (resolved.app.activeDeployment === null) return yield* unavailable();
+      const url = new URL(resolved.request.url, resolved.target.origin);
+      // A fragment never reaches the server. Browsers carry it across redirects whose
+      // Location has none, so every hop below keeps the original fragment intact.
+      const returnTo = yield* Schema.decodeUnknownEffect(AppReturnPath)(
+        url.pathname + url.search,
+      ).pipe(Effect.mapError(() => new UiForbidden()));
+      const sessions = yield* HostedAppSessions;
+      const attempt = yield* sessions.begin(resolved.target, returnTo);
+      const login = new URL("/app-auth", addresses.dashboardOrigin);
+      login.searchParams.set("request", attempt.request);
+      return yield* appRedirect(login.href).pipe(
+        HttpServerResponse.setCookie(
+          attemptCookie(resolved.target.origin, attempt.request),
+          Redacted.value(attempt.proof),
+          { ...cookieOptions(resolved.target.origin), maxAge: "10 minutes" },
+        ),
+        Effect.orDie,
+      );
+    });
+  /** Check the dashboard login's access to the attempt's app, then issue its one-time code. */
+  const authorizeAttempt = (request: AppSignInId, principal: Principal) =>
+    Effect.gen(function* () {
+      const sessions = yield* HostedAppSessions;
+      const attempt = yield* sessions.pending(request);
+      const [organization, app, access] = yield* Effect.all(
+        [
+          sessions.organization({ id: attempt.organization }),
+          loadApp(attempt),
+          sessions.access(principal, attempt),
+        ],
+        { concurrency: "unbounded" },
+      );
+      if (
+        !addresses.enabled ||
+        organization.slug !== attempt.slug ||
+        (yield* addresses.origin(app, organization.slug)) !== attempt.origin
       )
-      .handle("complete", ({ payload }) =>
-        Effect.gen(function* () {
-          const resolved = yield* target;
-          const proof = Schema.decodeUnknownOption(AppSignInCode)(
-            resolved.request.cookies[attemptCookie(resolved.target.origin, payload.request)],
-          );
-          if (Option.isNone(proof)) return yield* new UiUnauthorized();
-          yield* usable(resolved.app);
-          const sessions = yield* HostedAppSessions;
-          const completed = yield* sessions.complete(
-            resolved.target,
-            payload.request,
-            payload.code,
-            proof.value,
-          );
-          return yield* privateJson({ returnTo: completed.returnTo }).pipe(
-            HttpServerResponse.setCookie(
-              sessionCookie(resolved.target.origin),
-              Redacted.value(completed.token),
-              {
-                ...cookieOptions(resolved.target.origin),
-                sameSite: "lax",
-                maxAge: Math.max(
-                  0,
-                  completed.expiresAt.getTime() - (yield* Clock.currentTimeMillis),
-                ),
-              },
-            ),
-            Effect.flatMap(
-              HttpServerResponse.expireCookie(
-                attemptCookie(resolved.target.origin, payload.request),
-                cookieOptions(resolved.target.origin),
-              ),
-            ),
-            Effect.orDie,
-          );
-        }),
-      ),
-  );
+        return yield* new UiForbidden();
+      yield* requireAppAccess(attempt.app, "use").pipe(
+        Effect.provideService(CurrentOrganization, access),
+        Effect.provideService(CurrentUserId, principal.userId),
+        Effect.mapError(() => new UiForbidden()),
+      );
+      if (app.activeDeployment === null) return yield* unavailable();
+      const code = yield* sessions.grant(request, attempt, principal);
+      return appSignInCallback(attempt.origin, request, Redacted.value(code));
+    });
+  const signInFailure = (error: { readonly _tag: string }): AppSignInFailure =>
+    error._tag === "UiUnauthorized"
+      ? "ended"
+      : error._tag === "UiForbidden" || error._tag === "OrganizationForbidden"
+        ? "forbidden"
+        : "unavailable";
+  /**
+   * The dashboard's `/app-auth` resolves on the server: signed out goes to login, signed in
+   * redirects to the app's callback. Only a missing request or a failure renders the page.
+   */
+  const signIn = <E, R>(page: Effect.Effect<HttpServerResponse.HttpServerResponse, E, R>) =>
+    Effect.gen(function* () {
+      const request = yield* HttpServerRequest.HttpServerRequest;
+      const url = new URL(request.url, addresses.dashboardOrigin);
+      const attempt = Schema.decodeUnknownOption(AppSignInId)(url.searchParams.get("request"));
+      if (Option.isNone(attempt)) return yield* page;
+      const principal = yield* Effect.flatMap(Authentication, (authentication) =>
+        authentication.current(new Headers(request.headers)),
+      );
+      if (principal === null) {
+        const login = new URLSearchParams({ redirect: `/app-auth?request=${attempt.value}` });
+        return appRedirect(`/login?${login}`);
+      }
+      return yield* authorizeAttempt(attempt.value, principal).pipe(
+        Effect.map(appRedirect),
+        Effect.catch((error) =>
+          Effect.succeed(
+            appRedirect(`/app-auth?${new URLSearchParams({ failure: signInFailure(error) })}`),
+          ),
+        ),
+      );
+    });
   const dashboard = HttpApiBuilder.group(HostedAppUiApi, "appUi", (handlers) =>
-    handlers
-      .handle("location", ({ params }) =>
-        Effect.gen(function* () {
-          const access = yield* CurrentOrganization;
-          yield* requireAppAccess(params.app, "use").pipe(Effect.mapError(() => new UiForbidden()));
-          const executor = yield* Effect.flatten(HostedExecutor).pipe(Effect.mapError(unavailable));
-          const app = yield* executor.apps
-            .get({ owner: access.owner, app: params.app })
-            .pipe(Effect.mapError(unavailable));
-          const version = yield* deployment(app);
-          if (!addresses.enabled || (yield* assets(version, "index.html")) === undefined)
-            return { status: "unavailable" as const, url: null };
-          const sessions = yield* HostedAppSessions;
-          const organization = yield* sessions.organization({ id: access.organization });
-          const url = yield* addresses.origin(app, organization.slug);
-          const status = yield* domainStatus(organization);
-          return status === "ready" ? { status, url } : { status, url: null };
-        }),
-      )
-      .handle("authorize", ({ payload }) =>
-        Effect.gen(function* () {
-          const sessions = yield* HostedAppSessions;
-          const grant = yield* sessions.authorize(payload.request, yield* CurrentPrincipal);
-          const currentOrganization = yield* sessions.organization({
-            id: grant.target.organization,
-          });
-          const app = yield* loadApp(grant.target);
-          if (
-            !addresses.enabled ||
-            currentOrganization.slug !== grant.target.slug ||
-            (yield* addresses.origin(app, currentOrganization.slug)) !== grant.target.origin
-          )
-            return yield* new UiForbidden();
-          const principal = yield* CurrentPrincipal;
-          const access = yield* sessions.access(principal, grant.target);
-          yield* requireAppAccess(grant.target.app, "use").pipe(
-            Effect.provideService(CurrentOrganization, access),
-            Effect.provideService(CurrentUserId, principal.userId),
-            Effect.mapError(() => new UiForbidden()),
-          );
-          yield* usable(app);
-          const callback = new URL("/_executor/auth/callback", grant.target.origin);
-          callback.hash = new URLSearchParams({
-            request: payload.request,
-            code: Redacted.value(grant.code),
-          }).toString();
-          return { url: Redacted.make(callback.href) };
-        }),
-      ),
+    handlers.handle("location", ({ params }) =>
+      Effect.gen(function* () {
+        const access = yield* CurrentOrganization;
+        yield* requireAppAccess(params.app, "use").pipe(Effect.mapError(() => new UiForbidden()));
+        const executor = yield* Effect.flatten(HostedExecutor).pipe(Effect.mapError(unavailable));
+        const app = yield* executor.apps
+          .get({ owner: access.owner, app: params.app })
+          .pipe(Effect.mapError(unavailable));
+        const version = yield* deployment(app);
+        if (!addresses.enabled || (yield* assets(version, "index.html")) === undefined)
+          return { status: "unavailable" as const, url: null };
+        const sessions = yield* HostedAppSessions;
+        const organization = yield* sessions.organization({ id: access.organization });
+        const url = yield* addresses.origin(app, organization.slug);
+        const status = yield* domainStatus(organization);
+        return status === "ready" ? { status, url } : { status, url: null };
+      }),
+    ),
   );
   const dataFailure = (error: unknown) =>
     Schema.is(ProfileConflict)(error) && error.reason === "revision"
@@ -317,10 +308,7 @@ export const hostedAppUi = (
       ).pipe(Effect.mapError(unavailable));
       if (profile !== undefined) {
         const executor = yield* Effect.flatten(HostedExecutor).pipe(Effect.mapError(unavailable));
-        yield* ownProfile(executor, current.access.owner, current.app.id, profile).pipe(
-          Effect.flatMap((selected) =>
-            checkAccounts(executor, current.access.owner, selected.accounts),
-          ),
+        yield* selectedProfile(executor, current.access.owner, current.app.id, profile).pipe(
           Effect.provideService(CurrentOrganization, current.access),
           Effect.provideService(CurrentUserId, current.access.userId),
           Effect.mapError(dataFailure),
@@ -399,7 +387,10 @@ export const hostedAppUi = (
               ),
               Stream.mapEffect((snapshot) =>
                 Effect.gen(function* () {
-                  yield* access.pipe(Effect.withSpan("app.ui.snapshot.authorize"));
+                  // The first result belongs to this request, which was just authorized.
+                  // Every later result, and the heartbeat, checks access again.
+                  if (snapshot.revision > 0)
+                    yield* access.pipe(Effect.withSpan("app.ui.snapshot.authorize"));
                   return {
                     type: "snapshot" as const,
                     value: snapshot.value,
@@ -479,9 +470,22 @@ export const hostedAppUi = (
     });
   }).pipe(htmlFailure);
   const page = Effect.gen(function* () {
-    const current = yield* authorize;
-    const version = yield* deployment(current.app);
+    const resolved = yield* target;
     const request = yield* HttpServerRequest.HttpServerRequest;
+    const navigation =
+      request.method === "GET" &&
+      (request.headers["sec-fetch-mode"] === "navigate" ||
+        request.headers.accept?.includes("text/html"));
+    const authorized = yield* authorizeTarget(resolved).pipe(
+      Effect.map(Option.some),
+      // Only a browser navigation starts sign-in; other requests keep the plain 401.
+      Effect.catchTag("UiUnauthorized", (error) =>
+        navigation ? Effect.succeed(Option.none()) : Effect.fail(error),
+      ),
+    );
+    if (Option.isNone(authorized)) return yield* beginSignIn(resolved);
+    const current = authorized.value;
+    const version = yield* deployment(current.app);
     const url = new URL(request.url, current.target.origin);
     const requested = url.searchParams.get("profile");
     const profile = yield* Schema.decodeUnknownEffect(Schema.optional(ProfileId))(
@@ -537,20 +541,16 @@ export const hostedAppUi = (
     const selected =
       profile === undefined
         ? undefined
-        : yield* ownProfile(executor, current.access.owner, current.app.id, profile).pipe(
+        : yield* selectedProfile(executor, current.access.owner, current.app.id, profile).pipe(
             Effect.provideService(CurrentOrganization, current.access),
             Effect.provideService(CurrentUserId, current.access.userId),
             Effect.mapError(() => new UiForbidden()),
           );
-    if (selected !== undefined) {
-      if (!selected.enabled || selected.status === "removing" || selected.status === "removed")
-        return yield* new UiForbidden();
-      yield* checkAccounts(executor, current.access.owner, selected.accounts).pipe(
-        Effect.provideService(CurrentOrganization, current.access),
-        Effect.provideService(CurrentUserId, current.access.userId),
-        Effect.mapError(() => new UiForbidden()),
-      );
-    }
+    if (
+      selected !== undefined &&
+      (!selected.enabled || selected.status === "removing" || selected.status === "removed")
+    )
+      return yield* new UiForbidden();
     const document = yield* appDocument({
       profile: selected?.id,
       expectedProfileRevision: selected?.revision,
@@ -564,19 +564,45 @@ export const hostedAppUi = (
       Effect.provideService(CurrentUsage, { source: "app_ui" }),
     );
     return document;
+  }).pipe(htmlFailure);
+  /** Redeem the dashboard's code with this browser's attempt proof, then return to the page. */
+  const callback = Effect.gen(function* () {
+    const resolved = yield* target;
+    const url = new URL(resolved.request.url, resolved.target.origin);
+    const query = yield* Schema.decodeUnknownEffect(AppSignInCallback)({
+      request: url.searchParams.get("request"),
+      code: url.searchParams.get("code"),
+    }).pipe(Effect.mapError(() => new UiUnauthorized()));
+    const proof = Schema.decodeUnknownOption(AppSignInCode)(
+      resolved.request.cookies[attemptCookie(resolved.target.origin, query.request)],
+    );
+    if (Option.isNone(proof)) return yield* new UiUnauthorized();
+    const sessions = yield* HostedAppSessions;
+    const completed = yield* sessions.complete(
+      resolved.target,
+      query.request,
+      query.code,
+      proof.value,
+    );
+    return yield* appRedirect(completed.returnTo).pipe(
+      HttpServerResponse.setCookie(
+        sessionCookie(resolved.target.origin),
+        Redacted.value(completed.token),
+        {
+          ...cookieOptions(resolved.target.origin),
+          maxAge: Math.max(0, completed.expiresAt.getTime() - (yield* Clock.currentTimeMillis)),
+        },
+      ),
+      Effect.flatMap(
+        HttpServerResponse.expireCookie(
+          attemptCookie(resolved.target.origin, query.request),
+          cookieOptions(resolved.target.origin),
+        ),
+      ),
+      Effect.orDie,
+    );
   }).pipe(
-    Effect.catchTag("UiUnauthorized", (error) =>
-      Effect.gen(function* () {
-        const request = yield* HttpServerRequest.HttpServerRequest;
-        if (
-          request.method === "GET" &&
-          (request.headers["sec-fetch-mode"] === "navigate" ||
-            request.headers.accept?.includes("text/html"))
-        )
-          return appSignInPage();
-        return yield* error;
-      }),
-    ),
+    Effect.catchTag("UiUnauthorized", () => Effect.succeed(appSignInFailed())),
     htmlFailure,
   );
   const asset = Effect.gen(function* () {
@@ -611,7 +637,8 @@ export const hostedAppUi = (
       htmlFailure,
     );
   return {
-    appAuth,
+    signIn,
+    callback,
     dashboard,
     calls,
     page,

@@ -1,4 +1,4 @@
-import { codeLanguage } from "../../contracts/code-language.ts";
+import { codeLanguage, type CodeLanguage } from "../../contracts/code-language.ts";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { useAtomValue } from "@effect/atom-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -11,60 +11,52 @@ import { Button, type ButtonProps } from "../components/button.tsx";
 export function Code({
   code,
   path = "schema.json",
+  language = codeLanguage(path),
+  lineNumbers = true,
   copyable = false,
   copyLabel = "Copy code",
 }: {
   readonly code: string;
   readonly path?: string;
+  readonly language?: CodeLanguage;
+  readonly lineNumbers?: boolean;
   readonly copyable?: boolean;
   readonly copyLabel?: string;
 }) {
-  const language = codeLanguage(path);
   const atom = useMemo(() => highlightedAtom({ code, language }), [code, language]);
   const result = useAtomValue(atom);
   const view = (
     <pre
-      className="code-view [.source-file_>_.code-block_>_&]:flex-1 [.code-toolbar_+_&]:pt-8.5 text-[11px] leading-[1.8] overflow-auto m-0 [padding:16px_16px_20px_0] [tab-size:2] bg-muted [.tool-detail_&]:border [.tool-detail_&]:border-border [.tool-detail_&]:rounded-[6px] [.tool-detail_&]:max-h-none [.mcp-install-code_&]:p-[20px] [.mcp-install-code_&]:text-[12px] [.mcp-install-code_&]:whitespace-pre-wrap [.mcp-install-code_&]:wrap-anywhere [.source-file_&]:flex-1"
+      className="code-view [.source-file_>_.code-block_>_&]:flex-1 [.code-toolbar_+_&]:pt-8.5 text-[11px] leading-[1.8] overflow-auto m-0 [padding:16px_16px_20px_0] [&:not(:has(.line-number))]:pl-4 [tab-size:2] bg-muted [.tool-detail_&]:border [.tool-detail_&]:border-border [.tool-detail_&]:rounded-[6px] [.tool-detail_&]:max-h-none [.mcp-install-code_&]:p-[20px] [.mcp-install-code_&]:text-[12px] [.mcp-install-code_&]:whitespace-pre-wrap [.mcp-install-code_&]:wrap-anywhere [.source-file_&]:flex-1"
       tabIndex={0}
     >
       <code>
-        {AsyncResult.isSuccess(result)
-          ? result.value.map((line, i) => (
+        {(AsyncResult.isSuccess(result)
+          ? result.value.map((line) =>
+              line.map((token, j) => (
+                <span key={j} style={token.htmlStyle}>
+                  {token.content}
+                </span>
+              )),
+            )
+          : code.split("\n")
+        ).map((line, i) => (
+          <span
+            className="code-line inline [@media(prefers-color-scheme:_dark)]:[&_span[style]]:text-[color:var(--shiki-dark)]!"
+            key={i}
+          >
+            {lineNumbers && (
               <span
-                className="code-line inline [@media(prefers-color-scheme:_dark)]:[&_span[style]]:text-[color:var(--shiki-dark)]!"
-                key={i}
+                className="line-number inline-block text-muted-foreground opacity-65 min-w-10.75 pr-3.5 text-right select-none [.mcp-install-code_&]:hidden"
+                aria-hidden
               >
-                <span
-                  className="line-number inline-block text-muted-foreground opacity-65 min-w-10.75 pr-3.5 text-right select-none [.mcp-install-code_&]:hidden"
-                  aria-hidden
-                >
-                  {i + 1}
-                </span>
-                <span>
-                  {line.map((token, j) => (
-                    <span key={j} style={token.htmlStyle}>
-                      {token.content}
-                    </span>
-                  ))}
-                </span>
-                {"\n"}
+                {i + 1}
               </span>
-            ))
-          : code.split("\n").map((line, i) => (
-              <span
-                className="code-line inline [@media(prefers-color-scheme:_dark)]:[&_span[style]]:text-[color:var(--shiki-dark)]!"
-                key={i}
-              >
-                <span
-                  className="line-number inline-block text-muted-foreground opacity-65 min-w-10.75 pr-3.5 text-right select-none [.mcp-install-code_&]:hidden"
-                  aria-hidden
-                >
-                  {i + 1}
-                </span>
-                {line}
-                {"\n"}
-              </span>
-            ))}
+            )}
+            <span>{line}</span>
+            {"\n"}
+          </span>
+        ))}
       </code>
     </pre>
   );

@@ -19,6 +19,7 @@ import {
   openapiDeniedMessage,
   openapiOAuthMessage,
 } from "../support/openapi-error-upstream.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const Recovery = Schema.Struct({ action: Schema.String, instructions: Schema.String });
 const Failure = Schema.Struct({
@@ -119,7 +120,7 @@ layer(HostedLive, { excludeTestServices: true })("OpenAPI errors", (it) => {
               {
                 name: "execute",
                 arguments: {
-                  code: `return await tools[${JSON.stringify(app.slug)}].queries.fail({query:{mode:${JSON.stringify(mode)}}});`,
+                  code: `return await tools[${JSON.stringify(app.slug)}].failures.fail({query:{mode:${JSON.stringify(mode)}}});`,
                 },
               },
               undefined,
@@ -213,7 +214,7 @@ layer(HostedLive, { excludeTestServices: true })("OpenAPI errors", (it) => {
               {
                 name: "execute",
                 arguments: {
-                  code: `return await tools[${JSON.stringify(app.slug)}].queries.fail({query:{mode:{hidden:${JSON.stringify(openapiSecretMarker)}}}});`,
+                  code: `return await tools[${JSON.stringify(app.slug)}].failures.fail({query:{mode:{hidden:${JSON.stringify(openapiSecretMarker)}}}});`,
                 },
               },
               undefined,
@@ -237,7 +238,7 @@ layer(HostedLive, { excludeTestServices: true })("OpenAPI errors", (it) => {
               {
                 name: "execute",
                 arguments: {
-                  code: `try { await tools[${JSON.stringify(app.slug)}].queries.fail({query:{mode:"known"}}); } catch(error) { return JSON.parse(error.message); }`,
+                  code: `try { await tools[${JSON.stringify(app.slug)}].failures.fail({query:{mode:"known"}}); } catch(error) { return JSON.parse(error.message); }`,
                 },
               },
               undefined,
@@ -283,7 +284,7 @@ layer(HostedLive, { excludeTestServices: true })("OpenAPI errors", (it) => {
                 {
                   name: "execute",
                   arguments: {
-                    code: `return await tools[${JSON.stringify(app.slug)}].mutations.wire(${JSON.stringify(input)});`,
+                    code: `return await tools[${JSON.stringify(app.slug)}].wire.postWire(${JSON.stringify(input)});`,
                   },
                 },
                 undefined,
@@ -362,7 +363,7 @@ layer(HostedLive, { excludeTestServices: true })("OpenAPI errors", (it) => {
               actors.owner,
               "POST",
               `${prefix}/${app.id}/tools/call`,
-              { tool: "queries.fail", input: { query: { mode } } },
+              { tool: "failures.fail", kind: "query", input: { query: { mode } } },
             );
             expect(httpResult.body).toMatchObject({
               _tag: "AppProviderFailed",
@@ -375,10 +376,13 @@ layer(HostedLive, { excludeTestServices: true })("OpenAPI errors", (it) => {
                     : "rejected",
             });
           } else {
-            // Undeclared failures keep only the SDK's fixed reason and retry guidance.
+            // Undeclared failures name the failed API call without its response body.
             expect(failure.response).toMatchObject({ code: "ToolCallFailed", status: 502 });
-            expect(failure.message).toBe(
-              "ToolCallFailed (HTTP 502): Operation execution failed Recovery: Check whether the tool already made changes before retrying.",
+            expect(failure.message).toMatch(
+              /^ToolCallFailed \(HTTP 502\): The app's API call failed: The API (responded with HTTP \d+|request failed)/,
+            );
+            expect(failure.message).toContain(
+              "Recovery: Check the API's response and the app's OpenAPI document, then retry.",
             );
           }
         }
@@ -391,9 +395,10 @@ layer(HostedLive, { excludeTestServices: true })("OpenAPI errors", (it) => {
                 path: "index.ts",
                 content: `import { defineApp } from "apps";
 export default defineApp({ accounts: {} }, async () => {
-  throw new Error(${JSON.stringify(openapiSecretMarker)});
+  throw new Error("Synthetic factory failure");
 });`,
               },
+              appsManifest,
             ],
           }),
         );
@@ -428,12 +433,15 @@ export default defineApp({ accounts: {} }, async () => {
             }),
           ),
         )(evaluation?.reason);
+        // The factory's own error explains why the tools could not load.
         expect(detail).toMatchObject({
           code: "AppEvaluationFailed",
           status: 502,
-          message: "Executor could not load this app’s tool definitions.",
+          message:
+            "Executor could not load this app’s tool definitions. The app threw Error: Synthetic factory failure",
           recovery: {
-            instructions: expect.stringContaining("Do not assume an account needs reconnecting"),
+            action:
+              "Try again. If this continues, fix the app code that raised this error and deploy it.",
           },
         });
         expect(JSON.stringify(discovered)).not.toContain(openapiSecretMarker);

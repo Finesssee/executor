@@ -11,22 +11,22 @@ For local testing, install the tarball made by `bun run pack` in this directory.
 
 ```ts
 import { defineApp } from "apps";
-import { mcpOperations } from "apps/mcp";
+import { mcpRouter } from "apps/mcp";
 
 export default defineApp({ accounts: {} }, async ({ signal }) => ({
-  ...(await mcpOperations({
+  tools: await mcpRouter({
     url: "https://mcp.deepwiki.com/mcp",
     ...(signal === undefined ? {} : { signal }),
-  })),
+  }),
 }));
 ```
 
-| Import           | Helper              | App dependency              |
-| ---------------- | ------------------- | --------------------------- |
-| `apps/mcp`       | `mcpOperations`     | `@modelcontextprotocol/sdk` |
-| `apps/mcp/stdio` | `stdioOperations`   | `@modelcontextprotocol/sdk` |
-| `apps/graphql`   | `graphqlOperations` | `graphql`                   |
-| `apps/openapi`   | `openapiOperations` | None                        |
+| Import           | Helper          | App dependency              |
+| ---------------- | --------------- | --------------------------- |
+| `apps/mcp`       | `mcpRouter`     | `@modelcontextprotocol/sdk` |
+| `apps/mcp/stdio` | `stdioRouter`   | `@modelcontextprotocol/sdk` |
+| `apps/graphql`   | `graphqlRouter` | `graphql`                   |
+| `apps/openapi`   | `openapiRouter` | None                        |
 
 MCP and GraphQL are optional peers. Subpath imports isolate their module graphs;
 optional peers keep unused libraries out of the dependency installation. The
@@ -43,18 +43,19 @@ Declare the needed peer in the deployed app's `package.json`, for example:
 ```
 
 Product runtimes compile authored source and declared dependencies inside workerd,
-then retain the executable Worker modules. Declare `apps` in `package.json` to
-select its npm version for both server and browser code. Use an exact version to
-keep rebuilds repeatable. Apps with no `apps` dependency use the host's framework.
+then retain the executable Worker modules. Every app declares the exact `apps`
+version in `package.json`; it selects the framework for both server and browser
+code and keeps rebuilds repeatable. A build without it fails and names the
+version the host ships.
 In this repository, playground workspaces use `"apps": "workspace:*"` for development;
 replace that workspace reference with a released version before deployment.
 
-`liveOpenapiOperations` reads an OpenAPI document through `ctx.cache`. Generated
+`liveOpenapiRouter` reads an OpenAPI document through `ctx.cache`. Generated
 imports retain a source URL, allowed origin, and static credential bindings in
 `openapi.json`. The framework compiles a revision on a cache miss. It writes each
 operation and shared schema before publishing the current revision. A warm call
 reads that revision and the requested operation's schema dependencies. It does
-not download, parse, or read the full catalog. `openapiOperations` remains the
+not download, parse, or read the full catalog. `openapiRouter` remains the
 lower-level helper for already normalized metadata.
 `parameterDefaults` binds path, query or header values to the selected account.
 Those parameters become optional and publish their value as the schema `default`;
@@ -68,25 +69,28 @@ Accounts bind at execution time. Live documents cannot change credential
 placement or send credentials to another origin. Editing generated source and
 redeploying is required to change those static choices.
 
-Authenticated templates use `provider.many()` and `accountOperations` from `apps`:
+Authenticated templates use `provider.many()` and `accountRouter` from `apps`:
 
 ```ts
-export default defineApp({ accounts: { service: provider.many() } }, async ({ accounts, signal }) =>
-  accountOperations(
-    accounts.service,
-    (account) =>
-      mcpOperations({
-        url: "https://example.com/mcp",
-        headers: { Authorization: "Bearer " + account.fields.token },
-        signal,
-      }),
-    { signal },
-  ),
+export default defineApp(
+  { accounts: { service: provider.many() } },
+  async ({ accounts, signal }) => ({
+    tools: await accountRouter(
+      accounts.service,
+      (account) =>
+        mcpRouter({
+          url: "https://example.com/mcp",
+          headers: { Authorization: "Bearer " + account.fields.token },
+          signal,
+        }),
+      { signal },
+    ),
+  }),
 );
 ```
 
 MCP and GraphQL helpers accept `cache: ctx.cache.forAccount(account)` (or
-`ctx.cache` for a public source). They return `{ dynamicTools }`, cache remote
+`ctx.cache` for a public source). They return a dynamic router, cache remote
 metadata, and compile only the selected tool. The defaults are five minutes fresh
 plus five minutes stale. Use `freshFor` / `staleFor` to change the windows, or
 `revalidate: true` to await a refresh. Tool results are never cached.
@@ -171,7 +175,7 @@ and [hosting notes](../../notes/app-ui.md).
 
 ## Webhooks
 
-Expose `webhooks: { issueOpened }` beside queries and mutations. Each definition
+Expose `webhooks: { issueOpened }` beside `tools`. Each definition
 has an `account` requirement, `config` and `state` schemas, and async `register`,
 `handle`, and `unregister` callbacks. Register and unregister must be idempotent;
 handle must verify the provider signature before acting.
@@ -243,39 +247,57 @@ errors are explicit. Background refreshes have a 30-second deadline.
 bounded JSON batches with a retention duration. These support immutable pieces
 that must be stored before a manifest becomes visible.
 
-`dynamicTools({ list, resolve })` separates descriptions from executable
-operations. `list()` returns tool metadata with qualified names such as
-`queries.getProject`. `resolve(name)` returns a query/mutation declaration or
-`undefined`. The host validates input and applies approval policy after resolving
-an operation. `accountOperations` preserves this separation. Static operations
-can run without resolving the source; listings reject duplicate names.
+## Routers
 
-Assign the resolver to the app's `dynamicTools` field. The helper returns only
-`list` and `resolve`, never static query or mutation maps. Both static maps are
-optional, so an app can contain only dynamic tools.
+An app's `tools` is a router. Keys form tool paths, and routers nest like tRPC's:
+`router({ health, issues: router({ list, close }, { description }) })` exposes
+`health`, `issues.list` and `issues.close`. Each query or mutation keeps its own
+kind; names carry no `queries.` or `mutations.` prefix. Router options are
+`title`, `description`, `instructions`, `icons` and `tags`. Instructions become a
+skill named `tools` for the root router and `tools-<path>` below it, such as
+`tools-issues`. Paths other than lowercase letters and digits get a slug and a
+hash of the path, so names never collide. An authored skill with the same name
+replaces the generated one. `router(source, options)` overrides a source's
+metadata. Keys `__proto__`, `constructor` and `prototype` are reserved, and an
+mutation can be mounted at only one path.
+
+Protocol helpers return routers, so an app mounts several sources under keys.
+`mcpRouter` takes its title, description, icons and instructions from the
+server, and `liveOpenapiRouter` from the document's `info` and tags. `stdioRouter`,
+`openapiRouter` and `graphqlRouter` carry no source metadata. A nested router that fails to load is reported on its own catalog entry;
+the app's other tools still load. The root failing fails discovery.
+
+`dynamicRouter({ list, resolve })` separates descriptions from executable
+operations. `list()` returns tool metadata with names relative to the router,
+such as `getProject`; names may contain dots. `resolve(name)` returns a
+query/mutation declaration or `undefined`. The host validates input and applies
+approval policy after resolving an operation. `accountRouter` preserves this
+separation. Static operations run without resolving a source; listings reject
+duplicate names.
 
 ```ts
 export default defineApp(
   { accounts: {} },
   {
-    dynamicTools: dynamicTools({
+    tools: dynamicRouter({
       list: async () => [
         {
-          name: "queries.ping",
+          name: "ping",
           description: "Return pong",
           inputSchema: { type: "object", properties: {} },
           readOnly: true,
         },
       ],
       resolve: async (name) =>
-        name === "queries.ping" ? query({ input: object({}) }, async () => "pong") : undefined,
+        name === "ping" ? query({ input: object({}) }, async () => "pong") : undefined,
     }),
   },
 );
 ```
 
-Names include `queries.` or `mutations.`. `list` describes available tools;
-`resolve` returns the matching query or mutation declaration.
+Mark queries with `readOnly: true`; other listed tools are mutations. `list`
+describes available tools; `resolve` returns the matching declaration. An
+optional `meta()` returns the router's title, description and instructions.
 
 `ctx.cache.revalidate(options)` takes the same options as `get`, but always
 awaits a refresh. Concurrent refreshes share a load. The previous value stays

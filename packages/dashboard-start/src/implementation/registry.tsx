@@ -9,7 +9,7 @@ import { RegistryContext, scheduleTask } from "@effect/atom-react";
 import type { AnyRouter } from "@tanstack/react-router";
 import { Cause } from "effect";
 import { AsyncResult, Atom, AtomRegistry, Hydration } from "effect/unstable/reactivity";
-import { useContext, type ReactNode } from "react";
+import type { ReactNode } from "react";
 
 interface DehydratedAtoms {
   readonly initial: ReadonlyArray<Hydration.DehydratedAtom>;
@@ -201,20 +201,35 @@ const streamAtoms = (
 
 /**
  * New values preload atoms before they are first read. A later value for an atom the page has
- * already created replaces its state, when that atom is writable state rather than a query.
+ * already created replaces its state, when that atom is writable state rather than a query. A
+ * query the page started before its value arrived, such as one in a region the browser rendered
+ * itself, takes the server's value while it is still loading; a value the browser already has
+ * is newer than the page's.
  */
 const applyAtoms = (
   registry: AtomRegistry.AtomRegistry,
   values: ReadonlyArray<Hydration.DehydratedAtom>,
 ) => {
   const nodes = registry.getNodes();
+  const loading: Array<Atom.Atom<unknown>> = [];
   const fresh = Hydration.toValues(values).filter((entry) => {
-    const atom = nodes.get(entry.key)?.atom;
-    if (atom === undefined || !Atom.isWritable(atom) || !Atom.isSerializable(atom)) return true;
-    registry.set(atom, atom[Atom.SerializableTypeId].decode(entry.value));
-    return false;
+    const node = nodes.get(entry.key);
+    if (node === undefined || !Atom.isSerializable(node.atom)) return true;
+    const atom = node.atom;
+    if (Atom.isWritable(atom)) {
+      registry.set(atom, atom[Atom.SerializableTypeId].decode(entry.value));
+      return false;
+    }
+    // A node that has not been read yet takes the preloaded value when it is.
+    if (node.currentState() !== "valid") return true;
+    const current = node.value();
+    if (!AsyncResult.isAsyncResult(current) || !AsyncResult.isInitial(current)) return false;
+    loading.push(atom);
+    return true;
   });
   Hydration.hydrate(registry, fresh);
+  // Reading an existing node applies its preloaded value and notifies the components using it.
+  for (const atom of loading) registry.get(atom);
 };
 
 /** Apply the server's values before hydration reaches the components that read them. */
@@ -258,14 +273,4 @@ export const dashboardRegistry = (initialValues: InitialValues) => {
       <RegistryContext.Provider value={view}>{children}</RegistryContext.Provider>
     ),
   };
-};
-
-/**
- * Start reads a component needs before it reads the first of them. On the server a render stops
- * at its first unresolved read, so reads that do not depend on each other would otherwise run one
- * after another. The browser already starts every read in the same render.
- */
-export const usePreload = (...atoms: ReadonlyArray<Atom.Atom<unknown>>) => {
-  const registry = useContext(RegistryContext);
-  if (import.meta.env.SSR) for (const atom of atoms) registry.mount(atom);
 };

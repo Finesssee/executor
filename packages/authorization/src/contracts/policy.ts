@@ -138,6 +138,41 @@ export const permitsTool = (
   request: ToolRequest,
   action: "discover" | "run" = "run",
 ) => permitsAction(policy, action) && selectsTool(policy.tools, request);
+/**
+ * A router is visible when one entry for its app and target permits every tool of the app, or
+ * permits a tool inside it: one the selection names, or, under a read-only rule, a read-only tool
+ * the catalog lists under it. A router that failed to list its tools therefore stays hidden unless
+ * the selection names a tool under its path.
+ */
+export const permitsRouter = (
+  policy: AuthorizationPolicy,
+  request: {
+    readonly app: AppId;
+    readonly profile?: ProfileId | undefined;
+    readonly path: string;
+  },
+  tools: readonly ToolIdentity[],
+  action: "discover" | "run" = "discover",
+) => {
+  const inside = (name: string) => request.path === "" || name.startsWith(`${request.path}.`);
+  return (
+    permitsAction(policy, action) &&
+    (policy.tools.kind === "all" ||
+      policy.tools.apps.some(
+        (item) =>
+          item.app === request.app &&
+          targetSelects(item, request.profile) &&
+          Match.value(item.tools).pipe(
+            Match.when({ kind: "all" }, () => true),
+            Match.when({ kind: "readOnly" }, () =>
+              tools.some((tool) => tool.readOnly === true && inside(tool.name)),
+            ),
+            Match.when({ kind: "selected" }, ({ names }) => names.some(inside)),
+            Match.exhaustive,
+          ),
+      ))
+  );
+};
 /** A profile or the account-free app may run only when the selection lists it for that app. */
 export const permitsTarget = (
   policy: AuthorizationPolicy,

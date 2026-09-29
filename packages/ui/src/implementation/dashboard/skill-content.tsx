@@ -2,6 +2,7 @@ import type { AppSkillDocument } from "@executor-js/sdk";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Code } from "./code.tsx";
+import { MarkdownCodeBlock } from "./markdown.tsx";
 import { markdownProse } from "./markdown-prose.ts";
 
 /** Render a skill document and resolve links to its other files. */
@@ -28,6 +29,7 @@ export function SkillContent({
             skipHtml
             components={{
               img: ({ alt }) => <span>{alt}</span>,
+              pre: MarkdownCodeBlock,
               a: ({ href, children }) => {
                 if (href !== undefined && /^https?:\/\//i.test(href))
                   return (

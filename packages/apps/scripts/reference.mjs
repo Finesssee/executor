@@ -1,5 +1,5 @@
 /** Generate searchable author contracts from the same TypeScript graph as declarations. */
-import ts from "typescript";
+import ts from "typescript-5";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { resolve, relative } from "node:path";
@@ -46,11 +46,20 @@ export async function generateFrameworkReference() {
     "ui/style.css",
     "package.json",
   ];
+  // The example deploys as written, so its manifest declares this release like every app.
+  const deployable = (content) => {
+    const { name, type, dependencies } = JSON.parse(content);
+    return `${JSON.stringify(
+      { name, private: true, type, dependencies: { apps: manifest.version, ...dependencies } },
+      null,
+      2,
+    )}\n`;
+  };
   const exampleFiles = await Promise.all(
-    examplePaths.map(async (path) => ({
-      path,
-      content: await readFile(resolve(exampleDirectory, path), "utf8"),
-    })),
+    examplePaths.map(async (path) => {
+      const content = await readFile(resolve(exampleDirectory, path), "utf8");
+      return { path, content: path === "package.json" ? deployable(content) : content };
+    }),
   );
   const program = ts.createProgram(
     [

@@ -79,11 +79,11 @@ layer(TestLive, { excludeTestServices: true })("Local scoped MCP connections", (
         const appPath = `tools[${JSON.stringify(app.slug)}]`;
         const [read, write, excluded] = yield* Effect.all(
           [
-            run("Call the read tool", `return await ${appPath}.queries.read({})`),
-            run("Call the write tool", `return await ${appPath}.mutations.write({message: "x"})`),
+            run("Call the read tool", `return await ${appPath}.read({})`),
+            run("Call the write tool", `return await ${appPath}.write({message: "x"})`),
             run(
               "Call an excluded app",
-              `return await tools[${JSON.stringify(hidden.app.slug)}].mutations.echo({message: "x"})`,
+              `return await tools[${JSON.stringify(hidden.app.slug)}].echo({message: "x"})`,
             ),
           ],
           { concurrency: 3 },
@@ -108,7 +108,7 @@ layer(TestLive, { excludeTestServices: true })("Local scoped MCP connections", (
             );
             expect(revoked.status).toBe(200);
             const after = yield* Effect.exit(
-              run("Call after revocation", `return await ${appPath}.queries.read({})`),
+              run("Call after revocation", `return await ${appPath}.read({})`),
             );
             expect(Exit.isFailure(after)).toBe(true);
             const listed = yield* body(

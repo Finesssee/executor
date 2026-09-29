@@ -28,9 +28,9 @@ use `object({})` if only a signing secret is needed. `executor` means the operat
 copies a generated secret into the provider; `provider` means they paste the
 provider's secret into Executor's secure page.
 
-When creation returns `setup-required`, request `webhookLinks_link({ path: { app, subscription } })` (local) or
+When creation returns `setup-required`, request `webhookLinks.link({ path: { app, subscription } })` (local) or
 the hosted `setupLink` operation and show the URL to the user. Do not ask for
 signing secrets in chat or include them in tool arguments. Read status with
-`webhooks_get`. Manual removal returns `disabled`; after removing it
-in the provider, use `webhooks_confirmRemoval`. This confirms the
+`webhooks.get`. Manual removal returns `disabled`; after removing it
+in the provider, use `webhooks.confirmRemoval`. This confirms the
 operator's action; Executor cannot verify external deletion without a provider API.

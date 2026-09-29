@@ -1,0 +1,247 @@
+/** Build, operation and evaluation failures reach the app's caller with their own details. */
+import { expect, layer } from "@effect/vitest";
+import { Effect, Layer, Schema } from "effect";
+import { randomUUID } from "node:crypto";
+import { scenarios } from "../test-plan.ts";
+import { Actors } from "../support/actors.ts";
+import { Api, body } from "../support/api.ts";
+import { HostedLive, withHostedCase } from "../support/case.ts";
+import { App } from "../support/contracts.ts";
+import { Evidence } from "../support/evidence.ts";
+import { frameworkSession } from "../support/framework.ts";
+import { McpOAuth } from "../support/mcp-oauth.ts";
+import { McpClient } from "../support/mcp-client.ts";
+import { appsManifest } from "../support/apps-release.ts";
+
+const BuildFailed = Schema.Struct({
+  _tag: Schema.Literal("DeploymentBuildFailed"),
+  stage: Schema.String,
+  location: Schema.optional(
+    Schema.Struct({ file: Schema.String, line: Schema.optional(Schema.Number) }),
+  ),
+  message: Schema.String,
+});
+const ToolFailed = Schema.Struct({
+  _tag: Schema.Literal("ToolCallFailed"),
+  reason: Schema.String,
+  failure: Schema.Struct({
+    source: Schema.String,
+    errorName: Schema.String,
+    code: Schema.optional(Schema.String),
+    message: Schema.String,
+  }),
+});
+const ExecutionFailed = Schema.Struct({
+  status: Schema.Literal("completed"),
+  execution: Schema.Struct({
+    ok: Schema.Literal(false),
+    error: Schema.Struct({
+      message: Schema.String,
+      response: Schema.Struct({
+        code: Schema.String,
+        message: Schema.String,
+        recovery: Schema.optional(
+          Schema.Struct({ action: Schema.String, instructions: Schema.String }),
+        ),
+      }),
+    }),
+  }),
+});
+
+const declarationMarker = "synthetic declaration failure";
+const appMarker = "conversation.id is required";
+
+const operationApp = [
+  {
+    path: "index.ts",
+    content: `import { defineApp, defineDatabase, table, string, query, mutation, object, router } from "apps";
+class ConversationMissing extends Error { override name = "ConversationMissing"; }
+export default defineApp({ accounts: {}, database: defineDatabase({ items: table({ label: string() }) }) }, {
+  tools: router({
+    fail: query({ input: object({}) }, async () => { throw new ConversationMissing(${JSON.stringify(appMarker)}); }),
+    scans: query({ input: object({}) }, async (ctx) => {
+      for (let index = 0; index < 101; index++) await ctx.db.items.withIndex("by_creation").first();
+      return null;
+    }),
+    failWrite: mutation({ input: object({}) }, async (ctx) => {
+      await ctx.db.items.insert({ label: "rolled back" });
+      throw new TypeError(${JSON.stringify(appMarker)});
+    }),
+  }),
+});`,
+  },
+  appsManifest,
+];
+
+layer(HostedLive, { excludeTestServices: true })("App failure details", (it) => {
+  it.effect(scenarios.appBuildFailureDetails.title, (context) =>
+    withHostedCase(
+      context,
+      Effect.gen(function* () {
+        const api = yield* Api,
+          actors = yield* Actors,
+          evidence = yield* Evidence;
+        const prefix = `/api/organizations/${actors.organization.id}/apps`;
+        const deploy = (files: ReadonlyArray<{ path: string; content: string }>) =>
+          api.request(actors.owner, "POST", `${prefix}/deploy`, {
+            name: `Build failure ${randomUUID().slice(0, 8)}`,
+            files: [...files, appsManifest],
+          });
+
+        // The compiler's own error and location reach the deployer.
+        const compile = yield* deploy([
+          {
+            path: "index.ts",
+            content: `import { defineApp, router } from "apps";
+export default defineApp({ accounts: {} }, { tools: router({ broken: ) }) });`,
+          },
+        ]);
+        yield* evidence.json("compile-failure.json", compile.body);
+        expect(compile.status).toBe(422);
+        const compiled = yield* body(BuildFailed, compile);
+        expect(compiled).toMatchObject({
+          stage: "compile",
+          location: { file: "index.ts", line: 2 },
+        });
+        expect(compiled.message).toContain("index.ts:2:");
+
+        // A module the bundle cannot load names itself when the app is declared.
+        const missing = yield* deploy([
+          {
+            path: "index.ts",
+            content: `import { defineApp, router } from "apps";
+import { value } from "./not-there.ts";
+export default defineApp({ accounts: {} }, { tools: router({ value }) });`,
+          },
+        ]);
+        yield* evidence.json("missing-module-failure.json", missing.body);
+        expect(missing.status).toBe(422);
+        const unloaded = yield* body(BuildFailed, missing);
+        expect(unloaded.stage).toBe("declaration");
+        expect(unloaded.message).toContain("not-there.ts");
+
+        // An app that throws while its module loads reports its own message at declaration.
+        const declaration = yield* deploy([
+          {
+            path: "index.ts",
+            content: `import { defineApp } from "apps";
+throw new Error(${JSON.stringify(declarationMarker)});
+export default defineApp({ accounts: {} }, {});`,
+          },
+        ]);
+        yield* evidence.json("declaration-failure.json", declaration.body);
+        expect(declaration.status).toBe(422);
+        const declared = yield* body(BuildFailed, declaration);
+        expect(declared.stage).toBe("declaration");
+        expect(declared.message).toContain(declarationMarker);
+
+        // The Executor app's deploy tool carries the same detail to an MCP caller.
+        const { client, profile } = yield* frameworkSession;
+        const deployed = yield* client.use("Deploy a failing app through MCP", (client, signal) =>
+          client.callTool(
+            {
+              name: "execute",
+              arguments: {
+                code: `return await tools.executor.profiles[${JSON.stringify(profile.id)}].apps.deploy(${JSON.stringify(
+                  {
+                    path: { organization: actors.organization.id },
+                    body: {
+                      name: `MCP build failure ${randomUUID().slice(0, 8)}`,
+                      files: [
+                        {
+                          path: "index.ts",
+                          content: `import { defineApp } from "apps";\nthrow new Error(${JSON.stringify(declarationMarker)});\nexport default defineApp({ accounts: {} }, {});`,
+                        },
+                        appsManifest,
+                      ],
+                    },
+                  },
+                )});`,
+              },
+            },
+            undefined,
+            { signal },
+          ),
+        );
+        yield* evidence.json("mcp-deploy-failure.json", deployed.structuredContent);
+        const mcpFailure = (yield* Schema.decodeUnknownEffect(ExecutionFailed)(
+          deployed.structuredContent,
+        )).execution.error;
+        expect(mcpFailure.response.code).toBe("DeploymentBuildFailed");
+        expect(mcpFailure.response.message).toContain("declaration");
+        expect(mcpFailure.response.message).toContain(declarationMarker);
+        expect(mcpFailure.message).not.toContain("Operation execution failed");
+      }).pipe(Effect.provide(Layer.mergeAll(McpOAuth.layer, McpClient.layer))),
+    ),
+  );
+
+  it.effect(scenarios.appOperationFailureDetails.title, (context) =>
+    withHostedCase(
+      context,
+      Effect.gen(function* () {
+        const api = yield* Api,
+          actors = yield* Actors,
+          evidence = yield* Evidence;
+        const prefix = `/api/organizations/${actors.organization.id}/apps`;
+        const deployed = yield* api.request(actors.owner, "POST", `${prefix}/deploy`, {
+          name: `Operation failure ${randomUUID().slice(0, 8)}`,
+          files: operationApp,
+        });
+        expect(deployed.status).toBe(200);
+        const app = yield* body(App, deployed);
+        yield* Effect.addFinalizer(() =>
+          api.request(actors.owner, "DELETE", `${prefix}/${app.id}`).pipe(Effect.orDie),
+        );
+        const call = (tool: string, kind: "query" | "mutation") =>
+          api.request(actors.owner, "POST", `${prefix}/${app.id}/tools/call`, {
+            tool,
+            kind,
+            input: {},
+          });
+
+        // The app's own error name and message pass through, not a fixed SDK reason.
+        const query = yield* body(ToolFailed, yield* call("fail", "query"));
+        expect(query.failure).toEqual({
+          source: "app",
+          errorName: "ConversationMissing",
+          message: appMarker,
+        });
+        expect(query.reason).toBe(`The app threw ConversationMissing: ${appMarker}`);
+        const mutation = yield* body(ToolFailed, yield* call("failWrite", "mutation"));
+        expect(mutation.failure).toMatchObject({ source: "app", errorName: "TypeError" });
+
+        // A host storage limit names itself instead of failing silently.
+        const scans = yield* body(ToolFailed, yield* call("scans", "query"));
+        yield* evidence.json("storage-limit-failure.json", scans);
+        expect(scans.failure.source).toBe("storage");
+        expect(scans.failure.message.length).toBeGreaterThan(0);
+        expect(scans.reason).toContain(scans.failure.message);
+
+        // MCP callers receive the same message with recovery guidance.
+        const { client } = yield* frameworkSession;
+        const executed = yield* client.use("Call a failing app query", (client, signal) =>
+          client.callTool(
+            {
+              name: "execute",
+              arguments: {
+                code: `return await tools[${JSON.stringify(app.slug)}].fail({});`,
+              },
+            },
+            undefined,
+            { signal },
+          ),
+        );
+        yield* evidence.json("mcp-operation-failure.json", executed.structuredContent);
+        const failure = (yield* Schema.decodeUnknownEffect(ExecutionFailed)(
+          executed.structuredContent,
+        )).execution.error;
+        expect(failure.response).toMatchObject({
+          code: "ToolCallFailed",
+          message: `The app threw ConversationMissing: ${appMarker}`,
+          recovery: { action: "Fix the input or the app code that threw this error, then retry." },
+        });
+        expect(failure.message).toContain(appMarker);
+      }).pipe(Effect.provide(Layer.mergeAll(McpOAuth.layer, McpClient.layer))),
+    ),
+  );
+});

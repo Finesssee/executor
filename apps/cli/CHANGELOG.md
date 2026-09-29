@@ -1,5 +1,9 @@
 # executor
 
+## 2.0.0-beta.6
+
+Seventh beta of the Executor local runtime, CLI, desktop, and self-host Docker image.
+
 ## 2.0.0-beta.5
 
 Sixth beta of the Executor local runtime, CLI, desktop, and self-host Docker image.

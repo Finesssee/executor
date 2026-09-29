@@ -5,7 +5,7 @@ export const appFiles = [
     label: "The entry point",
     description: "Brings the accounts, data, tools, and workflows together in one app.",
     language: "ts",
-    source: `import { defineApp } from "apps";
+    source: `import { defineApp, router } from "apps";
 import { github } from "./providers";
 import { database } from "./database";
 import { listBriefs, saveBrief, refreshBrief } from "./tools";
@@ -17,8 +17,7 @@ export const requirements = {
 };
 
 export default defineApp(requirements, {
-  queries: { listBriefs },
-  mutations: { saveBrief, refreshBrief },
+  tools: router({ listBriefs, saveBrief, refreshBrief }),
   workflows: { refresh },
 });`,
   },

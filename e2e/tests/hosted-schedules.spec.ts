@@ -6,6 +6,7 @@ import { Actors } from "../support/actors.ts";
 import { Api, body } from "../support/api.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const Settings = Schema.Struct({ actor: Schema.String });
 const Runs = Schema.Array(
@@ -17,10 +18,10 @@ const Runs = Schema.Array(
   }),
 );
 class Pending extends Schema.TaggedError<Pending>()("Pending", {}) {}
-const source = `import { defineApp, mutation, interval, object } from "apps";
+const source = `import { defineApp, mutation, interval, object, router } from "apps";
 import { always } from "apps/operations/approval";
 const work = mutation({ input: object({}), approval: always() }, async () => ({ done: true }));
-export default defineApp({ accounts: {} }, async () => ({  mutations: { work }, schedules: { review: interval({ minutes: 1 }, work, {}), creator: interval({ minutes: 1 }, work, {}) } }));`;
+export default defineApp({ accounts: {} }, async () => ({  tools: router({ work }), schedules: { review: interval({ minutes: 1 }, work, {}), creator: interval({ minutes: 1 }, work, {}) } }));`;
 layer(HostedLive, { excludeTestServices: true })("Hosted schedules", (it) => {
   it.effect(scenarios.hostedSchedules.title, (context) =>
     withHostedCase(
@@ -31,7 +32,7 @@ layer(HostedLive, { excludeTestServices: true })("Hosted schedules", (it) => {
         const prefix = `/api/organizations/${actors.organization.id}`;
         const created = yield* api.request(actors.owner, "POST", `${prefix}/apps/deploy`, {
           name: `Scheduled ${randomUUID().slice(0, 8)}`,
-          files: [{ path: "index.ts", content: source }],
+          files: [{ path: "index.ts", content: source }, appsManifest],
         });
         expect(created.status).toBe(200);
         const app = yield* body(Schema.Struct({ id: Schema.String }), created);

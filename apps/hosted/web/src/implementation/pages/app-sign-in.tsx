@@ -1,41 +1,40 @@
 import type { ProfileId } from "@executor-js/sdk";
-import { useAtomRefresh, useAtomSet, useAtomValue } from "@effect/atom-react";
+import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
 import type { App } from "@executor-js/sdk";
 import { Button } from "@executor-js/ui/components/button";
-import { Exit, Redacted } from "effect";
 import { AsyncResult } from "effect/unstable/reactivity";
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import {
+  appSignInFailureMessage,
   appUiError,
   appUiLocationAtom,
-  authorizeAppUiAtom,
+  type AppSignInFailure,
   type AppSignInId,
 } from "../../contracts/app-ui.ts";
 import { useOrganizationRoute } from "../components/organization.tsx";
 
-/** The product's existing AuthBoundary owns sign-in and return navigation. */
-export function AppSignInPage({ request }: { readonly request: AppSignInId | undefined }) {
-  const authorize = useAtomSet(authorizeAppUiAtom, { mode: "promiseExit" });
-  const [error, setError] = useState<string>();
+/**
+ * The server answers `/app-auth` with a redirect whenever it has an attempt to resolve, so this page
+ * renders only for a failure, a missing attempt, or a client-side navigation that must reach it.
+ */
+export function AppSignInPage({
+  request,
+  failure,
+}: {
+  readonly request: AppSignInId | undefined;
+  readonly failure: AppSignInFailure | undefined;
+}) {
+  const pending = failure === undefined && request !== undefined;
   useEffect(() => {
-    if (request === undefined) return;
-    let active = true;
-    void authorize({ payload: { request } }).then((result) => {
-      if (!active) return;
-      if (Exit.isFailure(result)) setError(appUiError(result.cause));
-      else window.location.replace(Redacted.value(result.value.url));
-    });
-    return () => {
-      active = false;
-    };
-  }, [request, authorize]);
+    if (pending) window.location.replace(window.location.href);
+  }, [pending]);
   return (
     <div className="auth-pending min-h-dvh flex items-center justify-center gap-4">
       <h1 className="text-[22px] font-semibold tracking-[-0.035em] leading-[1.35] [&>span]:text-muted-foreground [&>span]:text-[13px] [&>span]:font-mono [&>span]:font-normal [&>span]:ml-[8px] [&>span]:align-middle">
-        {error || request === undefined ? "Could not open app" : "Opening app…"}
+        {pending ? "Opening app…" : "Could not open app"}
       </h1>
-      {request === undefined && <p>Open the app URL to sign in.</p>}
-      {error && <p role="alert">{error}</p>}
+      {failure !== undefined && <p role="alert">{appSignInFailureMessage(failure)}</p>}
+      {failure === undefined && request === undefined && <p>Open the app URL to sign in.</p>}
     </div>
   );
 }

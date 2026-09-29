@@ -14,12 +14,20 @@ import type { Declarations } from "./declarations.ts";
 import { readDeploymentSource } from "./deployment-source.ts";
 import { prepareAppSkills } from "./skill-source.ts";
 
-/** Runtime skill results; only a catalog known to have no live loader is reused. */
+/**
+ * Runtime skill results. A catalog is reused when it has no live loader, or when its
+ * `dynamicSkills` loader read through the app cache, whose freshness and invalidation then govern
+ * it. A loader that fetches without the cache, or a build that cannot say, is read every time.
+ */
 const Catalog = Schema.Struct({
   skills: Schema.Unknown,
   dynamic: Schema.optionalKey(Schema.Boolean),
+  cached: Schema.optionalKey(Schema.Boolean),
 });
-const StaticCatalog = Schema.Struct({ skills: Schema.Unknown, dynamic: Schema.Literal(false) });
+const Reusable = Schema.Union([
+  Schema.Struct({ skills: Schema.Unknown, dynamic: Schema.Literal(false) }),
+  Schema.Struct({ skills: Schema.Unknown, cached: Schema.Literal(true) }),
+]);
 
 /** Sorted catalog digest; equal content has equal revisions. */
 const catalogRevision = (crypto: Crypto.Crypto, skills: typeof AppSkills.Type) =>
@@ -71,8 +79,6 @@ export const makeSkills = (
         capabilities?.skills === true
           ? yield* Effect.gen(function* () {
               const state = yield* invocation(db, { ...input, deployment });
-              // Builds that report their sources keep catalogs without a live loader. A catalog
-              // from `dynamicSkills`, or from an older build that cannot say, is read every time.
               const sources = capabilities.skillSources === true;
               const known = input.revision;
               const catalog = yield* declarations.read(
@@ -91,12 +97,12 @@ export const makeSkills = (
                       ),
                     ),
                 {
-                  retain: (value) => Schema.is(StaticCatalog)(value),
+                  retain: (value) => Schema.is(Reusable)(value),
                   // A caller holding another revision rereads rather than receive an older one.
                   current: (value) =>
                     known === undefined
                       ? Effect.succeed(true)
-                      : Schema.decodeUnknownEffect(StaticCatalog)(value).pipe(
+                      : Schema.decodeUnknownEffect(Catalog)(value).pipe(
                           Effect.flatMap((catalog) => decode(catalog.skills)),
                           Effect.flatMap((skills) => catalogRevision(crypto, skills)),
                           Effect.map((revision) => revision === known),

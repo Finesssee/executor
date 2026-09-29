@@ -46,15 +46,16 @@ layer(HostedLive, { excludeTestServices: true })("MCP empty state", (it) => {
         ).toBe(200);
         yield* browser.login(former);
         yield* browser.use("Use dark theme", (page) => page.emulateMedia({ colorScheme: "dark" }));
-        yield* browser.use("Provide synthetic client metadata", (page) =>
-          page.route("**/api/auth/oauth2/public-client?*", (route) =>
-            route.fulfill({
-              json: {
-                client_id: "empty-state-client",
-                client_name: "Example client",
-              },
-            }),
-          ),
+        // The consent page reads the registered client while it renders on the server.
+        const client = yield* body(
+          Schema.Struct({ client_id: Schema.String }),
+          yield* api.request(yield* api.session(), "POST", "/api/auth/oauth2/register", {
+            client_name: "Example client",
+            redirect_uris: ["http://127.0.0.1:55494/callback"],
+            token_endpoint_auth_method: "none",
+            grant_types: ["authorization_code", "refresh_token"],
+            response_types: ["code"],
+          }),
         );
         for (const viewport of [
           { width: 1440, height: 960 },
@@ -63,7 +64,7 @@ layer(HostedLive, { excludeTestServices: true })("MCP empty state", (it) => {
           yield* browser.use("Set consent viewport", (page) => page.setViewportSize(viewport));
           yield* browser.use("Open consent without organizations", (page) =>
             page.goto(
-              `/mcp/authorize?client_id=empty-state-client&resource=${encodeURIComponent(`${target.metadata.origin}/api`)}`,
+              `/mcp/authorize?client_id=${encodeURIComponent(client.client_id)}&resource=${encodeURIComponent(`${target.metadata.origin}/api`)}`,
             ),
           );
           yield* browser.use("Consent gives the actual recovery step", (page) =>

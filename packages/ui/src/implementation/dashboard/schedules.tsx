@@ -269,16 +269,32 @@ function ScheduleList<E>({
                     <span className="rounded border px-1.5 py-0.5 text-xs text-muted-foreground">
                       {row.settings?.activeRun
                         ? "Run active"
-                        : row.settings?.enabled
-                          ? "Enabled"
-                          : "Paused"}
+                        : row.settings?.reconnectAccount
+                          ? "Waiting for reconnect"
+                          : row.settings?.enabled
+                            ? "Enabled"
+                            : "Paused"}
                     </span>
                   </div>
                   <p className="text-xs text-muted-foreground">{timingText(row.timing)}</p>
-                  {row.settings?.enabled && row.settings.nextAt && (
+                  {row.settings?.reconnectAccount ? (
                     <p className="text-xs text-muted-foreground">
-                      Next: <LocalTime value={row.settings.nextAt} />
+                      Runs are skipped until the account reconnects.{" "}
+                      <AppLink
+                        app={app.id}
+                        view="accounts"
+                        className="underline underline-offset-2 hover:text-foreground"
+                      >
+                        View accounts
+                      </AppLink>
                     </p>
+                  ) : (
+                    row.settings?.enabled &&
+                    row.settings.nextAt && (
+                      <p className="text-xs text-muted-foreground">
+                        Next: <LocalTime value={row.settings.nextAt} />
+                      </p>
+                    )
                   )}
                 </div>
                 {bindings.controls ? (

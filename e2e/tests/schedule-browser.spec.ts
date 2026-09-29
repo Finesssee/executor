@@ -6,12 +6,13 @@ import { Browser } from "../support/browser.ts";
 import { Target } from "../support/platform.ts";
 import { TestLive, withCase } from "../support/case.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 class Pending extends Schema.TaggedError<Pending>()("Pending", {}) {}
-const source = `import { defineApp, mutation, object, interval } from "apps";
+const source = `import { defineApp, mutation, object, interval, router } from "apps";
 import { always } from "apps/operations/approval";
 const send = mutation({ input: object({}), approval: always() }, async () => ({ done: true }));
-export default defineApp({ accounts: {} }, async () => ({  mutations: { send }, schedules: { digest: interval({ hours: 1 }, send, {}) } }));`;
+export default defineApp({ accounts: {} }, async () => ({  tools: router({ send }), schedules: { digest: interval({ hours: 1 }, send, {}) } }));`;
 layer(TestLive, { excludeTestServices: true })("Schedule dashboard", (it) => {
   it.effect(scenarios.scheduledBrowser.title, (context) =>
     withCase(
@@ -28,7 +29,7 @@ layer(TestLive, { excludeTestServices: true })("Schedule dashboard", (it) => {
           {
             owner: "local",
             name: "Browser schedules",
-            files: [{ path: "index.ts", content: source }],
+            files: [{ path: "index.ts", content: source }, appsManifest],
           },
           headers,
         );

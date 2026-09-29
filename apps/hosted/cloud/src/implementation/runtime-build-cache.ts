@@ -16,6 +16,7 @@ const builds = new Map<BuildId, { readonly build: Build; readonly wasm: number }
 // Module source shared across builds, keyed by its text. Builds compiled with the same framework
 // hold one copy of its modules; the count is how many retained builds use the source.
 const sources = new Map<string, { readonly source: string; users: number }>();
+// oxlint-disable-next-line executor/no-module-level-mutable-state -- isolate-wide cache of immutable, credential-free build code, shared by design
 let retained = 0;
 
 const sourceOf = (module: Build["modules"][string]) =>

@@ -2,6 +2,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Effect, FileSystem } from "effect";
 import { type AccountConnectionId, type Executor, type OwnerId } from "@executor-js/sdk";
+import apps from "apps/package.json" with { type: "json" };
 
 /** Create the two apps and begin their independent OAuth sign-ins. */
 export async function startAxiomSignIns(executor: Executor, owner: OwnerId) {
@@ -13,7 +14,10 @@ export async function startAxiomSignIns(executor: Executor, owner: OwnerId) {
   const { app: work } = await executor.apps.deploy({
     owner,
     name: "Work Axiom",
-    files: [{ path: "index.ts", content: source }],
+    files: [
+      { path: "index.ts", content: source },
+      { path: "package.json", content: JSON.stringify({ dependencies: { apps: apps.version } }) },
+    ],
   });
   const personal = await executor.apps.copy({ from: work.id, owner, name: "Personal Axiom" });
   const workProfile = await executor.apps.profiles.create({

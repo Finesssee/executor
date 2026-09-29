@@ -7,6 +7,7 @@ import { Actors } from "../support/actors.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { App } from "../support/contracts.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 const Source = Schema.Struct({
   files: Schema.Array(Schema.Struct({ path: Schema.String, content: Schema.String })),
 });
@@ -43,6 +44,7 @@ layer(HostedLive, { excludeTestServices: true })("Source display budgets", (it) 
           })),
           { path: "formatted.ts", content: `export const text="${"a".repeat(250 * 1024)}";` },
           { path: "oversized.ts", content: `export const text="${"a".repeat(257 * 1024)}";` },
+          appsManifest,
         ];
         const draft = yield* body(
           App,

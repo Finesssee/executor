@@ -6,6 +6,7 @@ import { Browser } from "../support/browser.ts";
 import { TestLive, withCase } from "../support/case.ts";
 import { Target } from "../support/platform.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const Source = Schema.Struct({
   files: Schema.Array(Schema.Struct({ path: Schema.String, content: Schema.String })),
@@ -49,6 +50,7 @@ layer(TestLive, { excludeTestServices: true })("Local source formatting", (it) =
             content: 'import {defineApp} from "apps";export default defineApp({accounts:{}},{});',
           },
           operations,
+          appsManifest,
         ];
         const { app } = yield* body(
           Schema.Struct({

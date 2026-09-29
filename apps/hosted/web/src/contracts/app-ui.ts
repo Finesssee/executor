@@ -2,7 +2,11 @@ import { refreshOnFocus } from "@executor-js/ui/contracts/refresh";
 import { browserOnly } from "@executor-js/ui/contracts/http";
 import { organizationHttpClient } from "./organization-reference.ts";
 /** Host-specific pages opt into the shared private-app browser contract. */
-import { HostedAppUiApi, AppSignInId } from "@executor-js/hosted-server/app-ui/contracts";
+import {
+  HostedAppUiApi,
+  AppSignInFailure,
+  AppSignInId,
+} from "@executor-js/hosted-server/app-ui/contracts";
 import type { OrganizationReference } from "@executor-js/hosted-server/organization";
 import type { AppId, AppSlug, DeploymentId } from "@executor-js/sdk";
 import { Cause, Data, Effect, Match, Option, Schedule, Schema, Stream } from "effect";
@@ -40,13 +44,23 @@ const location = Atom.family((key: AppUiKey) =>
 /** A stable, non-secret app link; opening it initiates authentication when needed. */
 export const appUiLocationAtom = (key: ConstructorParameters<typeof AppUiKey>[0]) =>
   location(new AppUiKey(key));
-/** The dashboard's existing login authorizes a browser-bound attempt. */
-export const authorizeAppUiAtom = AppUiClient.mutation("appUi", "authorize");
-/** Preserve a validated request ID through the existing login redirect. */
+/** The server resolves attempts; the page only sees a request on client navigation, or a failure. */
 export const appUiSearch = (search: Record<string, unknown>) => ({
   request: Option.getOrUndefined(Schema.decodeUnknownOption(AppSignInId)(search.request)),
+  failure: Option.getOrUndefined(Schema.decodeUnknownOption(AppSignInFailure)(search.failure)),
 });
-export { AppSignInId };
+/** Why the server stopped an attempt, in the same words as other app errors. */
+export const appSignInFailureMessage = (failure: AppSignInFailure) =>
+  Match.value(failure).pipe(
+    Match.when("ended", () => "This sign-in attempt ended. Open the app URL again."),
+    Match.when("forbidden", () => "You do not have access to this app."),
+    Match.when(
+      "unavailable",
+      () => "The app page is unavailable. Check its deployment and the server’s app URL settings.",
+    ),
+    Match.exhaustive,
+  );
+export { AppSignInFailure, AppSignInId };
 
 /** Expected app authentication failures stay typed through the atom and view. */
 export type AppUiError =
@@ -71,7 +85,6 @@ const message = Match.type<AppUiError>().pipe(
         ),
         Match.exhaustive,
       ),
-    UiUnauthorized: () => "This sign-in attempt ended. Open the app URL again.",
     OrganizationForbidden: () => "You do not have access to this team.",
     UiForbidden: () => "You do not have access to this app.",
     UiFailed: (error) =>

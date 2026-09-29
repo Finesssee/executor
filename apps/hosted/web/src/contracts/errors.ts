@@ -103,6 +103,10 @@ const errorMessage = Match.type<HostedError>().pipe(
     AppEvaluationFailed: (error) => `${error.description} ${error.recovery.action}`,
     ToolListingTimedOut: (error) => `${error.description} ${error.recovery.action}`,
     ToolNotFound: () => "This tool is no longer available. Reload the app’s tools and try again.",
+    FrameworkVersionMismatch: () =>
+      "This server documents a different framework version. Search again without a version.",
+    ToolKindMismatch: () =>
+      "This tool changed between a query and a mutation. Reload the app’s tools and try again.",
     ToolBlocked: () => "The tool's approval policy blocked this tool call. The tool did not run.",
     ToolApprovalRequired: () =>
       "The tool requires approval. The tool did not run. Approval handling is not available yet.",

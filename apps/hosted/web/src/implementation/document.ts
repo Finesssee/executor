@@ -5,6 +5,8 @@ import type { HostedDocumentContext } from "@executor-js/hosted-server/browser/c
 import { redirect } from "@tanstack/react-router";
 import { lastOrganizationAtom, sessionInitialValues } from "../contracts/auth.ts";
 import { Atom } from "effect/unstable/reactivity";
+import { Option, Schema } from "effect";
+import { OrganizationSummary } from "../contracts/organization.ts";
 
 /** Everything a hosted document receives from its host. */
 export type HostedDocument = HostedDocumentContext & DocumentApi;
@@ -32,14 +34,20 @@ export const requireSession = (
 /**
  * Open `/` at the organization this person last used, before any HTML. Membership is checked in
  * the same request, so a removed organization shows the normal entry instead; the saved value
- * is only navigation memory.
+ * is only navigation memory. The address uses the organization's current slug, so the page does
+ * not replace its own URL while its data is still streaming.
  */
 export const restoreLastOrganization = async (document: HostedDocument, pathname: string) => {
   const saved = document.lastOrganization;
   if (pathname !== "/" || document.session === null || saved === null) return;
-  const organization = encodeURIComponent(saved.organization);
-  const allowed = await document
-    .apiFetch(`/api/organizations/${organization}/access`)
-    .then((response) => response.ok);
-  if (allowed) throw redirect({ href: `/org/${organization}/apps` });
+  const response = await document.apiFetch("/api/auth/organization/list");
+  if (!response.ok) return;
+  const memberships = Schema.decodeUnknownOption(Schema.Array(OrganizationSummary))(
+    await response.json(),
+  );
+  const organization = Option.flatMap(memberships, (list) =>
+    Option.fromNullishOr(list.find((item) => item.id === saved.organization)),
+  );
+  if (Option.isSome(organization))
+    throw redirect({ href: `/org/${encodeURIComponent(organization.value.slug)}/apps` });
 };

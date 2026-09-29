@@ -27,3 +27,6 @@ export const appUiBaseUrl = (dashboardOrigin: string) =>
 export const allowPrivateAppFetch = Config.Boolean("EXECUTOR_APPS_ALLOW_PRIVATE_FETCH").pipe(
   Config.withDefault(false),
 );
+
+/** A registry mirror for app builds. Apps resolve their declared packages from the public npm registry by default. */
+export const npmRegistry = Config.String("EXECUTOR_NPM_REGISTRY").pipe(Config.option);

@@ -12,6 +12,7 @@ import {
   type Cursor,
   type DeploymentId,
   type Tool as AppTool,
+  type ToolRouter,
 } from "@executor-js/sdk/core";
 import { Clock, Deferred, Duration, Effect, Option, Schema, Semaphore } from "effect";
 import { diagnostic, executionDiagnostic } from "./diagnostics.ts";
@@ -80,6 +81,10 @@ function toolPath(name: string): string {
     .join(".");
 }
 
+/** A tool's group, as shown in search results: the router's title, or its path. */
+const groupLabel = (router: ToolRouter | undefined) =>
+  router === undefined ? "" : ` / ${router.title ?? router.path}`;
+
 function listTools<E extends Error>(
   backend: McpBackend<E>,
   app: AppId,
@@ -91,6 +96,7 @@ function listTools<E extends Error>(
 ) {
   return Effect.gen(function* () {
     const tools: AppTool[] = [];
+    let routers: readonly ToolRouter[] = [];
     let cursor: Cursor | undefined;
     let deployment: DeploymentId | undefined;
     const selection =
@@ -103,9 +109,10 @@ function listTools<E extends Error>(
       yield* paged;
       deployment = page.deployment;
       tools.push(...page.items);
+      routers = page.routers;
       cursor = page.next;
     } while (cursor !== undefined);
-    return { tools, deployment, selection };
+    return { tools, routers, deployment, selection };
   });
 }
 
@@ -392,6 +399,21 @@ function catalog(backend: McpBackend<Error>, progress: ExecutionProgress) {
             continue;
           }
           namespaces.set(namespace, "available");
+          // A router that could not list its tools is reported like an app, at its own namespace,
+          // so a call into it explains why instead of reporting an unknown tool.
+          const groups = new Map(catalog.routers.map((router) => [router.path, router]));
+          for (const router of catalog.routers) {
+            if (router.error === undefined) continue;
+            const entry = {
+              app: app.id,
+              name: `${app.name} ${router.title ?? router.path}`,
+              ...(target.kind === "profile" ? { profile: target.id } : {}),
+              router: router.path,
+              reason: diagnostic(router.error),
+            };
+            failed.push(entry);
+            namespaces.set(`${namespace}.${toolPath(router.path)}`, entry);
+          }
           const description = `${app.name}${target.kind === "profile" ? ` (${target.label})` : ""}`;
           parts.push({ namespace, description, tools: catalog.tools });
           const projected = yield* Effect.forEach(catalog.tools, (tool) =>
@@ -403,7 +425,7 @@ function catalog(backend: McpBackend<Error>, progress: ExecutionProgress) {
                       ? toolPath(tool.name)
                       : `profiles.${toolPath(target.id)}.${toolPath(tool.name)}`,
                     Tool.make({
-                      description: `${description}: ${tool.description}`,
+                      description: `${description}${groupLabel(tool.router === undefined ? undefined : groups.get(tool.router))}: ${tool.description}`,
                       input: schemas.input,
                       output: schemas.output ?? Schema.Json,
                       execute: (input) =>
@@ -416,6 +438,7 @@ function catalog(backend: McpBackend<Error>, progress: ExecutionProgress) {
                                 deployment: catalog.deployment,
                                 ...catalog.selection,
                                 tool: tool.name,
+                                kind: tool.readOnly === true ? "query" : "mutation",
                                 input,
                               })
                               .pipe(

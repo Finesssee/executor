@@ -11,6 +11,7 @@ import { HostedLive, TestLive, withCase, withHostedCase } from "../support/case.
 import { McpClient } from "../support/mcp-client.ts";
 import { Target } from "../support/platform.ts";
 import { requestGate } from "../support/request-gate.ts";
+import { appsManifest, withApps } from "../support/apps-release.ts";
 
 /** Execution budget used by every product; the app's slow tool outlasts it. */
 const executionTimeoutMs = 30_000;
@@ -25,11 +26,11 @@ const swr = { key: "swr", schema: string(), freshFor: 0, staleFor: "10 minutes" 
 // `first` returns at once and `slow` outlasts the execution budget. `seed` caches a value that
 // is stale at once; `stale` serves it and keeps refreshing it after the call returns. The
 // approved mutation records that it ran, so a scenario can prove it never did.
-const slowAppSource = `import { defineApp, query, mutation, object, boolean, string } from "apps";
+const slowAppSource = `import { defineApp, query, mutation, object, boolean, string, router } from "apps";
 import { always } from "apps/operations/approval";
 ${slowRefresh}
 export default defineApp({ accounts: {} }, async (ctx) => ({
-  queries: {
+  tools: router({
     first: query({ input: object({}) }, async () => ({ n: 1 })),
     pause: query({ input: object({}) }, async () => {
       await new Promise((resolve) => setTimeout(resolve, 3_000));
@@ -45,32 +46,30 @@ export default defineApp({ accounts: {} }, async (ctx) => ({
       return { n: 2 };
     }),
     approvedRan: query({ input: object({}) }, async () => (await ctx.cache.read("approved-ran", boolean())) ?? false),
-  },
-  mutations: {
     approved: mutation({ input: object({}), approval: always() }, async () => {
       await ctx.cache.write([{ key: "approved-ran", value: true }], "1 hour");
       return { ran: true };
     }),
-  },
+  }),
 }));`;
 
 // The second read serves the cached value and starts a refresh that outlasts the result.
-const refreshAppSource = `import { defineApp, query, object, string } from "apps";
+const refreshAppSource = `import { defineApp, query, object, string, router } from "apps";
 ${slowRefresh}
-export default defineApp({ accounts: {} }, async (ctx) => ({ queries: {
-  seed: query({ input: object({}) }, async () => ctx.cache.get({ ...swr, load: async () => "seed" })),
+export default defineApp({ accounts: {} }, async (ctx) => ({ tools: router({
+   seed: query({ input: object({}) }, async () => ctx.cache.get({ ...swr, load: async () => "seed" })),
   stale: query({ input: object({}) }, async () => ctx.cache.get({ ...swr, load: async ({ signal }) => {
     await slowRefresh(signal);
     return "refreshed";
   } })),
-} }));`;
+ }) }));`;
 
 // A required account that nobody has selected keeps the app out of the catalog.
-const accountAppSource = `import { defineApp, defineProvider, secrets, object, string, query } from "apps";
+const accountAppSource = `import { defineApp, defineProvider, secrets, object, string, query, router } from "apps";
 const service = defineProvider({ name: "Unselected fixture", auth: { key: secrets({ label: "API key", fields: object({ token: string() }) }) } });
-export default defineApp({ accounts: { service } }, async () => ({ queries: {
-  read: query({ input: object({}), description: "Read an item" }, async () => "item"),
-} }));`;
+export default defineApp({ accounts: { service } }, async () => ({ tools: router({
+   read: query({ input: object({}), description: "Read an item" }, async () => "item"),
+ }) }));`;
 
 const Failed = Schema.Struct({
   status: Schema.Literal("completed"),
@@ -123,12 +122,12 @@ const checkTimeoutReport = (client: Connected, slug: string) =>
   Effect.gen(function* () {
     const evidence = yield* Evidence;
     const app = `tools[${JSON.stringify(slug)}]`;
-    const code = `const first = await ${app}.queries.first({});
-await ${app}.queries.pause({});
-await ${app}.queries.seed({});
-await ${app}.queries.stale({});
+    const code = `const first = await ${app}.first({});
+await ${app}.pause({});
+await ${app}.seed({});
+await ${app}.stale({});
 console.log("first call finished", first.n);
-await ${app}.queries.slow({});
+await ${app}.slow({});
 return "unreachable";`;
     const started = yield* Clock.currentTimeMillis;
     const result = yield* client.use(
@@ -151,11 +150,11 @@ return "unreachable";`;
     );
     // Each admitted call reports whether it finished.
     expect(timedOut.execution.toolCalls).toEqual([
-      expect.objectContaining({ name: `${slug}.queries.first`, outcome: "success" }),
-      expect.objectContaining({ name: `${slug}.queries.pause`, outcome: "success" }),
-      expect.objectContaining({ name: `${slug}.queries.seed`, outcome: "success" }),
-      expect.objectContaining({ name: `${slug}.queries.stale`, outcome: "success" }),
-      expect.objectContaining({ name: `${slug}.queries.slow`, outcome: "interrupted" }),
+      expect.objectContaining({ name: `${slug}.first`, outcome: "success" }),
+      expect.objectContaining({ name: `${slug}.pause`, outcome: "success" }),
+      expect.objectContaining({ name: `${slug}.seed`, outcome: "success" }),
+      expect.objectContaining({ name: `${slug}.stale`, outcome: "success" }),
+      expect.objectContaining({ name: `${slug}.slow`, outcome: "interrupted" }),
     ]);
     // The result arrives at the budget, not after the slow tool. Workers advance their clock
     // only at I/O, so a Cloud timer can end slightly before the client's wall time says it should.
@@ -186,7 +185,7 @@ const checkRefreshNotAwaited = (client: Connected, slug: string) =>
     const seeded = yield* executeOnce(
       client,
       "Cache a value that is immediately stale",
-      `return await ${app}.queries.seed({});`,
+      `return await ${app}.seed({});`,
       "refresh-seed.json",
     );
     expect(yield* Schema.decodeUnknownEffect(Completed)(seeded.structured)).toMatchObject({
@@ -195,7 +194,7 @@ const checkRefreshNotAwaited = (client: Connected, slug: string) =>
     const served = yield* executeOnce(
       client,
       "Read the stale value while its refresh keeps running",
-      `const value = await ${app}.queries.stale({});
+      `const value = await ${app}.stale({});
 console.log("served", value);
 return value;`,
       "refresh-served.json",
@@ -216,7 +215,7 @@ const checkNoApprovalAfterDeadline = (client: Connected, slug: string) =>
     const raced = yield* executeOnce(
       client,
       "Request an approval beside a call that outlasts the budget",
-      `return await Promise.all([${app}.mutations.approved({}), ${app}.queries.slow({})]);`,
+      `return await Promise.all([${app}.approved({}), ${app}.slow({})]);`,
       "approval-deadline.json",
     );
     const status = yield* Schema.decodeUnknownEffect(Schema.Struct({ status: Schema.String }))(
@@ -228,13 +227,13 @@ const checkNoApprovalAfterDeadline = (client: Connected, slug: string) =>
     expect(timedOut.execution.error.kind).toBe("TimeoutExceeded");
     // The mutation was still waiting for approval, so it is not reported as possibly applied.
     expect(timedOut.execution.toolCalls).toEqual([
-      expect.objectContaining({ name: `${slug}.mutations.approved`, outcome: "awaiting-approval" }),
-      expect.objectContaining({ name: `${slug}.queries.slow`, outcome: "interrupted" }),
+      expect.objectContaining({ name: `${slug}.approved`, outcome: "awaiting-approval" }),
+      expect.objectContaining({ name: `${slug}.slow`, outcome: "interrupted" }),
     ]);
     const ran = yield* executeOnce(
       client,
       "Check whether the approved mutation ran",
-      `return await ${app}.queries.approvedRan({});`,
+      `return await ${app}.approvedRan({});`,
       "approval-ran.json",
     );
     expect(yield* Schema.decodeUnknownEffect(Completed)(ran.structured)).toMatchObject({
@@ -253,10 +252,10 @@ const checkApprovalAfterRefresh = (client: Connected, slug: string) =>
     const parked = yield* executeOnce(
       client,
       "Ask for approval after a read that leaves a cache refresh running",
-      `await ${app}.queries.seed({});
-const value = await ${app}.queries.stale({});
+      `await ${app}.seed({});
+const value = await ${app}.stale({});
 console.log("served", value);
-return await ${app}.mutations.approved({});`,
+return await ${app}.approved({});`,
       "approval-after-refresh.json",
     );
     const pending = yield* Schema.decodeUnknownEffect(Pending)(parked.structured);
@@ -297,7 +296,7 @@ const hostedApp = (name: string, source: string) =>
     );
     const deployed = yield* api.request(actors.owner, "POST", `${prefix}/apps/deploy`, {
       name: `${name} ${randomUUID().slice(0, 8)}`,
-      files: [{ path: "index.ts", content: source }],
+      files: [{ path: "index.ts", content: source }, appsManifest],
     });
     expect(deployed.status).toBe(200);
     const app = yield* body(App, deployed);
@@ -327,7 +326,7 @@ const localApp = (name: string, source: string) =>
       {
         owner: "local",
         name: `${name} ${randomUUID().slice(0, 8)}`,
-        files: [{ path: "index.ts", content: source }],
+        files: [{ path: "index.ts", content: source }, appsManifest],
       },
       headers,
     );
@@ -401,7 +400,7 @@ layer(HostedLive, { excludeTestServices: true })("Hosted MCP execute failures", 
         );
         const deployed = yield* api.request(actors.owner, "POST", `${prefix}/apps/deploy`, {
           name: `Needs account ${randomUUID().slice(0, 8)}`,
-          files: [{ path: "index.ts", content: accountAppSource }],
+          files: [{ path: "index.ts", content: accountAppSource }, appsManifest],
         });
         expect(deployed.status).toBe(200);
         const app = yield* body(App, deployed);
@@ -429,7 +428,7 @@ layer(HostedLive, { excludeTestServices: true })("Hosted MCP execute failures", 
         const unprofiled = yield* call(
           "Call a tool of an account app that has no profile",
           "no-profile-result.json",
-          `return await ${root}.queries.read({});`,
+          `return await ${root}.read({});`,
         );
         // An app nobody has set up is not listed on every execute; only a call into it reports it.
         expect(unprofiled.reason).toBeUndefined();
@@ -448,7 +447,7 @@ layer(HostedLive, { excludeTestServices: true })("Hosted MCP execute failures", 
         const unselected = yield* call(
           "Call a tool of an app whose account is not selected",
           "unselected-result.json",
-          `return await ${root}.profiles[${JSON.stringify(id)}].queries.read({});`,
+          `return await ${root}.profiles[${JSON.stringify(id)}].read({});`,
         );
         expect(unselected.reason ?? "").toContain(
           "This app needs an account that has not been selected yet.",
@@ -481,13 +480,15 @@ layer(HostedLive, { excludeTestServices: true })("Hosted MCP execute failures", 
           files: [
             {
               path: "package.json",
-              content: JSON.stringify({ dependencies: { "@modelcontextprotocol/sdk": "1.30.0" } }),
+              content: JSON.stringify({
+                dependencies: withApps({ "@modelcontextprotocol/sdk": "1.30.0" }),
+              }),
             },
             {
               path: "index.ts",
-              content: `import { defineApp } from "apps";
-import { mcpOperations } from "apps/mcp";
-export default defineApp({ accounts: {} }, async () => mcpOperations({ url: ${JSON.stringify(`${gate.origin}/moved/mcp`)} }));`,
+              content: `import { defineApp, router } from "apps";
+import { mcpRouter } from "apps/mcp";
+export default defineApp({ accounts: {} }, async () => ({ tools: await mcpRouter({ url: ${JSON.stringify(`${gate.origin}/moved/mcp`)} }) }));`,
             },
           ],
         });
@@ -502,7 +503,7 @@ export default defineApp({ accounts: {} }, async () => mcpOperations({ url: ${JS
         const client = yield* mcp.connect(key.key, "refused-mcp", {
           organization: actors.organization.id,
         });
-        const code = `return await tools[${JSON.stringify(app.slug)}].queries.anything({});`;
+        const code = `return await tools[${JSON.stringify(app.slug)}].anything({});`;
         const started = yield* Clock.currentTimeMillis;
         const result = yield* client.use(
           "Call a tool of an app whose MCP server refuses connections",

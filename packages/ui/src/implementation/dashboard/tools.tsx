@@ -4,10 +4,18 @@ import { useState, type ReactNode } from "react";
 import type { Tool, ToolSummary } from "@executor-js/sdk";
 import { Option } from "effect";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { SidebarLeft01Icon, SourceCodeIcon } from "@hugeicons/core-free-icons";
+import {
+  ArrowRight01Icon,
+  Delete02Icon,
+  PencilEdit01Icon,
+  SidebarLeft01Icon,
+  SourceCodeIcon,
+  ViewIcon,
+} from "@hugeicons/core-free-icons";
 import type { Query, QueryProps } from "../../contracts/dashboard.ts";
 import { QueryResult, useQuery } from "./context.tsx";
-import { Code, CopyButton } from "./code.tsx";
+import { CopyButton } from "./code.tsx";
+import { humanize, SchemaSection } from "./tool-schema.tsx";
 import { ToolMarkdown } from "./markdown.tsx";
 import { Button } from "../components/button.tsx";
 import { Empty, SearchInput } from "./common.tsx";
@@ -39,6 +47,7 @@ export function ToolBrowser<E>({
   const { result, data, refresh } = useQuery(query);
   const [search, setSearch] = useState("");
   const [listOpen, setListOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
   const tools = Option.isSome(data) ? data.value : [];
   const filtered = tools.filter((tool) =>
     `${tool.name} ${tool.description}`.toLowerCase().includes(search.toLowerCase()),
@@ -57,6 +66,11 @@ export function ToolBrowser<E>({
       <HugeiconsIcon icon={SidebarLeft01Icon} size={18} aria-hidden />
     </Button>
   );
+  const tree = buildTree(filtered);
+  // Labels come from the whole catalog so searching does not change a tool's title.
+  const { leafLabels } = treeIndex(buildTree(tools));
+  const groups = groupKeys(tree);
+  const allCollapsed = groups.length > 0 && groups.every((key) => collapsed.has(key));
   const list = (toggle?: ReactNode) => (
     <>
       <AppSectionHeader>
@@ -66,41 +80,44 @@ export function ToolBrowser<E>({
           {filtered.length}
           {search ? ` / ${tools.length}` : ""}
         </span>
+        {groups.length > 0 && !search && (
+          <Button
+            variant="ghost"
+            size="xs"
+            className="-mr-2 text-muted-foreground"
+            onClick={() => setCollapsed(allCollapsed ? new Set() : new Set(groups))}
+          >
+            {allCollapsed ? "Expand all" : "Collapse all"}
+          </Button>
+        )}
       </AppSectionHeader>
       <div className="shrink-0 border-b p-2 [&_.search-field]:w-full">
         <SearchInput value={search} onChange={setSearch} placeholder="Search tools…" />
       </div>
-      <nav aria-label="App tools" className="min-h-0 flex-1 space-y-0.5 overflow-auto p-2">
+      <nav aria-label="App tools" className="min-h-0 flex-1 overflow-auto p-2">
         {filtered.length === 0 ? (
           <EmptyState size="compact" icon={null} title="No matching tools">
             Try another name.
           </EmptyState>
         ) : (
-          filtered.map((tool) => (
-            <button
-              type="button"
-              key={tool.name}
-              title={tool.name}
-              aria-pressed={current?.name === tool.name}
-              onClick={() => {
-                setListOpen(false);
-                onSelect(tool.name);
-              }}
-              className={cn(
-                "flex min-h-8 w-full items-center gap-2 rounded-md px-2 text-left text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-ring max-[740px]:min-h-11",
-                current?.name === tool.name && "bg-muted font-medium text-foreground",
-              )}
-            >
-              <HugeiconsIcon
-                icon={SourceCodeIcon}
-                size={15}
-                strokeWidth={1.7}
-                className="shrink-0 text-muted-foreground"
-                aria-hidden
-              />
-              <code className="truncate">{tool.name}</code>
-            </button>
-          ))
+          <ToolTree
+            nodes={tree}
+            depth={0}
+            current={current?.name}
+            // Searching reveals every match; the saved collapse state returns afterwards.
+            collapsed={search ? new Set() : collapsed}
+            onToggle={(key) =>
+              setCollapsed((previous) => {
+                const next = new Set(previous);
+                if (!next.delete(key)) next.add(key);
+                return next;
+              })
+            }
+            onSelect={(name) => {
+              setListOpen(false);
+              onSelect(name);
+            }}
+          />
         )}
       </nav>
     </>
@@ -158,22 +175,31 @@ export function ToolBrowser<E>({
                   <>
                     <AppSectionHeader>
                       {listToggle}
-                      <h2
-                        className="min-w-0 flex-1 truncate font-mono text-[13px] font-medium"
-                        title={current.name}
-                      >
+                      {/* Same heading as the pending header, so the row keeps its geometry. */}
+                      <AppSectionTitle className="min-w-0 flex-1 truncate font-mono text-muted-foreground">
                         {current.name}
-                      </h2>
-                      <CopyButton code={current.name} label="Copy tool name" inline />
+                      </AppSectionTitle>
+                      <CopyButton
+                        code={current.name}
+                        label="Copy tool name"
+                        text="Copy name"
+                        inline
+                      />
                     </AppSectionHeader>
                     {/* One key per tool: every part of the inspector remounts together. */}
                     <div
                       key={current.name}
-                      className="min-h-0 flex-1 overflow-auto px-6 pb-6 max-[740px]:px-4"
+                      className="min-h-0 flex-1 overflow-auto px-8 pt-7 pb-10 max-[740px]:px-4 max-[740px]:pt-5"
                     >
-                      <ToolDescription description={current.description} />
-                      <ToolSchemas query={detail(current)} Failure={Failure} />
-                      {renderAction?.(current)}
+                      <div className="max-w-3xl">
+                        <ToolHeading tool={current} label={leafLabels.get(current.name)} />
+                        {!sameText(
+                          current.description,
+                          toolTitle(current, leafLabels.get(current.name)),
+                        ) && <ToolDescription description={current.description} />}
+                        <ToolSchemas query={detail(current)} Failure={Failure} />
+                        {renderAction?.(current)}
+                      </div>
                     </div>
                   </>
                 ) : (
@@ -200,37 +226,33 @@ function ToolSchemas<E>({ query, Failure }: QueryProps<Tool | undefined, E>) {
       retry={refresh}
       pending={
         <div role="status" aria-label="Loading schema">
-          <div className="mb-2.5 mt-6 text-xs font-medium text-muted-foreground">Input schema</div>
+          <SchemaHeadingSkeleton />
           <SchemaSkeleton />
         </div>
       }
     >
       {(tool) =>
         tool === undefined ? (
-          <p className="mt-6 text-sm text-muted-foreground">
+          <p className="mt-8 text-sm text-muted-foreground">
             This tool is no longer in the app's catalog.
           </p>
         ) : (
           <>
-            <div className="mb-2.5 mt-6 text-xs font-medium text-muted-foreground">
-              Input schema
-            </div>
-            <Code
-              code={JSON.stringify(tool.inputSchema, null, 2)}
-              copyable
+            <SchemaSection
+              title="Inputs"
+              subtitle="What to provide when using this tool"
+              schema={tool.inputSchema}
+              empty="This tool doesn't need any inputs."
               copyLabel="Copy input schema"
             />
             {tool.outputSchema !== undefined && (
-              <>
-                <div className="mb-2.5 mt-6 text-xs font-medium text-muted-foreground">
-                  Output schema
-                </div>
-                <Code
-                  code={JSON.stringify(tool.outputSchema, null, 2)}
-                  copyable
-                  copyLabel="Copy output schema"
-                />
-              </>
+              <SchemaSection
+                title="Returns"
+                subtitle="What the tool sends back"
+                schema={tool.outputSchema}
+                empty="The tool doesn't describe what it returns."
+                copyLabel="Copy output schema"
+              />
             )}
           </>
         )
@@ -239,9 +261,18 @@ function ToolSchemas<E>({ query, Failure }: QueryProps<Tool | undefined, E>) {
   );
 }
 
+function SchemaHeadingSkeleton() {
+  return (
+    <div className="mt-8 mb-3">
+      <div className="text-sm font-semibold">Inputs</div>
+      <div className="text-xs text-muted-foreground">What to provide when using this tool</div>
+    </div>
+  );
+}
+
 function SchemaSkeleton() {
   return (
-    <div aria-hidden className="space-y-3 rounded-lg bg-muted p-4">
+    <div aria-hidden className="space-y-3 rounded-lg border bg-card p-4">
       <Skeleton className="h-3 w-2/3" />
       <Skeleton className="h-3 w-1/2" />
       <Skeleton className="h-3 w-3/5" />
@@ -284,18 +315,27 @@ export function ToolBrowserLoading({
             <HugeiconsIcon icon={SidebarLeft01Icon} size={18} aria-hidden />
           </span>
           {selected ? (
-            <AppSectionTitle className="min-w-0 flex-1 truncate font-mono">
+            <AppSectionTitle className="min-w-0 flex-1 truncate font-mono text-muted-foreground">
               {selected}
             </AppSectionTitle>
           ) : (
             <Skeleton className="h-3 w-36" />
           )}
-          <CopyButton code={undefined} label="Copy tool name" inline />
+          <CopyButton code={undefined} label="Copy tool name" text="Copy name" inline />
         </AppSectionHeader>
-        <div aria-hidden className="min-w-0 px-6 pb-6 max-[740px]:px-4">
-          <Skeleton className="mt-3.5 h-5 w-3/4" />
-          <div className="mb-2.5 mt-6 text-xs font-medium text-muted-foreground">Input schema</div>
-          <SchemaSkeleton />
+        <div aria-hidden className="min-w-0 px-8 pt-7 pb-10 max-[740px]:px-4 max-[740px]:pt-5">
+          <div className="max-w-3xl">
+            <div className="flex items-center gap-3.5">
+              <Skeleton className="size-10 rounded-xl" />
+              <div className="flex-1 space-y-2">
+                <Skeleton className="h-5 w-1/3" />
+                <Skeleton className="h-3 w-1/4" />
+              </div>
+            </div>
+            <Skeleton className="mt-5 h-4 w-3/4" />
+            <SchemaHeadingSkeleton />
+            <SchemaSkeleton />
+          </div>
         </div>
       </div>
       <span className="sr-only">{label}…</span>
@@ -308,7 +348,7 @@ function ToolDescription({ description }: { readonly description: string }) {
   const text = description || "This tool does not include a description.";
   const long = text.length > 360 || text.split(/\r?\n/).length > 6;
   return (
-    <div className="tool-description text-muted-foreground text-[13px] leading-[1.65] mt-3.5 wrap-anywhere [&_p]:[margin:0_0_9px] [&_p:last-child]:mb-0 [&_ul]:[margin:6px_0_9px_18px] [&_ol]:[margin:6px_0_9px_18px] [&_code]:font-mono [&_code]:text-[11px] [&_a]:underline [&_a]:underline-offset-[2px] [&_h1]:text-foreground [&_h1]:text-[13px] [&_h1]:font-semibold [&_h1]:[margin:10px_0_5px] [&_h2]:text-foreground [&_h2]:text-[13px] [&_h2]:font-semibold [&_h2]:[margin:10px_0_5px] [&_h3]:text-foreground [&_h3]:text-[13px] [&_h3]:font-semibold [&_h3]:[margin:10px_0_5px]">
+    <div className="tool-description text-muted-foreground text-sm leading-[1.65] mt-5 wrap-anywhere [&_p]:[margin:0_0_9px] [&_p:last-child]:mb-0 [&_ul]:[margin:6px_0_9px_18px] [&_ol]:[margin:6px_0_9px_18px] [&_code]:font-mono [&_code]:text-[11px] [&_a]:underline [&_a]:underline-offset-[2px] [&_h1]:text-foreground [&_h1]:text-[13px] [&_h1]:font-semibold [&_h1]:[margin:10px_0_5px] [&_h2]:text-foreground [&_h2]:text-[13px] [&_h2]:font-semibold [&_h2]:[margin:10px_0_5px] [&_h3]:text-foreground [&_h3]:text-[13px] [&_h3]:font-semibold [&_h3]:[margin:10px_0_5px]">
       <div
         className={cn(
           long &&
@@ -330,6 +370,251 @@ function ToolDescription({ description }: { readonly description: string }) {
           {expanded ? "Show less" : "Show more"}
         </Button>
       )}
+    </div>
+  );
+}
+
+type ToolNode =
+  | {
+      readonly kind: "group";
+      readonly key: string;
+      readonly label: string;
+      readonly children: readonly ToolNode[];
+      readonly size: number;
+    }
+  | { readonly kind: "tool"; readonly tool: ToolSummary; readonly label: string };
+
+interface Entry {
+  readonly tool: ToolSummary;
+  readonly segments: readonly string[];
+}
+
+/**
+ * Group tools by the dotted parts of their names, keeping catalog order. Within a level, a
+ * `prefix_` shared by several tools becomes a group too, e.g. `accounts_connect` and
+ * `accounts_rename` under Accounts.
+ */
+function buildTree(tools: readonly ToolSummary[]): readonly ToolNode[] {
+  return nest(
+    tools.map((tool) => ({ tool, segments: tool.name.split(".") })),
+    "",
+  );
+}
+
+const underscorePrefix = (segment: string) => {
+  const at = segment.indexOf("_");
+  return at > 0 && at < segment.length - 1 ? segment.slice(0, at) : undefined;
+};
+
+function nest(entries: readonly Entry[], parent: string): readonly ToolNode[] {
+  const shared = new Map<string, number>();
+  for (const entry of entries) {
+    const prefix = entry.segments.length === 1 ? underscorePrefix(entry.segments[0]!) : undefined;
+    if (prefix !== undefined) shared.set(prefix, (shared.get(prefix) ?? 0) + 1);
+  }
+  const order: Array<{ readonly group: string } | { readonly entry: Entry }> = [];
+  const groups = new Map<string, Entry[]>();
+  for (const entry of entries) {
+    const [head = "", ...rest] = entry.segments;
+    const prefix = rest.length === 0 ? underscorePrefix(head) : undefined;
+    const split =
+      rest.length > 0
+        ? { group: head, segments: rest }
+        : prefix !== undefined && (shared.get(prefix) ?? 0) > 1
+          ? { group: prefix, segments: [head.slice(prefix.length + 1)] }
+          : undefined;
+    if (split === undefined) {
+      order.push({ entry });
+      continue;
+    }
+    const members = groups.get(split.group);
+    if (members === undefined) {
+      groups.set(split.group, [{ tool: entry.tool, segments: split.segments }]);
+      order.push({ group: split.group });
+    } else members.push({ tool: entry.tool, segments: split.segments });
+  }
+  return order.map((item): ToolNode => {
+    if ("entry" in item)
+      return { kind: "tool", tool: item.entry.tool, label: humanize(item.entry.segments[0]!) };
+    const members = groups.get(item.group) ?? [];
+    const key = parent === "" ? item.group : `${parent}/${item.group}`;
+    return {
+      kind: "group",
+      key,
+      label: humanize(item.group),
+      children: nest(members, key),
+      size: members.length,
+    };
+  });
+}
+
+function groupKeys(nodes: readonly ToolNode[]): readonly string[] {
+  return nodes.flatMap((node) =>
+    node.kind === "group" ? [node.key, ...groupKeys(node.children)] : [],
+  );
+}
+
+/** Each tool's short label in the tree. */
+function treeIndex(nodes: readonly ToolNode[]) {
+  const leafLabels = new Map<string, string>();
+  const walk = (level: readonly ToolNode[]) => {
+    for (const node of level) {
+      if (node.kind === "group") walk(node.children);
+      else leafLabels.set(node.tool.name, node.label);
+    }
+  };
+  walk(nodes);
+  return { leafLabels };
+}
+
+function ToolTree({
+  nodes,
+  depth,
+  current,
+  collapsed,
+  onToggle,
+  onSelect,
+}: {
+  readonly nodes: readonly ToolNode[];
+  readonly depth: number;
+  readonly current: string | undefined;
+  readonly collapsed: ReadonlySet<string>;
+  readonly onToggle: (key: string) => void;
+  readonly onSelect: (tool: string) => void;
+}) {
+  return (
+    <ul className={cn("space-y-px", depth > 0 && "ml-[15px] border-l pl-1.5")}>
+      {nodes.map((node) =>
+        node.kind === "group" ? (
+          <li key={`group:${node.key}`}>
+            <button
+              type="button"
+              aria-expanded={!collapsed.has(node.key)}
+              onClick={() => onToggle(node.key)}
+              className="flex min-h-7.5 w-full items-center gap-1.5 rounded-md px-2 text-left text-[13px] font-medium text-foreground transition-colors hover:bg-muted focus-visible:outline-ring max-[740px]:min-h-11"
+            >
+              <HugeiconsIcon
+                icon={ArrowRight01Icon}
+                size={14}
+                className={cn(
+                  "shrink-0 text-muted-foreground transition-transform",
+                  !collapsed.has(node.key) && "rotate-90",
+                )}
+                aria-hidden
+              />
+              <span className="min-w-0 flex-1 truncate">{node.label}</span>
+              <span className="text-[11px] font-normal tabular-nums text-muted-foreground">
+                {node.size}
+              </span>
+            </button>
+            {!collapsed.has(node.key) && (
+              <ToolTree
+                nodes={node.children}
+                depth={depth + 1}
+                current={current}
+                collapsed={collapsed}
+                onToggle={onToggle}
+                onSelect={onSelect}
+              />
+            )}
+          </li>
+        ) : (
+          <li key={`tool:${node.tool.name}`}>
+            <button
+              type="button"
+              title={node.tool.name}
+              aria-label={node.tool.name}
+              aria-pressed={current === node.tool.name}
+              onClick={() => onSelect(node.tool.name)}
+              className={cn(
+                "flex min-h-7.5 w-full items-center gap-2 rounded-md px-2 text-left text-[13px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-ring max-[740px]:min-h-11",
+                current === node.tool.name && "bg-muted font-medium text-foreground",
+              )}
+            >
+              <HugeiconsIcon
+                icon={effectIcon(toolEffect(node.tool))}
+                size={14}
+                strokeWidth={1.7}
+                className="shrink-0 opacity-70"
+                aria-hidden
+              />
+              <span className="truncate">{node.label}</span>
+            </button>
+          </li>
+        ),
+      )}
+    </ul>
+  );
+}
+
+type Effect = "read" | "change" | "delete" | "unknown";
+
+/** What running the tool does, from its own read-only and destructive hints. */
+function toolEffect(tool: ToolSummary): Effect {
+  const readOnly = tool.readOnly ?? tool.annotations?.readOnlyHint;
+  if (readOnly === true) return "read";
+  if (tool.annotations?.destructiveHint === true) return "delete";
+  return readOnly === false ? "change" : "unknown";
+}
+
+/** Read at render: a module-level table can capture icons before their chunk initializes on the server. */
+const effectIcon = (effect: Effect) => {
+  switch (effect) {
+    case "read":
+      return ViewIcon;
+    case "change":
+      return PencilEdit01Icon;
+    case "delete":
+      return Delete02Icon;
+    case "unknown":
+      return SourceCodeIcon;
+  }
+};
+
+const effects: Record<Effect, { readonly label?: string; readonly badge?: string }> = {
+  read: { label: "Only reads data", badge: "bg-sky-500/10 text-sky-700 dark:text-sky-300" },
+  change: { label: "Makes changes", badge: "bg-amber-500/10 text-amber-700 dark:text-amber-300" },
+  delete: { label: "Can delete data", badge: "bg-red-500/10 text-red-700 dark:text-red-300" },
+  unknown: {},
+};
+
+/** A description that only repeats the title adds nothing. */
+const sameText = (a: string, b: string) =>
+  a
+    .trim()
+    .replace(/[.\s]+$/, "")
+    .toLowerCase() === b.trim().toLowerCase();
+
+const toolTitle = (tool: ToolSummary, label: string | undefined) =>
+  tool.title ?? tool.annotations?.title ?? label ?? humanize(tool.name);
+
+function ToolHeading({
+  tool,
+  label,
+}: {
+  readonly tool: ToolSummary;
+  readonly label: string | undefined;
+}) {
+  const kind = toolEffect(tool);
+  const effect = effects[kind];
+  return (
+    <div className="flex items-start gap-3.5">
+      <span className="flex size-10 shrink-0 items-center justify-center rounded-xl border bg-muted/40 text-muted-foreground">
+        <HugeiconsIcon icon={effectIcon(kind)} size={19} strokeWidth={1.7} aria-hidden />
+      </span>
+      <div className="min-w-0">
+        <h2 className="text-xl font-semibold tracking-tight wrap-anywhere">
+          {toolTitle(tool, label)}
+        </h2>
+        <div className="mt-1 flex flex-wrap items-center gap-2">
+          <code className="font-mono text-xs text-muted-foreground wrap-anywhere">{tool.name}</code>
+          {effect.label !== undefined && (
+            <span className={cn("rounded-md px-1.5 py-0.5 text-[11px] font-medium", effect.badge)}>
+              {effect.label}
+            </span>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

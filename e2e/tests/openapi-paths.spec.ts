@@ -87,10 +87,10 @@ layer(HostedLive, { excludeTestServices: true })("OpenAPI paths", (it) => {
                   tools: {
                     kind: "selected",
                     names: [
-                      "mutations.removeKey",
-                      "mutations.removeArray",
-                      "mutations.removeObject",
-                      "mutations.removeLabel",
+                      "projects.removeKey",
+                      "projects.removeArray",
+                      "projects.removeObject",
+                      "projects.removeLabel",
                     ],
                   },
                 },
@@ -108,7 +108,7 @@ layer(HostedLive, { excludeTestServices: true })("OpenAPI paths", (it) => {
               {
                 name: "execute",
                 arguments: {
-                  code: `return await tools[${JSON.stringify(app.slug)}].profiles[${JSON.stringify(profile.id)}].mutations[${JSON.stringify(tool)}](${JSON.stringify({ accountId: account.id, input: { path: { key } } })});`,
+                  code: `return await tools[${JSON.stringify(app.slug)}].profiles[${JSON.stringify(profile.id)}].projects[${JSON.stringify(tool)}](${JSON.stringify({ accountId: account.id, input: { path: { key } } })});`,
                 },
               },
               undefined,

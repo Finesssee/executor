@@ -10,6 +10,7 @@ import { Resource } from "../support/contracts.ts";
 import { oauthSetupIssuer } from "../support/oauth-setup-issuer.ts";
 import { createProfile } from "../support/profiles.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const App = Schema.Struct({ id: Schema.String });
 const SetupStatus = Schema.Struct({ status: Schema.String });
@@ -34,19 +35,20 @@ layer(HostedLive, { excludeTestServices: true })("OAuth cache scope", (it) => {
           files: [
             {
               path: "index.ts",
-              content: `import { defineApp, defineProvider, oauth2, query, object, string } from "apps";
+              content: `import { defineApp, defineProvider, oauth2, query, object, string, router } from "apps";
 const service = defineProvider({ name: ${JSON.stringify(name)}, auth: { oauth: oauth2({ discover: ${JSON.stringify(`${issuer.origin}/mcp`)} }) } });
 export default defineApp({ accounts: { service } }, async ({ accounts, cache }) => ({
-  queries: {
+  tools: router({
     cached: query({ input: object({}) }, async ({ fetch }) => {
       // Present the current token so every call exercises the renewal the host performed.
       const checked = await fetch(${JSON.stringify(`${issuer.origin}/resource`)}, { headers: { authorization: "Bearer " + accounts.service.fields.access_token } });
       const value = await cache.forAccount(accounts.service).get({ key: "catalog", schema: string(), freshFor: "1 hour", load: async () => crypto.randomUUID() });
       return { value, tokenChecked: checked.ok };
     }),
-  },
+  }),
 }));`,
             },
+            appsManifest,
           ],
         });
         expect(deployed.status, JSON.stringify(deployed.body)).toBe(200);
@@ -119,7 +121,7 @@ export default defineApp({ accounts: { service } }, async ({ accounts, cache }) 
             actors.owner,
             "POST",
             `${prefix}/apps/${app.id}/tools/call`,
-            { profile: profile.id, tool: "queries.cached", input: {} },
+            { profile: profile.id, tool: "cached", input: {} },
           );
           expect(response.status, JSON.stringify(response.body)).toBe(200);
           const result = yield* body(Cached, response);

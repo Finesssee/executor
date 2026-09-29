@@ -34,6 +34,32 @@ Rosetta, matching the optional dependencies installed by the package manager.
 Windows installers are currently unsigned. Automatic desktop updates remain
 unconfigured; use the manual installer to update Executor 2.
 
+## The apps framework release
+
+New apps pin the `apps` version in `packages/apps/package.json`, so every host
+must ship a version that npm holds with exactly the content this checkout
+builds. Every change to the framework, including the workspace libraries
+bundled into it, bumps that version in its PR (and the host protocol when the
+host boundary changes). Merging allocates the numbers and the deploy from
+`main` publishes them. Never publish `apps` from a branch or by hand; see
+[publishing apps](notes/apps-publishing.md).
+
+`scripts/releases/apps-published.ts` runs after `bun run apps:build`. It packs
+the staged package and compares every file with the published archive of the
+same version:
+
+- The deploy workflow's `apps` job runs it with `--publish` in the `release`
+  environment before the production deploy job. An unpublished version is
+  published with `--tag beta`; a published one is only compared.
+- Publishing runs of **Executor releases** run it without a flag, so the
+  version must already be on npm unchanged.
+- Pull request checks run it with `--allow-unpublished`: an unpublished bump
+  only warns, while a published version with different content fails.
+
+Pull requests also run `scripts/releases/apps-bumped.ts`, which builds the base
+commit's package and fails when the staged package changed but the version did
+not.
+
 ## Publish beta
 
 Set the version to an unused `2.0.0-beta.N`, merge the reviewed release changes,

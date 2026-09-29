@@ -43,7 +43,7 @@ Search returns the exact callable path and the TypeScript signature for each
 tool. The paths look like this:
 
 ```js
-const projects = await tools.vercel.queries.listProjects({});
+const projects = await tools.vercel.listProjects({});
 return projects.projects.map((project) => project.name);
 ```
 

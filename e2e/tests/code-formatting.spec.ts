@@ -8,6 +8,7 @@ import { Browser } from "../support/browser.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { App } from "../support/contracts.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 const Source = Schema.Struct({
   files: Schema.Array(Schema.Struct({ path: Schema.String, content: Schema.String })),
 });
@@ -70,10 +71,11 @@ layer(HostedLive, { excludeTestServices: true })("Code formatting", (it) => {
           {
             path: "index.ts",
             content:
-              'import {defineApp,query,object} from "apps";export default defineApp({accounts:{}},{queries:{ping:query({input:object({})},async()=>"pong")}});',
+              'import {defineApp,query,object, router} from "apps";export default defineApp({accounts:{}},{tools: router({ ping:query({input:object({})},async()=>"pong") })});',
           },
           ...snippets,
           largeSnippet,
+          appsManifest,
         ];
         const deployed = yield* api.request(actors.owner, "POST", `${prefix}/apps/deploy`, {
           name: `Formatting ${randomUUID().slice(0, 6)}`,

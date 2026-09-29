@@ -10,6 +10,7 @@ import {
   query,
   type MutationContext,
   type QueryContext,
+  router,
 } from "apps";
 import { always } from "apps/operations/approval";
 
@@ -24,8 +25,10 @@ const list = query({ input: object({}) }, async (ctx: QueryContext<typeof requir
 );
 
 export default defineApp(requirements, {
-  queries: { list },
-  mutations: { record },
+  tools: router({
+    list,
+    record,
+  }),
   schedules: {
     heartbeat: interval({ minutes: 5 }, record, { message: "Heartbeat" }),
     morning: cron({ expression: "0 9 * * MON-FRI", timezone: "America/Los_Angeles" }, record, {

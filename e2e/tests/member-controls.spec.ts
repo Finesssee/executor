@@ -12,12 +12,13 @@ import { HostedLive, withHostedCase } from "../support/case.ts";
 import { App, Resource } from "../support/contracts.ts";
 import { holdQuery } from "../support/query-transition.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const Access = Schema.Struct({ revision: Schema.String });
 const Group = Schema.Struct({ id: Schema.String, revision: Schema.String });
-const source = `import { defineApp, defineProvider, secrets, query, object, string } from "apps";
+const source = `import { defineApp, defineProvider, secrets, query, object, string, router } from "apps";
 const service = defineProvider({name:"Member controls fixture",auth:{key:secrets({label:"Key",fields:object({token:string()})})}});
-export default defineApp({accounts:{service:service.many()}},{queries:{hello:query({input:object({})},async()=>"Hello")}});`;
+export default defineApp({accounts:{service:service.many()}},{tools: router({ hello:query({input:object({})},async()=>"Hello") })});`;
 const bounds = (page: Page) =>
   page.locator(".app-overview > div > section").evaluateAll((cards) =>
     cards.map((card) => {
@@ -44,7 +45,7 @@ layer(HostedLive, { excludeTestServices: true })("Member controls", (it) => {
             App,
             yield* api.request(actors.owner, "POST", `${prefix}/apps/deploy`, {
               name,
-              files: [{ path: "index.ts", content: source }],
+              files: [{ path: "index.ts", content: source }, appsManifest],
             }),
           );
           const accounts: string[] = [],
@@ -346,25 +347,77 @@ layer(HostedLive, { excludeTestServices: true })("Member controls", (it) => {
               ).toBe(true);
             }
             yield* browser.use("Open shared account", (page) =>
-              page.goto(`/org/${actors.organization.slug}/accounts/${account.id}`),
+              page.goto(`/org/${actors.organization.slug}/accounts?account=${account.id}`),
             );
-            for (const label of ["Save name", "Update credentials", "Save access", "Reset changes"])
-              expect(
-                yield* browser.use(`Account ${label} is disabled`, (page) =>
-                  page.getByRole("button", { name: label, exact: true }).isDisabled(),
-                ),
-              ).toBe(true);
+            const openAccountAction = (item: string) =>
+              browser.use(`Open ${item} for the shared account`, (page) =>
+                page
+                  .getByRole("button", { name: `Manage ${name}`, exact: true })
+                  .click()
+                  .then(() => page.getByRole("menuitem", { name: item, exact: true }).click())
+                  .then(() => page.getByRole("dialog").waitFor()),
+              );
+            const closeAccountAction = browser.use("Close the account dialog", (page) =>
+              page
+                .getByRole("dialog")
+                .getByRole("button", { name: "Close", exact: true })
+                .click()
+                .then(() => page.getByRole("dialog").waitFor({ state: "hidden" })),
+            );
             expect(
-              yield* browser.use("Delete account is disabled", (page) =>
-                page.getByRole("link", { name: "Delete account", exact: true }).isDisabled(),
+              yield* browser.use("Update credentials is disabled", (page) =>
+                page
+                  .getByRole("button", { name: `Manage ${name}`, exact: true })
+                  .click()
+                  .then(() =>
+                    page
+                      .getByRole("menuitem", { name: "Update credentials", exact: true })
+                      .getAttribute("aria-disabled"),
+                  ),
+              ),
+            ).toBe("true");
+            yield* browser.use("Close the account menu", (page) => page.keyboard.press("Escape"));
+            yield* openAccountAction("Rename");
+            expect(
+              yield* browser.use("Save name is disabled", (page) =>
+                page
+                  .getByRole("dialog")
+                  .getByRole("button", { name: "Save name", exact: true })
+                  .isDisabled(),
               ),
             ).toBe(true);
             expect(
               yield* browser.use("Account name remains visible and disabled", (page) =>
-                page.getByRole("textbox", { name: "Account name", exact: true }).isDisabled(),
+                page
+                  .getByRole("dialog")
+                  .getByRole("textbox", { name: "Account name", exact: true })
+                  .isDisabled(),
+              ),
+            ).toBe(true);
+            yield* closeAccountAction;
+            yield* openAccountAction("Manage access");
+            for (const label of ["Save access", "Reset changes"])
+              expect(
+                yield* browser.use(`Account ${label} is disabled`, (page) =>
+                  page
+                    .getByRole("dialog")
+                    .getByRole("button", { name: label, exact: true })
+                    .isDisabled(),
+                ),
+              ).toBe(true);
+            yield* browser.checkpoint(`${width} member account access`);
+            yield* closeAccountAction;
+            yield* openAccountAction("Delete account");
+            expect(
+              yield* browser.use("Delete account is disabled", (page) =>
+                page
+                  .getByRole("dialog")
+                  .getByRole("button", { name: "Delete account", exact: true })
+                  .isDisabled(),
               ),
             ).toBe(true);
             yield* browser.checkpoint(`${width} member shared account`);
+            yield* closeAccountAction;
             yield* browser.use("Open member group", (page) =>
               page.goto(`/org/${actors.organization.slug}/groups/${group.id}`),
             );

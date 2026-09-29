@@ -1,6 +1,6 @@
 import { hostedProfileHandlers } from "./profiles.ts";
-import { appManagementHandlers } from "@executor-js/app-management";
-import { HostedAppManagementApi } from "../contracts/app-management.ts";
+import { appManagementHandlers, frameworkHandlers } from "@executor-js/app-management";
+import { HostedAppManagementApi, HostedFrameworkApi } from "../contracts/app-management.ts";
 import { hostedAppAccess } from "../app-management.ts";
 import { hostedResourceAccessHandlers } from "./resource-access.ts";
 import { hostedScheduleHandlers } from "./schedules.ts";
@@ -58,6 +58,8 @@ export const hostedHandlers = Layer.mergeAll(
   appManagementHandlers(HostedAppManagementApi, HostedApi.identifier).pipe(
     Layer.provide(hostedAppAccess),
   ),
+  // Each host provides FrameworkDocumentation from its packaged authoring assets.
+  frameworkHandlers(HostedFrameworkApi, HostedApi.identifier).pipe(Layer.provide(hostedAppAccess)),
   hostedProfileHandlers,
   hostedScheduleHandlers,
   health,

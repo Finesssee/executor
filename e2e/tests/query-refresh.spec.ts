@@ -10,6 +10,7 @@ import { App } from "../support/contracts.ts";
 import { Evidence } from "../support/evidence.ts";
 import { holdQuery, refreshVisiblePage } from "../support/query-transition.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 layer(HostedLive, { excludeTestServices: true })("Dashboard refresh", (it) => {
   it.effect(scenarios.membersRefresh.title, (context) =>
@@ -106,13 +107,16 @@ layer(HostedLive, { excludeTestServices: true })("Dashboard refresh", (it) => {
             {
               path: "index.ts",
               content: `
-import { defineApp, mutation, object, string } from "apps";
+import { defineApp, mutation, object, string, router } from "apps";
 export default defineApp({ accounts: {} }, async () => ({
-  mutations: { echo: mutation({ description: "Echo text", input: object({ text: string() }) },
-    async (_, input) => input.text) }
+  tools: router({
+    echo: mutation({ description: "Echo text", input: object({ text: string() }) },
+    async (_, input) => input.text),
+  })
 }));
 `,
             },
+            appsManifest,
           ],
         });
         expect(deployed.status).toBe(200);

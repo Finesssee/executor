@@ -7,6 +7,7 @@ import { TestLive, withCase } from "../support/case.ts";
 import { Resource } from "../support/contracts.ts";
 import { Target } from "../support/platform.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 const ProviderApp = Schema.Struct({
   app: Schema.Struct({
     id: Schema.String,
@@ -30,12 +31,13 @@ layer(TestLive, { excludeTestServices: true })("Local resources", (it) => {
         const files = [
           {
             path: "index.ts",
-            content: `import {defineApp,defineProvider,secrets,query,workflow,object,string} from "apps";
+            content: `import {defineApp,defineProvider,secrets,query,workflow,object,string, router} from "apps";
 const service=defineProvider({name:"Local resources",auth:{key:secrets({label:"Key",fields:object({token:string()})})}});
 const identity=query({input:object({})},async ctx=>ctx.accounts.service.id);
 const capture=workflow({input:object({})},async ctx=>ctx.step.do("identity",async step=>step.accounts.service.id));
-export default defineApp({accounts:{service}},{queries:{identity},workflows:{capture}});`,
+export default defineApp({accounts:{service}},{tools: router({ identity }),workflows:{capture}});`,
           },
+          appsManifest,
         ];
         const { app } = yield* body(
           ProviderApp,
@@ -92,7 +94,7 @@ export default defineApp({accounts:{service}},{queries:{identity},workflows:{cap
         for (const label of ["Personal", "Work"]) {
           yield* choose(label);
           yield* browser.use(`${label} local tools load`, (page) =>
-            page.getByRole("button", { name: "queries.identity", exact: true }).waitFor(),
+            page.getByRole("button", { name: "identity", exact: true }).waitFor(),
           );
         }
         yield* browser.use("Open local workflows", (page) =>
@@ -127,8 +129,9 @@ export default defineApp({accounts:{service}},{queries:{identity},workflows:{cap
             files: [
               {
                 path: "index.ts",
-                content: `import {defineApp,workflow,query,object} from "apps";export default defineApp({accounts:{}}, {queries:{hello:query({input:object({})},async()=>"hello")},workflows:{capture:workflow({input:object({})},async ctx=>ctx.step.do("plain",async()=>"No account required"))}});`,
+                content: `import {defineApp,workflow,query,object, router} from "apps";export default defineApp({accounts:{}}, {tools: router({ hello:query({input:object({})},async()=>"hello") }),workflows:{capture:workflow({input:object({})},async ctx=>ctx.step.do("plain",async()=>"No account required"))}});`,
               },
+              appsManifest,
             ],
           }),
         );

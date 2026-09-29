@@ -7,6 +7,7 @@ import { Target } from "../support/platform.ts";
 import { TestLive, withCase } from "../support/case.ts";
 import { McpClient } from "../support/mcp-client.ts";
 import { Evidence } from "../support/evidence.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const App = Schema.Struct({
   id: Schema.String,
@@ -38,6 +39,7 @@ const files = (version: string) => [
     content: `---\nname: app-authoring\ndescription: App-specific instructions.\n---\nVersion ${version}.\n`,
   },
   { path: "skills/app-authoring/references/example.md", content: `Example ${version}.` },
+  appsManifest,
 ];
 
 layer(TestLive, { excludeTestServices: true })("Local skills", (it) => {
@@ -144,7 +146,7 @@ layer(TestLive, { excludeTestServices: true })("Local skills", (it) => {
             client.callTool(
               {
                 name: "execute",
-                arguments: { code: 'return await tools.search({ query: "appProfiles_create" });' },
+                arguments: { code: 'return await tools.search({ query: "appProfiles.create" });' },
               },
               undefined,
               { signal },
@@ -158,7 +160,7 @@ layer(TestLive, { excludeTestServices: true })("Local skills", (it) => {
             value: {
               items: expect.arrayContaining([
                 expect.objectContaining({
-                  path: expect.stringContaining("appProfiles_create"),
+                  path: expect.stringContaining("appProfiles.create"),
                   signature: expect.stringContaining("idempotencyKey"),
                 }),
               ]),
@@ -174,11 +176,11 @@ layer(TestLive, { excludeTestServices: true })("Local skills", (it) => {
                 arguments: {
                   code: `const executor = ${referenceTools};
 const path = { app: ${JSON.stringify(app.id)} };
-const created = await executor.mutations.appProfiles_create({ path, body: { owner: "local", subject: "local", accounts: {}, idempotencyKey: "management-docs-profile" } });
+const created = await executor.appProfiles.create({ path, body: { owner: "local", subject: "local", accounts: {}, idempotencyKey: "management-docs-profile" } });
 const target = { ...path, profile: created.id };
-const read = await executor.queries.appProfiles_get({ path: target });
-const updated = await executor.mutations.appProfiles_update({ path: target, body: { expectedRevision: read.revision, accounts: {} } });
-const listed = await executor.queries.appProfiles_list({ path });
+const read = await executor.appProfiles.get({ path: target });
+const updated = await executor.appProfiles.update({ path: target, body: { expectedRevision: read.revision, accounts: {} } });
+const listed = await executor.appProfiles.list({ path });
 return { sameProfile: created.id === read.id && read.id === updated.id, listed: listed.some((profile) => profile.id === created.id), revision: updated.revision, previousRevision: read.revision };`,
                 },
               },
@@ -213,7 +215,7 @@ return { sameProfile: created.id === read.id && read.id === updated.id, listed: 
               {
                 name: "execute",
                 arguments: {
-                  code: `const found = await ${referenceTools}.queries.framework_search({query: "withOptimisticUpdate"}); return await ${referenceTools}.queries.framework_describe({symbol: "AppMutation.withOptimisticUpdate", ...found.reference});`,
+                  code: `const found = await ${referenceTools}.framework.search({query: {text: "withOptimisticUpdate"}}); return await ${referenceTools}.framework.describe({query: {symbol: "AppMutation.withOptimisticUpdate", ...found.reference}});`,
                 },
               },
               undefined,

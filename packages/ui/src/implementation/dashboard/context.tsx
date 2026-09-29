@@ -1,8 +1,8 @@
 import { createContext, useContext, type ReactNode } from "react";
-import { useAtomValue, useAtomRefresh } from "@effect/atom-react";
+import { RegistryContext, useAtomValue, useAtomRefresh } from "@effect/atom-react";
 import { Option } from "effect";
 import { Skeleton } from "../components/skeleton.tsx";
-import { AsyncResult } from "effect/unstable/reactivity";
+import { AsyncResult, type Atom } from "effect/unstable/reactivity";
 import type { DashboardBindings, Query, QueryProps } from "../../contracts/dashboard.ts";
 
 const Context = createContext<DashboardBindings | null>(null);
@@ -98,3 +98,13 @@ export function LoadingRows({ count = 5 }: { readonly count?: number }) {
     </div>
   );
 }
+
+/**
+ * Start reads a component needs before it reads the first of them. On the server a render stops
+ * at its first unresolved read, so reads that do not depend on each other would otherwise run one
+ * after another. The browser already starts every read in the same render.
+ */
+export const usePreload = (...atoms: ReadonlyArray<Atom.Atom<unknown>>) => {
+  const registry = useContext(RegistryContext);
+  if (typeof window === "undefined") for (const atom of atoms) registry.mount(atom);
+};

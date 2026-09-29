@@ -24,7 +24,7 @@ const AppLink = ({ app, view, tool, profile, ...props }: AppLinkProps) => {
   );
 };
 const AccountLink = ({ account, ...props }: AccountLinkProps) => (
-  <Link to="/accounts/$accountId" params={{ accountId: account }} {...props} />
+  <Link to="/accounts" search={{ account }} {...props} />
 );
 /** Typed navigation and local data are supplied outside the shared UI. */
 export function LocalDashboard({ children }: { readonly children: ReactNode }) {

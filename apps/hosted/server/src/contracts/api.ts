@@ -1,7 +1,7 @@
 import { HostedProfiles } from "./profiles.ts";
 import { HostedResourceAccess } from "./resource-access.ts";
 import { HostedSchedules } from "./schedules.ts";
-import { HostedAppAccess, HostedAppManagementApi } from "./app-management.ts";
+import { HostedAppAccess, HostedAppManagementApi, HostedFrameworkApi } from "./app-management.ts";
 export { HostedAppManagementApi } from "./app-management.ts";
 /** Common hosted contracts. Product reads require a hosted session. */
 import { CatalogEntry, CatalogUnavailable } from "@executor-js/catalog/contracts";
@@ -51,7 +51,7 @@ export interface HostedApiDocument extends Omit<OpenApi.OpenAPISpec, "components
 
 /** Tool schemas keep parameter schemas, not parameter descriptions, so this rides on the schema. */
 const organizationDescription =
-  "Organization ID or slug. Call context_get (GET /api/context) to read the organization for the current credential.";
+  "Organization ID or slug. Call context.get (GET /api/context) to read the organization for the current credential.";
 
 /** Generate the complete product document; security follows the middleware that serves each endpoint. */
 export const hostedApiDocument = <Id extends string, Groups extends HttpApiGroup.Constraint>(
@@ -197,4 +197,5 @@ export const HostedApi = HttpApi.make("executor-hosted")
       )
       .middleware(RequireUser),
   )
-  .addHttpApi(HostedAppManagementApi);
+  .addHttpApi(HostedAppManagementApi)
+  .addHttpApi(HostedFrameworkApi);

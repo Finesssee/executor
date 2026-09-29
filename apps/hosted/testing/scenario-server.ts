@@ -380,7 +380,7 @@ const main = Effect.gen(function* () {
     { flag: "wx", mode: 0o600 },
   );
   yield* Effect.addFinalizer(() => fs.remove(output).pipe(Effect.orDie));
-  yield* Effect.never;
+  return yield* Effect.never;
 });
 NodeRuntime.runMain(
   Effect.scoped(main).pipe(

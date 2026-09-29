@@ -7,6 +7,7 @@ import { Api, body } from "../support/api.ts";
 import { Actors } from "../support/actors.ts";
 import { App } from "../support/contracts.ts";
 import { createProfile } from "../support/profiles.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 layer(HostedLive, { excludeTestServices: true })("App caching", (it) => {
   it.effect(scenarios.dynamicOnlyApp.title, (context) =>
@@ -22,15 +23,16 @@ layer(HostedLive, { excludeTestServices: true })("App caching", (it) => {
             {
               path: "index.ts",
               content: `
-import { defineApp, dynamicTools, query, object } from "apps";
+import { defineApp, dynamicRouter, query, object } from "apps";
 export default defineApp({ accounts: {} }, {
-  dynamicTools: dynamicTools({
-    list: async () => [{ name: "queries.ping", description: "Return pong", inputSchema: { type: "object", properties: {} }, readOnly: true }],
-    resolve: async name => name === "queries.ping" ? query({ input: object({}) }, async () => "pong") : undefined,
+  tools: dynamicRouter({
+    list: async () => [{ name: "ping", description: "Return pong", inputSchema: { type: "object", properties: {} }, readOnly: true }],
+    resolve: async name => name === "ping" ? query({ input: object({}) }, async () => "pong") : undefined,
   }),
 });
 `,
             },
+            appsManifest,
           ],
         });
         expect(dynamicOnly.status).toBe(200);
@@ -45,7 +47,8 @@ export default defineApp({ accounts: {} }, {
           `${dynamicPath}/tools/call`,
           {
             profile: dynamicProfile.id,
-            tool: "queries.ping",
+            tool: "ping",
+            kind: "query",
             input: {},
           },
         );

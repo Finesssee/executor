@@ -10,8 +10,11 @@ export {
   type McpToolResult,
 } from "./contracts/mcp.ts";
 
-/** Discover operations for the selected account. Kinds override uncertain upstream read-only hints. */
-export const mcpOperations = (options: McpCatalogOptions, kinds: OperationKinds = {}) =>
+/**
+ * A router over a server's tools for the selected account. Its title, description and
+ * instructions come from the server. Kinds override uncertain upstream read-only hints.
+ */
+export const mcpRouter = (options: McpCatalogOptions, kinds: OperationKinds = {}) =>
   Effect.runPromise(
     mcpCatalog(options, kinds),
     options.signal === undefined ? {} : { signal: options.signal },

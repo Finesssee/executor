@@ -81,7 +81,14 @@ export const hostedAppDataHandlers = HttpApiBuilder.group(HostedApi, "appData", 
           const authorized = access.pipe(Effect.provideContext(context));
           const source = yield* executor.appData.subscribe({ app: params.app, ...payload });
           return Stream.merge(
-            source.pipe(Stream.mapEffect((snapshot) => authorized.pipe(Effect.as(snapshot)))),
+            // The first result belongs to this request, which was just authorized.
+            source.pipe(
+              Stream.mapEffect((snapshot) =>
+                snapshot.revision === 0
+                  ? Effect.succeed(snapshot)
+                  : authorized.pipe(Effect.as(snapshot)),
+              ),
+            ),
             Stream.tick("5 seconds").pipe(
               Stream.mapEffect(() => authorized),
               Stream.drain,

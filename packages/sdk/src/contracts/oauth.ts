@@ -180,6 +180,7 @@ export const OAuthSetupFailed = UserFacingError.define({
       "resource_mismatch",
       "client_not_approved",
       "client_registration_required",
+      "client_metadata_rejected",
       "registration_rejected",
       "incompatible_response",
       "invalid_client",
@@ -270,6 +271,22 @@ export const OAuthSetupFailed = UserFacingError.define({
             },
             agentFixable: false,
           },
+          // RFC 7591 section 3.2.2. Cloudflare Access returns it for a callback URL outside
+          // its allowed redirect URIs; with grant types matched to the server's metadata, that
+          // allowlist is the likeliest cause.
+          client_metadata_rejected: {
+            title: "Service did not accept Executor’s callback URL",
+            description:
+              "The service refused the client details Executor registered. This usually means Executor’s callback URL is not in the service’s allowed redirect URIs.",
+            recovery: {
+              action:
+                "Ask the service’s administrator to add Executor’s callback URL to its allowed redirect URIs, or create an OAuth app with the service and enter its client details.",
+              instructions:
+                "The registration endpoint returned invalid_client_metadata (RFC 7591 section 3.2.2). Services with a redirect URI allowlist, such as Cloudflare Access, return it when the callback URL is not allowed. Check the service’s allowed redirect URIs for Executor’s callback URL first, then compare the other registered fields: grant types, response types, token endpoint authentication method and scopes. Do not repeatedly register clients." +
+                callback,
+            },
+            agentFixable: false,
+          },
           registration_rejected: {
             title: "Service rejected Executor’s registration",
             description: "The service refused Executor’s request to register as an OAuth client.",
@@ -335,6 +352,7 @@ export const oauthClientEntryReasons: ReadonlySet<OAuthSetupFailed["reason"]> = 
   "invalid_client",
   "client_not_approved",
   "client_registration_required",
+  "client_metadata_rejected",
   "registration_rejected",
 ]);
 /** Parsed OAuthSetupFailed failure. */
@@ -651,16 +669,27 @@ export const OAuthReconnectRequired = UserFacingError.define({
 export type OAuthReconnectRequired = typeof OAuthReconnectRequired.Type;
 
 /**
- * Renewing a saved grant failed without the service refusing it. The grant, including its
- * refresh token, is kept unchanged, so the account does not need to reconnect.
+ * Renewing a saved grant failed without the service saying the grant has ended. The grant,
+ * including its refresh token, is kept unchanged, and the next use renews it again.
  */
 export const OAuthRenewalFailed = UserFacingError.define({
   tag: "OAuthRenewalFailed",
   status: 502,
   fields: {
     account: AccountId,
-    /** An outage or temporary refusal, or a successful response Executor could not use. */
-    reason: Schema.Literals(["service_unavailable", "incompatible_response"]),
+    /**
+     * `service_unavailable`: an outage or temporary refusal. `incompatible_response`: a response
+     * Executor could not use. `client_rejected`: the service refused the OAuth client itself
+     * (`invalid_client`, `unauthorized_client`, or a 401 client-authentication challenge), which
+     * says nothing about this account's grant. `renewal_rejected`: any other OAuth error, including
+     * codes outside RFC 6749, which also does not say the grant has ended.
+     */
+    reason: Schema.Literals([
+      "service_unavailable",
+      "incompatible_response",
+      "client_rejected",
+      "renewal_rejected",
+    ]),
     cause: Schema.optional(OAuthFailureCause),
   },
   presentation: ({ reason, cause }) =>
@@ -682,6 +711,29 @@ export const OAuthRenewalFailed = UserFacingError.define({
             description:
               "The service answered Executor’s request to renew this account’s access, but its response did not match what Executor expects. The saved sign-in is kept; this is a compatibility problem, not a problem with your account.",
           },
+          client_rejected: {
+            title: "The service rejected Executor’s OAuth client",
+            description:
+              "The service refused the OAuth client Executor uses to renew this account’s access. This is a problem with the client configuration, not with the account’s sign-in, which is kept.",
+            recovery: {
+              action:
+                "Check the OAuth client ID and secret at the service. If they changed, reconnect the account and enter the current client details.",
+              instructions:
+                "The account’s saved OAuth grant is intact; do not delete or replace the account. Compare the client ID, secret and token endpoint authentication method recorded for this provider with the service’s client configuration. If the secret was rotated or the client removed, reconnect this same account with the current client details. If the configuration is correct, the fault is in how Executor authenticates the client; report it rather than reconnecting.",
+            },
+          },
+          renewal_rejected: {
+            title: "The service refused to renew this account’s access",
+            description:
+              "The service refused Executor’s request to renew this account’s access without saying the sign-in has ended. The saved sign-in is kept, and Executor tries again the next time the account is used.",
+            recovery: {
+              action:
+                "Try again in a moment. If this continues, reconnect the account from Accounts.",
+              instructions:
+                "The account’s saved OAuth grant is intact. Inspect the recorded provider error code and HTTP status. Retry a temporary refusal. If the service keeps refusing, reconnect this same account; do not replace the account or change its authentication method.",
+            },
+            retryable: true,
+          },
         } satisfies Record<typeof reason, ErrorPresentation>
       )[reason],
       cause,
@@ -698,6 +750,10 @@ export type OAuthAttemptId = typeof OAuthAttemptId.Type;
 
 /** Validated subset of authorization-server metadata used for saved grants. */
 export const OAuthTokenServer = Schema.Struct({
+  /**
+   * Microsoft identity platform's multi-tenant metadata publishes a `{tenantid}` template here;
+   * each ID token's `iss` is that template with the token's own `tid` claim substituted.
+   */
   issuer: HttpUrl,
   /**
    * The provider declared endpoints without an issuer. Executor derives `issuer` from the token
@@ -715,6 +771,8 @@ export const OAuthTokenServer = Schema.Struct({
   client_id_metadata_document_supported: Schema.optional(Schema.Boolean),
   code_challenge_methods_supported: Schema.optional(Schema.Array(Schema.String)),
   token_endpoint_auth_methods_supported: Schema.optional(Schema.Array(Schema.String)),
+  /** RFC 8414 grant types. Registration requests only advertised ones when present. */
+  grant_types_supported: Schema.optional(Schema.Array(Schema.String)),
   scopes_supported: Schema.optional(Schema.Array(Schema.String)),
 });
 export type OAuthTokenServer = typeof OAuthTokenServer.Type;
@@ -729,7 +787,6 @@ export const OAuthResource = Schema.Struct({
   resource: HttpUrl,
   authorization_servers: Schema.Array(HttpUrl),
   scopes_supported: Schema.optional(Schema.Array(Schema.String)),
-  bearer_methods_supported: Schema.optional(Schema.Array(Schema.String)),
 });
 /** This record is only read inside encrypted host state; never return it to app code. */
 const registration = {
@@ -776,7 +833,8 @@ export const OAuthAttempt = Schema.Struct({
   owner: OwnerId,
   provider: ProviderId,
   method: Schema.NonEmptyString,
-  label: Schema.String,
+  /** Absent when the account is named after sign-in. */
+  label: Schema.optionalKey(Schema.String),
   reconnect: Schema.optional(Schema.Boolean),
   redirectUri: HttpUrl,
   state: Schema.NonEmptyString,
@@ -789,20 +847,12 @@ export const OAuthAttempt = Schema.Struct({
   /** The saved client this attempt used, so a rejection can discard exactly that version. */
   savedClient: Schema.optionalKey(OAuthSavedClientRef),
   resource: Schema.optional(HttpUrl),
-  /** The protected resource advertised Bearer tokens; see `grantFields.bearerResource`. */
-  bearerResource: Schema.optional(Schema.Literal(true)),
   response: JsonObject,
 });
 export type OAuthAttempt = typeof OAuthAttempt.Type;
 /** Private refresh context. Access-token projections are stored separately on the account. */
 const grantFields = {
   resource: Schema.optional(HttpUrl),
-  /**
-   * The protected resource advertised Bearer tokens during discovery, through RFC 9728
-   * `bearer_methods_supported` or an RFC 6750 Bearer challenge. Its tokens are then used as
-   * Bearer tokens even when the service labels them with a nonstandard `token_type`.
-   */
-  bearerResource: Schema.optional(Schema.Literal(true)),
   response: JsonObject,
   expiresAt: Schema.optional(Schema.Number),
   fields: JsonObject,
@@ -817,6 +867,13 @@ export const OAuthGrant = Schema.Union([
     refreshToken: Schema.optional(Schema.NonEmptyString),
     /** The first validated ID token's `sub`. A refreshed ID token must keep it (OIDC Core §12.2). */
     idTokenSubject: Schema.optional(Schema.NonEmptyString),
+    /**
+     * The first validated ID token's `iss`, saved with its `sub` because a subject is only unique
+     * at its issuer. A refreshed ID token must keep it too. It differs from `server.issuer` only
+     * for a Microsoft `{tenantid}` template, where each token names its own tenant. Grants saved
+     * before this field keep a fixed server issuer, which every ID token must already match.
+     */
+    idTokenIssuer: Schema.optional(Schema.NonEmptyString),
   }),
   Schema.Struct({
     ...grantFields,

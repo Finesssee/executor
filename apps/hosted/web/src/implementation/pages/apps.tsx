@@ -21,7 +21,7 @@ import { Link } from "@tanstack/react-router";
 import { useOrganizationRoute } from "../components/organization.tsx";
 import { createAppListAtoms } from "../../contracts/resource-access.ts";
 import { groupsAtom } from "../../contracts/groups.ts";
-import { usePreload } from "@executor-js/dashboard-start/registry";
+import { usePreload } from "@executor-js/ui/dashboard/context";
 /** One authorized list, with independent group and explicit management filters. */
 export function AppsPage() {
   const { organization, slug: organizationSlug } = useOrganizationRoute();

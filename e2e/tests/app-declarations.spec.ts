@@ -10,18 +10,19 @@ import { App, Resource } from "../support/contracts.ts";
 import { saveAndDeploy } from "../support/app-authoring.ts";
 import { Evidence, Telemetry } from "../support/evidence.ts";
 import { Target } from "../support/platform.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 /** Declarations derived from the selected account's stored credential and the deployed version. */
 const source = (
   version: string,
-) => `import {defineApp,defineProvider,secrets,query,workflow,object,string} from "apps";
+) => `import {defineApp,defineProvider,secrets,query,workflow,object,string, router} from "apps";
 const service=defineProvider({name:"Declaration fixture",auth:{key:secrets({label:"Key",fields:object({token:string()})})}});
 const ping=query({input:object({})},async()=>"pong");
 const noop=workflow({input:object({})},async()=>null);
 export default defineApp({accounts:{service}}, async ctx => {
   const token=ctx.accounts.service.fields.token;
   return {
-    queries:{ping},
+    tools: router({ ping }),
     workflows:{["${version}_"+token]:noop},
     skills:[{name:"account-guide",description:"${version} guide for "+token,files:[{path:"SKILL.md",content:"---\\nname: account-guide\\ndescription: ${version} guide for "+token+"\\n---\\n# "+token}]}],
   };
@@ -49,7 +50,7 @@ layer(HostedLive, { excludeTestServices: true })("App declarations", (it) => {
           const prefix = `/api/organizations/${actors.organization.id}`;
           const deployed = yield* api.request(actors.owner, "POST", `${prefix}/apps/deploy`, {
             name: `Declarations ${randomUUID().slice(0, 8)}`,
-            files: [{ path: "index.ts", content: source("first") }],
+            files: [{ path: "index.ts", content: source("first") }, appsManifest],
           });
           expect(deployed.status, JSON.stringify(deployed.body)).toBe(200);
           const app = yield* body(App, deployed);
@@ -260,7 +261,7 @@ layer(HostedLive, { excludeTestServices: true })("App declarations", (it) => {
 
           // A new deployment is a new build: its declarations appear on the next read.
           const redeployed = yield* saveAndDeploy(actors.owner, path, {
-            files: [{ path: "index.ts", content: source("second") }],
+            files: [{ path: "index.ts", content: source("second") }, appsManifest],
           });
           expect(redeployed.status, JSON.stringify(redeployed.body)).toBe(200);
           expect(yield* workflows(actors.owner, owned)).toEqual({

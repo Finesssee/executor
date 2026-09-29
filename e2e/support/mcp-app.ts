@@ -7,28 +7,30 @@ import { Api, body } from "./api.ts";
 import { App } from "./contracts.ts";
 import { Evidence } from "./evidence.ts";
 import { Target } from "./platform.ts";
+import { appsManifest } from "./apps-release.ts";
 
 /** The receipt is absent from client prompts and tool schemas, so only a real invocation reveals it. */
 const mcpAppFiles = (name: string, receipt: string) => [
   {
     path: "skills/echo/SKILL.md",
     content:
-      "---\nname: echo\ndescription: Echo a message through this app.\nallowed-tools: mutations.echo\n---\nRead [examples](references/examples.md).\n",
+      "---\nname: echo\ndescription: Echo a message through this app.\nallowed-tools: echo\n---\nRead [examples](references/examples.md).\n",
   },
   {
     path: "skills/echo/references/examples.md",
-    content: "Call mutations.echo with a message.",
+    content: "Call echo with a message.",
   },
   {
     path: "index.ts",
     content: `
-import { mutation, defineApp, object, string } from "apps";
-export default defineApp({ accounts: {} }, async () => ({  mutations: {
-  echo: mutation({ description: ${JSON.stringify(`Echo from ${name}`)}, input: object({ message: string() })},
-    async (_, input) => ({ message: input.message, receipt: ${JSON.stringify(receipt)} }))
-} }));
+import { mutation, defineApp, object, string, router } from "apps";
+export default defineApp({ accounts: {} }, async () => ({  tools: router({
+    echo: mutation({ description: ${JSON.stringify(`Echo from ${name}`)}, input: object({ message: string() })},
+    async (_, input) => ({ message: input.message, receipt: ${JSON.stringify(receipt)} })),
+  }) }));
 `,
   },
+  appsManifest,
 ];
 
 /** Hosted apps belong to the synthetic organization. */

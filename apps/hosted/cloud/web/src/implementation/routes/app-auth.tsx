@@ -8,6 +8,6 @@ export const Route = createFileRoute("/app-auth")({
   component: SignIn,
 });
 function SignIn() {
-  const { request } = Route.useSearch();
-  return <AppSignInPage key={request} request={request} />;
+  const { request, failure } = Route.useSearch();
+  return <AppSignInPage key={request} request={request} failure={failure} />;
 }

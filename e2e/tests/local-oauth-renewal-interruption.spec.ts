@@ -14,6 +14,7 @@ import { Target } from "../support/platform.ts";
 import { createProfile } from "../support/profiles.ts";
 import { serverControl } from "../support/server-control.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const Published = Schema.Struct({ app: Schema.Struct({ id: Schema.String }) });
 const Link = Schema.Struct({ connection: Schema.String, url: Schema.String });
@@ -67,14 +68,15 @@ layer(TestLive, { excludeTestServices: true })("Local OAuth renewal interruption
           files: [
             {
               path: "index.ts",
-              content: `import { defineApp, defineProvider, oauth2, query, object } from "apps";
+              content: `import { defineApp, defineProvider, oauth2, query, object, router } from "apps";
 const service = defineProvider({ name: ${JSON.stringify(name)}, auth: { oauth: oauth2({ discover: ${JSON.stringify(`${issuer.origin}/mcp`)} }) } });
 export default defineApp({ accounts: { service } }, async ({ accounts }) => ({
-  queries: {
+  tools: router({
     read: query({ input: object({}) }, async ({ fetch }) => ({ service: await (await fetch(${JSON.stringify(`${issuer.origin}/resource`)}, { headers: { authorization: "Bearer " + accounts.service.fields.access_token } })).json() })),
-  },
+  }),
 }));`,
             },
+            appsManifest,
           ],
         });
         expect(deployed.status, JSON.stringify(deployed.body)).toBe(200);
@@ -135,7 +137,7 @@ export default defineApp({ accounts: { service } }, async ({ accounts }) => ({
         const read = api.request(agent, "POST", "/v1/tools/call", {
           app: app.id,
           profile: profile.id,
-          tool: "queries.read",
+          tool: "read",
           input: {},
         });
         const renewed = (response: { readonly status: number; readonly body: unknown }) =>

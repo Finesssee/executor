@@ -140,7 +140,7 @@ export const makeAccountConnections = (
               owner: row.owner,
               provider: row.provider,
               method: input.method,
-              label: input.label,
+              ...(input.label === undefined ? {} : { label: input.label }),
               fields: input.fields,
             });
           if (lifecycle) yield* lifecycle.connectionCompleting(input.connection);

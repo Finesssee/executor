@@ -34,6 +34,6 @@ export const frameworkSession = Effect.gen(function* () {
       return (yield* Schema.decodeUnknownEffect(Completed)(result.structuredContent)).execution
         .value;
     });
-  const queries = `tools.executor.profiles[${JSON.stringify(profile.id)}].queries`;
+  const queries = `tools.executor.profiles[${JSON.stringify(profile.id)}]`;
   return { client, execute, queries, profile };
 });

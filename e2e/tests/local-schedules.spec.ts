@@ -5,6 +5,7 @@ import { Api, body } from "../support/api.ts";
 import { Target } from "../support/platform.ts";
 import { TestLive, withCase } from "../support/case.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const settings = Schema.Struct({
   enabled: Schema.Boolean,
@@ -19,9 +20,9 @@ const definitions = Schema.Array(
     settings: Schema.NullOr(settings),
   }),
 );
-const source = `import { defineApp, mutation, interval, cron, object, string } from "apps";
+const source = `import { defineApp, mutation, interval, cron, object, string, router } from "apps";
 const send = mutation({ input: object({ channel: string() }) }, async () => { throw new Error("Discovery must not execute"); });
-export default defineApp({ accounts: {} }, async () => ({  mutations: { send }, schedules: {
+export default defineApp({ accounts: {} }, async () => ({  tools: router({ send }), schedules: {
   digest: interval({ minutes: 5 }, send, { channel: "support" }),
   morning: cron({ expression: "0 9 * * MON-FRI", timezone: "America/Los_Angeles" }, send, { channel: "daily" }),
 } }));`;
@@ -40,7 +41,7 @@ layer(TestLive, { excludeTestServices: true })("Local schedules", (it) => {
           {
             owner: "local",
             name: "Schedule fixture",
-            files: [{ path: "index.ts", content: source }],
+            files: [{ path: "index.ts", content: source }, appsManifest],
           },
           headers,
         );
@@ -57,8 +58,8 @@ layer(TestLive, { excludeTestServices: true })("Local schedules", (it) => {
         expect(read.status).toBe(200);
         const schedules = yield* body(definitions, read);
         expect(schedules.map((schedule) => [schedule.name, schedule.tool])).toEqual([
-          ["digest", "mutations.send"],
-          ["morning", "mutations.send"],
+          ["digest", "send"],
+          ["morning", "send"],
         ]);
         expect(schedules.every((schedule) => schedule.settings === null)).toBe(true);
         expect(schedules[0]?.input).toEqual({ channel: "support" });

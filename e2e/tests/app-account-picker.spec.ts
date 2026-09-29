@@ -1,5 +1,6 @@
 import { expect, layer } from "@effect/vitest";
 import { Effect, Schema } from "effect";
+import type { Page } from "playwright";
 import { randomUUID } from "node:crypto";
 import { Actors } from "../support/actors.ts";
 import { Api, body } from "../support/api.ts";
@@ -7,8 +8,10 @@ import { Browser } from "../support/browser.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { saveAndDeploy, Workspace } from "../support/app-authoring.ts";
 import { App, Resource } from "../support/contracts.ts";
+import { nameConnectedAccount } from "../support/name-account.ts";
 import { holdQuery, refreshVisiblePage } from "../support/query-transition.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 layer(HostedLive, { excludeTestServices: true })("App accounts", (it) => {
   it.effect(scenarios.appAccountPicker.title, (context) =>
@@ -25,10 +28,11 @@ layer(HostedLive, { excludeTestServices: true })("App accounts", (it) => {
             {
               path: "index.ts",
               content: `
-import { defineApp, defineProvider, object, secrets, string } from "apps";
+import { defineApp, defineProvider, object, secrets, string, router } from "apps";
 const service = defineProvider({ name: "Account fixture", auth: { key: secrets({ label: "API key", fields: object({ token: string() }) }) } });
-export default defineApp({ accounts: { primary: service, mailboxes: service.many() } }, async () => ({ queries: {} }));`,
+export default defineApp({ accounts: { primary: service, mailboxes: service.many() } }, async () => ({ tools: router({}) }));`,
             },
+            appsManifest,
           ],
         });
         expect(deployed.status).toBe(200);
@@ -65,24 +69,103 @@ export default defineApp({ accounts: { primary: service, mailboxes: service.many
           expect(saved.status).toBe(200);
           accounts.push((yield* body(Resource, saved)).id);
         }
+        const bindings = Effect.gen(function* () {
+          return (yield* body(
+            Schema.Struct({
+              accounts: Schema.Record(
+                Schema.String,
+                Schema.Union([Schema.String, Schema.Array(Schema.String)]),
+              ),
+            }),
+            yield* api.request(
+              actors.owner,
+              "GET",
+              `${prefix}/apps/${app.id}/profiles/${profile.id}`,
+            ),
+          )).accounts;
+        });
+        const region = (slot: "primary" | "mailboxes") =>
+          browser.use(`Find the ${slot} accounts`, (page) =>
+            Promise.resolve(
+              page.getByRole("region", { name: `Account fixture (${slot})`, exact: true }),
+            ),
+          );
+        const saveChoice = (step: string, choose: (page: Page) => Promise<void>) =>
+          browser.use(step, (page) =>
+            Promise.all([
+              page.waitForResponse(
+                (response) =>
+                  response.request().method() === "PATCH" &&
+                  new URL(response.url()).pathname.endsWith(`/profiles/${profile.id}`),
+              ),
+              choose(page),
+            ]).then(([response]) => response.status()),
+          );
+        // Rows read "<label>" or "<label> ✓" once the page shows the expected bindings.
+        const listed = (slot: "primary" | "mailboxes", step: string, expected: readonly string[]) =>
+          browser.use(step, (page) => {
+            const name = `Account fixture (${slot})`;
+            const read = (args: {
+              readonly name: string;
+              readonly expected: readonly string[];
+            }) => {
+              const inputs = document
+                .querySelector(`section[aria-label="${args.name}"]`)
+                ?.querySelectorAll("input[type=radio], [role=checkbox]");
+              const rows = Array.from(inputs ?? [], (input) => {
+                const on =
+                  input instanceof HTMLInputElement
+                    ? input.checked
+                    : input.getAttribute("aria-checked") === "true";
+                return `${input.closest("label")?.textContent ?? ""}${on ? " ✓" : ""}`;
+              });
+              return JSON.stringify(rows) === JSON.stringify(args.expected) ? rows : undefined;
+            };
+            const region = page.getByRole("region", { name, exact: true });
+            // A timeout falls through so the assertion reports the rows actually shown.
+            return region
+              .waitFor()
+              .then(() =>
+                page
+                  .waitForFunction(read, { name, expected }, { timeout: 10_000 })
+                  .catch((error: unknown) => {
+                    if (!(error instanceof Error && error.name === "TimeoutError")) throw error;
+                  }),
+              )
+              .then(() =>
+                region.locator("input[type=radio], [role=checkbox]").evaluateAll((inputs) =>
+                  inputs.map((input) => {
+                    const on =
+                      input instanceof HTMLInputElement
+                        ? input.checked
+                        : input.getAttribute("aria-checked") === "true";
+                    return `${input.closest("label")?.textContent ?? ""}${on ? " ✓" : ""}`;
+                  }),
+                ),
+              );
+          });
+        const shows = (slot: "primary" | "mailboxes", step: string, expected: readonly string[]) =>
+          Effect.map(listed(slot, step, expected), (rows) => {
+            expect(rows).toEqual(expected);
+          });
         yield* browser.login(actors.owner);
         const url = `/org/${actors.organization.slug}/apps/${app.id}?view=accounts&profile=${profile.id}`;
         yield* browser.use("Open app accounts", (page) => page.goto(url));
-        yield* browser.use("Change the saved account in place", (page) =>
-          page
-            .getByRole("region", { name: "Account fixture (primary)", exact: true })
-            .getByRole("button", { name: "Switch Account fixture account", exact: true })
-            .click(),
-        );
+        // Connecting both accounts to the single-account slot left the second one bound.
+        yield* shows("primary", "Every saved account is listed oldest first", [
+          "First account",
+          "Second account ✓",
+        ]);
+        yield* shows("mailboxes", "Multiple-account choices start unchecked", [
+          "First account",
+          "Second account",
+        ]);
         expect(
-          yield* browser.use("Already selected scalar account is absent from the chooser", (page) =>
-            page
-              .getByRole("dialog")
-              .getByRole("button", { name: /Second account/ })
-              .count(),
+          yield* browser.use("Choosing needs no dialog", (page) =>
+            page.getByRole("dialog").count(),
           ),
         ).toBe(0);
-        yield* browser.checkpoint("Saved account picker");
+        yield* browser.checkpoint("Saved accounts listed in place");
         const failure = yield* holdQuery(
           [actors.organization.slug, actors.organization.id].map(
             (id) => `/api/organizations/${id}/apps/${app.id}/profiles/${profile.id}`,
@@ -90,77 +173,75 @@ export default defineApp({ accounts: { primary: service, mailboxes: service.many
           "fail",
           { method: "PATCH" },
         );
-        yield* browser.use("Choose the first account", (page) =>
-          page
-            .getByRole("dialog")
-            .getByRole("button", { name: /First account/ })
-            .click(),
+        const primary = yield* region("primary");
+        yield* browser.use("Choose the first account", () =>
+          primary.getByRole("radio", { name: "First account", exact: true }).click(),
         );
         yield* failure.requested;
         expect(
-          yield* browser.use("Choice is disabled while saving", (page) =>
-            page
-              .getByRole("dialog")
-              .getByRole("button", { name: /First account/ })
-              .isDisabled(),
+          yield* browser.use("Choices are disabled while saving", () =>
+            primary.getByRole("radio", { name: "Second account", exact: true }).isDisabled(),
           ),
         ).toBe(true);
         yield* failure.release;
-        yield* browser.use("A failed save stays in the picker", (page) =>
+        yield* browser.use("A failed save is reported in place", (page) =>
           page
-            .getByRole("dialog")
             .getByText("Unable to complete this request", { exact: true })
+            .first()
             .waitFor({ state: "visible" }),
         );
+        yield* shows("primary", "A failed choice keeps the saved account", [
+          "First account",
+          "Second account ✓",
+        ]);
+        expect((yield* bindings).primary).toBe(accounts[1]);
         yield* browser.checkpoint("Failed choice can be retried");
-        yield* browser.use("Retry the same account choice", (page) =>
-          page
-            .getByRole("dialog")
-            .getByRole("button", { name: /First account/ })
-            .click(),
-        );
-        yield* browser.use("Picker closes after the confirmed save", (page) =>
-          page
-            .getByRole("dialog", { name: "Account fixture accounts", exact: true })
-            .waitFor({ state: "hidden" }),
-        );
-        const selected = yield* body(
-          Schema.Struct({
-            accounts: Schema.Record(
-              Schema.String,
-              Schema.Union([Schema.String, Schema.Array(Schema.String)]),
-            ),
-          }),
-          yield* api.request(
-            actors.owner,
-            "GET",
-            `${prefix}/apps/${app.id}/profiles/${profile.id}`,
+        expect(
+          yield* saveChoice("Retry the same account choice", () =>
+            primary.getByRole("radio", { name: "First account", exact: true }).click(),
           ),
-        );
-        expect(selected.accounts.primary).toBe(accounts[0]);
+        ).toBe(200);
+        yield* shows("primary", "The retried choice is shown", [
+          "First account ✓",
+          "Second account",
+        ]);
+        expect((yield* bindings).primary).toBe(accounts[0]);
         expect(
           yield* browser.use("Still on this app", (page) =>
             page.evaluate(() => location.pathname + location.search),
           ),
         ).toBe(url);
-        yield* browser.use("Choose several saved accounts", (page) =>
-          page
-            .getByRole("region", { name: "Account fixture (mailboxes)", exact: true })
-            .getByRole("button", { name: "Add Account fixture account", exact: true })
-            .click(),
-        );
-        yield* browser.use("Select the first mailbox", (page) =>
-          page
-            .getByRole("dialog")
-            .getByRole("checkbox", { name: /First account/ })
-            .check(),
-        );
-        yield* browser.use("Select the second mailbox", (page) =>
-          page
-            .getByRole("dialog")
-            .getByRole("checkbox", { name: /Second account/ })
-            .check(),
-        );
+        yield* browser.use("Reload the Accounts tab", (page) => page.goto(url));
+        yield* shows("primary", "The choice survives a reload", [
+          "First account ✓",
+          "Second account",
+        ]);
+        expect(
+          yield* saveChoice("Switch the single account", (page) =>
+            page
+              .getByRole("region", { name: "Account fixture (primary)", exact: true })
+              .getByRole("radio", { name: "Second account", exact: true })
+              .click(),
+          ),
+        ).toBe(200);
+        expect((yield* bindings).primary).toBe(accounts[1]);
+        yield* browser.use("Reload after switching", (page) => page.goto(url));
+        yield* shows("primary", "The switched account survives a reload", [
+          "First account",
+          "Second account ✓",
+        ]);
+        const mailboxes = yield* region("mailboxes");
+        expect(
+          yield* saveChoice("Check the first mailbox", () =>
+            mailboxes.getByRole("checkbox", { name: "First account", exact: true }).click(),
+          ),
+        ).toBe(200);
+        expect(
+          yield* saveChoice("Check the second mailbox", () =>
+            mailboxes.getByRole("checkbox", { name: "Second account", exact: true }).click(),
+          ),
+        ).toBe(200);
+        expect((yield* bindings).mailboxes).toEqual([accounts[0], accounts[1]]);
         const refresh = yield* holdQuery(
           [actors.organization.slug, actors.organization.id].map(
             (id) => `/api/organizations/${id}/apps/${app.id}`,
@@ -169,240 +250,212 @@ export default defineApp({ accounts: { primary: service, mailboxes: service.many
         );
         yield* refreshVisiblePage;
         yield* refresh.requested;
-        expect(
-          yield* browser.use("Background refresh preserves the choice", (page) =>
-            page
-              .getByRole("dialog")
-              .getByRole("checkbox", { name: /Second account/ })
-              .isChecked(),
-          ),
-        ).toBe(true);
         yield* refresh.release;
-        yield* browser.use("Refresh failure stays outside the open picker", (page) =>
+        yield* browser.use("Refresh failure is reported", (page) =>
           page
             .getByText("Unable to complete this request", { exact: true })
+            .first()
             .waitFor({ state: "visible" }),
         );
+        yield* shows("mailboxes", "A failed refresh keeps the saved choices", [
+          "First account ✓",
+          "Second account ✓",
+        ]);
         expect(
-          yield* browser.use("Refresh failure keeps the edited selection", (page) =>
-            page
-              .getByRole("dialog")
-              .getByRole("checkbox", { name: /Second account/ })
-              .isChecked(),
+          yield* saveChoice("Uncheck one mailbox", () =>
+            mailboxes.getByRole("checkbox", { name: "Second account", exact: true }).click(),
           ),
-        ).toBe(true);
-        const savedBoth = yield* browser.use("Save both mailboxes together", (page) =>
-          Promise.all([
-            page.waitForResponse(
-              (response) =>
-                response.request().method() === "PATCH" &&
-                new URL(response.url()).pathname.endsWith(`/profiles/${profile.id}`),
-            ),
-            page.getByRole("button", { name: "Use selected accounts", exact: true }).click(),
-          ]).then(([response]) => response.status()),
-        );
-        expect(savedBoth).toBe(200);
-        yield* browser.use("Both accounts remain selected", (page) =>
-          page
-            .getByRole("region", { name: "Account fixture (mailboxes)", exact: true })
-            .getByRole("link", { name: "Second account", exact: true })
-            .waitFor({ state: "visible" }),
-        );
+        ).toBe(200);
+        expect(yield* bindings).toEqual({ primary: accounts[1], mailboxes: [accounts[0]] });
         yield* Effect.gen(function* () {
-          yield* browser.use("All saved accounts added opens a focused connection modal", (page) =>
-            page
-              .getByRole("region", { name: "Account fixture (mailboxes)", exact: true })
-              .getByRole("button", { name: "Add Account fixture account", exact: true })
-              .click(),
+          yield* browser.use("Connect a new mailbox from the list", () =>
+            mailboxes.getByRole("button", { name: "Connect new account", exact: true }).click(),
           );
-          const dialog = yield* browser.use(
-            "All saved accounts added opens a focused connection modal",
-            (page) =>
-              Promise.resolve(
-                page.getByRole("dialog", {
-                  name: "Connect Account fixture",
-                  exact: true,
-                }),
-              ),
-          );
-          yield* browser.use("All saved accounts added opens a focused connection modal", () =>
-            dialog.waitFor(),
-          );
-          yield* browser.use("All saved accounts added opens a focused connection modal", () =>
-            dialog.getByRole("button", { name: "Connect account", exact: true }).waitFor(),
+          const dialog = yield* browser.use("Connect a new mailbox from the list", (page) =>
+            Promise.resolve(page.getByRole("dialog", { name: "Connect Account fixture" })),
           );
           expect(
-            yield* browser.use("New accounts can be named in the first dialog", () =>
-              dialog.getByLabel("Account name", { exact: true }).inputValue(),
-            ),
-          ).toBe("Default");
-          expect(
-            yield* browser.use("All saved accounts added opens a focused connection modal", () =>
-              dialog.getByRole("button", { name: "Use selected accounts", exact: true }).count(),
+            yield* browser.use("New accounts are named after they connect, not before", () =>
+              dialog.getByLabel("Account name", { exact: true }).count(),
             ),
           ).toBe(0);
-          expect(
-            yield* browser.use("All saved accounts added opens a focused connection modal", () =>
-              dialog
-                .getByRole("button", { name: "Stop using these accounts", exact: true })
-                .count(),
-            ),
-          ).toBe(0);
-          yield* browser.use("All saved accounts added opens a focused connection modal", () =>
-            dialog.press("Escape"),
+          yield* browser.use("Enter the synthetic token", () =>
+            dialog.getByLabel("Token", { exact: true }).fill("synthetic-token"),
           );
-        });
-        yield* Effect.gen(function* () {
-          const provider = yield* browser.use("Remove one mailbox from the profile", (page) =>
-            Promise.resolve(
-              page.getByRole("region", {
-                name: "Account fixture (mailboxes)",
-                exact: true,
-              }),
-            ),
+          yield* browser.use("Connect the new mailbox", () =>
+            dialog.getByRole("button", { name: "Connect account", exact: true }).click(),
           );
-          yield* browser.use("Remove one mailbox from the profile", () =>
-            provider.getByRole("link", { name: "Second account", exact: true }).hover(),
-          );
-          yield* browser.use("Remove one mailbox from the profile", () =>
-            provider.getByRole("button", { name: "Remove Second account", exact: true }).click(),
-          );
-          yield* browser.use("Remove one mailbox from the profile", () =>
-            provider
-              .getByRole("link", { name: "Second account", exact: true })
-              .waitFor({ state: "hidden" }),
-          );
-        });
-        const afterMailboxRemoval = yield* body(
-          Schema.Struct({
-            accounts: Schema.Record(
-              Schema.String,
-              Schema.Union([Schema.String, Schema.Array(Schema.String)]),
-            ),
-          }),
-          yield* api.request(
-            actors.owner,
-            "GET",
-            `${prefix}/apps/${app.id}/profiles/${profile.id}`,
-          ),
-        );
-        expect(afterMailboxRemoval.accounts).toEqual({
-          primary: accounts[0],
-          mailboxes: [accounts[0]],
-        });
-        yield* Effect.gen(function* () {
-          yield* browser.use("Only accounts not yet added appear in the mailbox chooser", (page) =>
-            page
-              .getByRole("region", { name: "Account fixture (mailboxes)", exact: true })
-              .getByRole("button", { name: "Add Account fixture account", exact: true })
-              .click(),
-          );
-          const dialog = yield* browser.use(
-            "Only accounts not yet added appear in the mailbox chooser",
-            (page) =>
-              Promise.resolve(
-                page.getByRole("dialog", {
-                  name: "Account fixture accounts",
-                  exact: true,
-                }),
-              ),
-          );
-          expect(
-            yield* browser.use("Only accounts not yet added appear in the mailbox chooser", () =>
-              dialog.getByRole("checkbox", { name: /First account/ }).count(),
-            ),
-          ).toBe(0);
-          yield* browser.use("Only accounts not yet added appear in the mailbox chooser", () =>
-            dialog.getByRole("checkbox", { name: /Second account/ }).waitFor(),
-          );
-          yield* browser.use("Only accounts not yet added appear in the mailbox chooser", () =>
-            dialog.getByRole("button", { name: "Use selected accounts", exact: true }).click(),
-          );
-          yield* browser.use("Only accounts not yet added appear in the mailbox chooser", () =>
+          yield* browser.use("The dialog closes after connecting", () =>
             dialog.waitFor({ state: "hidden" }),
           );
+          yield* browser.use("Name the new mailbox", (page) =>
+            nameConnectedAccount(page, "Third account"),
+          );
         });
+        const connected = yield* bindings;
+        const third = Array.isArray(connected.mailboxes)
+          ? connected.mailboxes.find((id) => !accounts.includes(id))
+          : undefined;
+        if (third === undefined) return yield* Effect.die("The new mailbox was not bound");
+        accounts.push(third);
+        expect(connected).toEqual({ primary: accounts[1], mailboxes: [accounts[0], third] });
+        yield* shows("mailboxes", "The new mailbox is bound at the end", [
+          "First account ✓",
+          "Second account",
+          "Third account ✓",
+        ]);
+        yield* shows("primary", "The new account is offered to other slots", [
+          "First account",
+          "Second account ✓",
+          "Third account",
+        ]);
+        yield* browser.checkpoint("New account connected and bound");
         yield* Effect.gen(function* () {
-          const provider = yield* browser.use(
-            "Remove the scalar binding without deleting its saved account",
-            (page) =>
-              Promise.resolve(
-                page.getByRole("region", {
-                  name: "Account fixture (primary)",
-                  exact: true,
-                }),
-              ),
+          yield* browser.use("Remove the scalar binding without deleting its saved account", () =>
+            primary.getByRole("radio", { name: "Second account", exact: true }).hover(),
           );
           yield* browser.use("Remove the scalar binding without deleting its saved account", () =>
-            provider.getByRole("link", { name: "First account", exact: true }).hover(),
+            primary.getByRole("button", { name: "Remove Second account", exact: true }).click(),
           );
           yield* browser.use("Remove the scalar binding without deleting its saved account", () =>
-            provider.getByRole("button", { name: "Remove First account", exact: true }).click(),
+            primary.locator(":checked").waitFor({ state: "detached" }),
           );
-          yield* browser.use("Remove the scalar binding without deleting its saved account", () =>
-            provider
-              .getByRole("link", { name: "First account", exact: true })
-              .waitFor({ state: "hidden" }),
-          );
-          yield* browser.use("Remove the scalar binding without deleting its saved account", () =>
-            provider
-              .getByRole("button", { name: "Add Account fixture account", exact: true })
-              .waitFor(),
-          );
-          expect(
-            yield* browser.use("Empty providers omit the account count label", () =>
-              provider.getByText("No accounts", { exact: true }).count(),
-            ),
-          ).toBe(0);
         });
-        yield* browser.checkpoint("Empty account row without count");
-        const afterScalarRemoval = yield* body(
-          Schema.Struct({
-            accounts: Schema.Record(
-              Schema.String,
-              Schema.Union([Schema.String, Schema.Array(Schema.String)]),
-            ),
-          }),
-          yield* api.request(
-            actors.owner,
-            "GET",
-            `${prefix}/apps/${app.id}/profiles/${profile.id}`,
+        const unused = yield* browser.use("Find the unused account prompt", (page) =>
+          Promise.resolve(page.getByRole("dialog", { name: "Delete unused account?" })),
+        );
+        yield* browser.use("No app uses the removed account, so deletion is offered", () =>
+          unused.waitFor({ state: "visible" }),
+        );
+        expect(
+          yield* browser.use("The prompt names the account and explains accounts and apps", () =>
+            Promise.all([
+              unused.getByText("Second account · Account fixture", { exact: true }).count(),
+              unused.getByText("Accounts are saved separately from apps", { exact: false }).count(),
+            ]),
+          ),
+        ).toEqual([1, 1]);
+        yield* browser.use("Let the prompt finish opening", (page) =>
+          page.waitForFunction(() =>
+            document.getAnimations().every((animation) => animation.playState !== "running"),
           ),
         );
-        expect(afterScalarRemoval.accounts).toEqual({ mailboxes: [accounts[0]] });
+        yield* browser.checkpoint("Unused account prompt");
+        yield* browser.use("Keep the unused account", () =>
+          unused.getByRole("button", { name: "Keep account", exact: true }).click(),
+        );
+        yield* browser.use("Keeping the account closes the prompt", () =>
+          unused.waitFor({ state: "hidden" }),
+        );
+        expect(yield* bindings).toEqual({ mailboxes: [accounts[0], third] });
         for (const account of accounts)
           expect(
             (yield* api.request(actors.owner, "GET", `${prefix}/accounts/${account}`)).status,
           ).toBe(200);
-        for (const account of accounts)
-          yield* api.request(actors.owner, "PATCH", `${prefix}/accounts/${account}`, {
-            label: "Default",
-          });
-        yield* browser.use("Reload duplicate account labels", (page) => page.goto(url));
-        yield* browser.use("Distinguish identically named accounts", (page) =>
-          page
-            .getByRole("region", { name: "Account fixture (primary)", exact: true })
-            .getByRole("button", { name: "Add Account fixture account", exact: true })
-            .click(),
+        // Unselecting is not a removal: it never reads the account's usage or offers deletion.
+        const usageReads: string[] = [];
+        const onRequest = (request: { method: () => string; url: () => string }) => {
+          if (
+            request.method() === "GET" &&
+            new URL(request.url()).pathname.endsWith(`/accounts/${third}`)
+          )
+            usageReads.push(request.url());
+        };
+        yield* browser.use("Watch for account usage reads", (page) =>
+          Promise.resolve(page.on("request", onRequest)),
         );
-        const labels = yield* browser.use("Read duplicate choice details", (page) =>
-          page
-            .getByRole("dialog")
-            .getByRole("button", { name: /^Default/ })
-            .allTextContents(),
+        expect(
+          yield* saveChoice("Unselect the mailbox only it uses", () =>
+            mailboxes.getByRole("checkbox", { name: "Third account", exact: true }).click(),
+          ),
+        ).toBe(200);
+        expect(
+          yield* saveChoice("Select that mailbox again", () =>
+            mailboxes.getByRole("checkbox", { name: "Third account", exact: true }).click(),
+          ),
+        ).toBe(200);
+        yield* browser.use("Stop watching account usage reads", (page) =>
+          Promise.resolve(page.off("request", onRequest)),
         );
-        expect(labels).toHaveLength(2);
-        expect(labels.every((label) => label.includes("Added"))).toBe(true);
-        expect(new Set(labels).size).toBe(2);
-        yield* browser.use("Use the picker at phone width", (page) =>
+        expect(usageReads).toEqual([]);
+        expect(
+          yield* browser.use("Unselecting offers no deletion", (page) =>
+            page.getByRole("dialog").count(),
+          ),
+        ).toBe(0);
+        expect(yield* bindings).toEqual({ mailboxes: [accounts[0], third] });
+        expect(
+          yield* browser.use("Only selected mailboxes offer removal", () =>
+            Promise.all(
+              ["First account", "Second account", "Third account"].map((label) =>
+                mailboxes.getByRole("button", { name: `Remove ${label}`, exact: true }).count(),
+              ),
+            ),
+          ),
+        ).toEqual([1, 0, 1]);
+        yield* Effect.gen(function* () {
+          yield* browser.use("Remove the mailbox from its row", () =>
+            mailboxes.getByRole("checkbox", { name: "Third account", exact: true }).hover(),
+          );
+          yield* browser.use("Remove the mailbox from its row", () =>
+            mailboxes.getByRole("button", { name: "Remove Third account", exact: true }).click(),
+          );
+        });
+        yield* browser.use("Removing the last use offers deletion", () =>
+          unused.waitFor({ state: "visible" }),
+        );
+        yield* browser.use("Delete the unused account", () =>
+          unused.getByRole("button", { name: "Delete account", exact: true }).click(),
+        );
+        yield* browser.use("Deleting the account closes the prompt", () =>
+          unused.waitFor({ state: "hidden" }),
+        );
+        const inventory = yield* body(
+          Schema.Struct({ accounts: Schema.Array(Schema.Struct({ id: Schema.String })) }),
+          yield* api.request(actors.owner, "GET", `${prefix}/inventory`),
+        );
+        expect(inventory.accounts.map((account) => account.id)).not.toContain(third);
+        expect(yield* bindings).toEqual({ mailboxes: [accounts[0]] });
+        yield* shows("mailboxes", "The deleted account is no longer offered", [
+          "First account ✓",
+          "Second account",
+        ]);
+        yield* browser.use("Use the chooser at phone width", (page) =>
           page.setViewportSize({ width: 390, height: 844 }),
         );
-        yield* browser.checkpoint("Account picker at phone width");
+        yield* browser.checkpoint("Account chooser at phone width");
         expect(
           yield* browser.use("No horizontal overflow", (page) =>
             page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
           ),
         ).toBe(true);
+        const access = yield* body(
+          Schema.Struct({ revision: Schema.String }),
+          yield* api.request(actors.owner, "GET", `${prefix}/apps/${app.id}/access`),
+        );
+        expect(
+          (yield* api.request(actors.owner, "PATCH", `${prefix}/apps/${app.id}/access`, {
+            revision: access.revision,
+            audience: { kind: "private" },
+          })).status,
+        ).toBe(200);
+        yield* browser.login(actors.admin);
+        yield* browser.use("An administrator opens the private app's accounts", (page) =>
+          page.goto(`/org/${actors.organization.slug}/apps/${app.id}?view=accounts`),
+        );
+        yield* browser.use("The Accounts tab explains the missing access", (page) =>
+          page.getByText("This app is not shared with you.", { exact: false }).waitFor(),
+        );
+        expect(
+          yield* browser.use("Users who cannot use the app get no chooser", (page) =>
+            Promise.all([
+              page.getByRole("radio").count(),
+              page.getByRole("checkbox").count(),
+              page.getByRole("button", { name: "Connect new account", exact: true }).count(),
+            ]),
+          ),
+        ).toEqual([0, 0, 0]);
+        yield* browser.checkpoint("Accounts without permission to use the app");
       }),
     ),
   );
@@ -421,10 +474,11 @@ export default defineApp({ accounts: { primary: service, mailboxes: service.many
             {
               path: "index.ts",
               content: `
-import { defineApp, defineProvider, oauth2 } from "apps";
+import { defineApp, defineProvider, oauth2, router } from "apps";
 const service = defineProvider({ name: "Browser fixture", auth: { oauth: oauth2({ authorizationUrl: "https://oauth.example.test/authorize", tokenUrl: "https://oauth.example.test/token", scopes: ["read"] }) } });
-export default defineApp({ accounts: { service } }, async () => ({ queries: {} }));`,
+export default defineApp({ accounts: { service } }, async () => ({ tools: router({}) }));`,
             },
+            appsManifest,
           ],
         });
         expect(deployed.status).toBe(200);
@@ -466,20 +520,22 @@ export default defineApp({ accounts: { service } }, async () => ({ queries: {} }
               .click(),
           );
           yield* browser.use("Select accounts without creating a setup first", (page) =>
-            page.getByRole("button", { name: "Add Browser fixture account", exact: true }).click(),
+            page.getByRole("button", { name: "Connect new account", exact: true }).click(),
           );
         });
-        yield* browser.use("The account name is available before OAuth", (page) =>
-          page
-            .getByRole("dialog")
-            .getByRole("textbox", { name: "Account name", exact: true })
-            .waitFor({ state: "visible" }),
-        );
         yield* browser.use("Wait for setup status to resolve", (page) =>
           page
             .getByRole("status", { name: "Preparing connection", exact: true })
             .waitFor({ state: "hidden" }),
         );
+        expect(
+          yield* browser.use("OAuth does not ask for an account name before sign-in", (page) =>
+            page
+              .getByRole("dialog")
+              .getByRole("textbox", { name: "Account name", exact: true })
+              .count(),
+          ),
+        ).toBe(0);
         expect(
           yield* browser.use("Required client fields are present before submission", (page) =>
             page.getByRole("textbox", { name: "Client ID", exact: true }).count(),
@@ -513,11 +569,6 @@ export default defineApp({ accounts: { service } }, async () => ({ queries: {} }
             page.evaluate(() => location.pathname + location.search),
           ),
         ).toBe(`${appUrl}?view=accounts`);
-        yield* browser.use("Name the account before authorization", (page) =>
-          page
-            .getByRole("textbox", { name: "Account name", exact: true })
-            .fill("Work browser account"),
-        );
         const cachedSetup = yield* body(
           Schema.Struct({ accountSetup: Schema.Struct({ redirectUri: Schema.String }) }),
           yield* api.request(actors.owner, "GET", `${prefix}/inventory`),
@@ -548,25 +599,31 @@ export default defineApp({ accounts: { service } }, async () => ({ queries: {} }
             return route.fulfill({ status: 302, headers: { location: callback.href } });
           }),
         );
-        const attempted = yield* browser.use("Enter submits the name and client together", (page) =>
+        const attempted = yield* browser.use("Connect submits the client without a name", (page) =>
           Promise.all([
             page.waitForResponse(
               (response) =>
                 new URL(response.url()).pathname.endsWith("/oauth/start") &&
                 response.request().method() === "POST",
             ),
-            page.getByRole("textbox", { name: "Account name", exact: true }).press("Enter"),
+            page
+              .getByRole("dialog")
+              .getByRole("button", { name: "Connect Browser fixture", exact: true })
+              .click(),
           ]).then(([response]) => ({
             status: response.status(),
             input: response.request().postDataJSON(),
           })),
         );
         expect(attempted.status).toBe(200);
-        expect(
-          (yield* Schema.decodeUnknownEffect(Schema.Struct({ label: Schema.String }))(
-            attempted.input,
-          )).label,
-        ).toBe("Work browser account");
+        const submitted = yield* Schema.decodeUnknownEffect(
+          Schema.Struct({
+            method: Schema.String,
+            client: Schema.Struct({ clientId: Schema.String }),
+          }),
+        )(attempted.input);
+        expect(submitted.client.clientId).toBe("synthetic-browser-client");
+        expect(Object.keys(submitted).sort()).toEqual(["client", "method"]);
         yield* browser.use("Cancellation has a useful recovery action", (page) =>
           page
             .getByRole("heading", { name: "Connection cancelled", exact: true })
@@ -579,7 +636,7 @@ export default defineApp({ accounts: { service } }, async () => ({ queries: {} }
           page.getByRole("link", { name: "Back to app", exact: true }).click(),
         );
         yield* browser.use("Choose the account after cancellation", (page) =>
-          page.getByRole("button", { name: "Add Browser fixture account", exact: true }).click(),
+          page.getByRole("button", { name: "Connect new account", exact: true }).click(),
         );
         expect(
           yield* browser.use("Cancellation retained the app and organization", (page) =>
@@ -611,11 +668,6 @@ export default defineApp({ accounts: { service } }, async () => ({ queries: {} }
             .getByRole("textbox", { name: "Client ID", exact: true })
             .fill("synthetic-browser-client"),
         );
-        yield* browser.use("Keep a draft while the app changes", (page) =>
-          page
-            .getByRole("textbox", { name: "Account name", exact: true })
-            .fill("Draft before provider change"),
-        );
         const appPath = `${prefix}/apps/${app.id}`;
         const workspace = yield* body(
           Workspace,
@@ -630,7 +682,10 @@ export default defineApp({ accounts: { service } }, async () => ({ queries: {} }
         expect(changed.status).toBe(200);
         const attemptsBeforeChange = starts;
         yield* browser.use("Submit the stale draft", (page) =>
-          page.getByRole("textbox", { name: "Account name", exact: true }).press("Enter"),
+          page
+            .getByRole("dialog")
+            .getByRole("button", { name: "Connect Browser fixture", exact: true })
+            .click(),
         );
         yield* browser.use("A changed provider cannot receive the stale form", (page) => {
           const form = page.getByRole("dialog");
@@ -649,9 +704,9 @@ export default defineApp({ accounts: { service } }, async () => ({ queries: {} }
         expect(starts).toBe(attemptsBeforeChange);
         expect(
           yield* browser.use("The rejected draft remains available", (page) =>
-            page.getByRole("textbox", { name: "Account name", exact: true }).inputValue(),
+            page.getByRole("textbox", { name: "Client ID", exact: true }).inputValue(),
           ),
-        ).toBe("Draft before provider change");
+        ).toBe("synthetic-browser-client");
         yield* browser.checkpoint("Cached form rejected after provider changed");
       }),
     ),

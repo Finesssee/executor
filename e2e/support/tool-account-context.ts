@@ -5,15 +5,15 @@ import { Browser } from "./browser.ts";
 import { holdQuery, refreshVisiblePage } from "./query-transition.ts";
 
 /** Distinct synthetic credentials expose different tools; a collection exposes their combined catalog. */
-export const accountToolSource = `import { defineApp, defineProvider, secrets, object, string, query } from "apps";
+export const accountToolSource = `import { defineApp, defineProvider, secrets, object, string, query, router } from "apps";
 const service = defineProvider({ name: "Workspace fixture", auth: { key: secrets({ label: "API key", fields: object({ token: string() }) }) } });
 export default defineApp({ accounts: { workspaces: service.many() } }, async ctx => {
   const work = ctx.accounts.workspaces.some(account => account.fields.token === "work");
   const personal = ctx.accounts.workspaces.some(account => account.fields.token === "personal");
-  return { queries: {
-    ...(work ? { work: query({ input: object({}), description: "Search work items" }, async () => "work"), admin: query({ input: object({}), description: "Read work settings" }, async () => "admin") } : {}),
+  return { tools: router({
+   ...(work ? { work: query({ input: object({}), description: "Search work items" }, async () => "work"), admin: query({ input: object({}), description: "Read work settings" }, async () => "admin") } : {}),
     ...(personal ? { personal: query({ input: object({}), description: "Search personal items" }, async () => "personal") } : {}),
-  } };
+ }) };
 });`;
 
 /** A held replacement catalog must never display tools from the previous account under the new label. */
@@ -36,14 +36,14 @@ export const checkToolAccountContext = <E, R>(input: {
     yield* browser.use("Work account exposes its own tools", (page) =>
       page
         .getByRole("navigation", { name: "App tools" })
-        .getByRole("button", { name: "queries.work", exact: true })
+        .getByRole("button", { name: "work", exact: true })
         .waitFor({ state: "visible" }),
     );
     expect(
       yield* browser.use("Personal tools are absent from the work catalog", (page) =>
         page
           .getByRole("navigation", { name: "App tools" })
-          .getByRole("button", { name: "queries.personal", exact: true })
+          .getByRole("button", { name: "personal", exact: true })
           .count(),
       ),
     ).toBe(0);
@@ -63,7 +63,7 @@ export const checkToolAccountContext = <E, R>(input: {
           yield* browser.use("Old tools are not labeled as belonging to the new account", (page) =>
             page
               .getByRole("navigation", { name: "App tools" })
-              .getByRole("button", { name: "queries.work", exact: true })
+              .getByRole("button", { name: "work", exact: true })
               .count(),
           ),
         ).toBe(0);
@@ -71,7 +71,7 @@ export const checkToolAccountContext = <E, R>(input: {
         yield* browser.use("Personal account discovers a different tool", (page) =>
           page
             .getByRole("navigation", { name: "App tools" })
-            .getByRole("button", { name: "queries.personal", exact: true })
+            .getByRole("button", { name: "personal", exact: true })
             .waitFor({ state: "visible" }),
         );
       }),
@@ -85,7 +85,7 @@ export const checkToolAccountContext = <E, R>(input: {
     yield* browser.use("Overview previews the available tool", (page) =>
       page
         .getByRole("region", { name: "App tools preview", exact: true })
-        .getByRole("link", { name: /queries.personal/ })
+        .getByRole("link", { name: /^personal\b/ })
         .waitFor({ state: "visible" }),
     );
     expect(
@@ -112,11 +112,11 @@ export const checkToolAccountContext = <E, R>(input: {
     ).toBe(0);
     yield* input.select([input.work, input.personal]);
     yield* refreshVisiblePage;
-    for (const name of ["queries.work", "queries.admin", "queries.personal"])
+    for (const name of ["work", "admin", "personal"])
       yield* browser.use(`Overview includes ${name}`, (page) =>
         page
           .getByRole("region", { name: "App tools preview", exact: true })
-          .getByRole("link", { name: new RegExp(name) })
+          .getByRole("link", { name: new RegExp(`^${name}\\b`) })
           .waitFor({ state: "visible" }),
       );
     yield* browser.use("Open the combined catalog", (page) =>
@@ -125,7 +125,7 @@ export const checkToolAccountContext = <E, R>(input: {
         .getByRole("link", { name: "Tools", exact: true })
         .click(),
     );
-    for (const name of ["queries.work", "queries.admin", "queries.personal"])
+    for (const name of ["work", "admin", "personal"])
       yield* browser.use(`Combined catalog includes ${name}`, (page) =>
         page
           .getByRole("navigation", { name: "App tools" })

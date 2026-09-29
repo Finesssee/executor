@@ -4,7 +4,7 @@ import { cloudSentry, reportCloudFailure } from "../implementation/error-reporti
 import { cloudAnalytics, recordBackgroundUsage } from "../implementation/product-analytics.ts";
 import * as Cloudflare from "alchemy/Cloudflare";
 import type { Workflow } from "@cloudflare/workers-types";
-import { Cause, Clock, Effect, Exit, Schema, Option, Result } from "effect";
+import { Cause, Clock, Effect, Exit, Schema, Result } from "effect";
 import { HostedExecutor } from "@executor-js/hosted-server";
 import {
   WorkflowHost,
@@ -13,27 +13,17 @@ import {
   type WorkflowRuntime,
   type WorkflowDriver,
   WorkflowFailure,
+  decodeWorkflowFailure,
+  workflowFailureMessage,
 } from "@executor-js/sdk/core";
 import { cloudExecutor } from "./executor.ts";
-import { AppDataSupervisor } from "./app-data.ts";
+import { appDataSupervisors } from "./app-data.ts";
 import { readNativeWorkflowStatus } from "../implementation/workflow-status.ts";
 import { providerFailureCode } from "../implementation/provider-failure.ts";
 
 const failure = () => new WorkflowFailure({ reason: "engine", retryable: true });
-const encode = (error: WorkflowFailure) =>
-  `ExecutorWorkflowFailure(${error.reason},${error.retryable})`;
-const recover = (error: unknown): WorkflowFailure => {
-  const match =
-    error instanceof Error
-      ? /ExecutorWorkflowFailure\(([a-z_]+),(true|false)\)/.exec(error.message)
-      : null;
-  if (match !== null) {
-    const reason = Schema.decodeUnknownOption(WorkflowFailure.fields.reason)(match[1]);
-    if (Option.isSome(reason))
-      return new WorkflowFailure({ reason: reason.value, retryable: match[2] === "true" });
-  }
-  return failure();
-};
+const encode = workflowFailureMessage;
+const recover = decodeWorkflowFailure;
 const safe = <A, R>(effect: Effect.Effect<A, unknown, R>): Effect.Effect<A, WorkflowFailure, R> =>
   effect.pipe(
     Effect.catchCause((cause) =>
@@ -100,7 +90,7 @@ export class AppWorkflows extends Cloudflare.Workflow<AppWorkflows>()(
   "AppWorkflows",
   Effect.gen(function* () {
     const executor = yield* cloudExecutor(
-      yield* AppDataSupervisor,
+      yield* appDataSupervisors,
       yield* cloudArtifactsTokensLive,
     );
     const analytics = yield* cloudAnalytics;

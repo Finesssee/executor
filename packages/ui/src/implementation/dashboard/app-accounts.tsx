@@ -4,13 +4,9 @@ import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { AsyncResult, type Atom } from "effect/unstable/reactivity";
 import { Exit, type Cause } from "effect";
 import { HugeiconsIcon } from "@hugeicons/react";
-import {
-  Add01Icon,
-  ArrowDataTransferHorizontalIcon,
-  Cancel01Icon,
-  UserCircleIcon,
-} from "@hugeicons/core-free-icons";
+import { Cancel01Icon, UserCircleIcon } from "@hugeicons/core-free-icons";
 import type {
+  AccountAppHealth,
   App,
   AccountId,
   AccountRequirement,
@@ -21,12 +17,22 @@ import type {
 import {
   providerDisplayUrl,
   accountNeedsSignIn,
+  type AccountDetail,
   type AccountSummary,
   type FailureProps,
 } from "../../contracts/dashboard.ts";
 import { ProviderIcon } from "./common.tsx";
+import { AccountCheckResult } from "./account-health.tsx";
 import { EmptyState } from "./empty-state.tsx";
-import { Button, type ButtonProps } from "../components/button.tsx";
+import { Button } from "../components/button.tsx";
+import { Checkbox } from "../components/checkbox.tsx";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogTitle,
+} from "../components/dialog.tsx";
 
 /** Explain a provider's account limit and offer a separate profile when the host permits it. */
 export function ProviderAccountSupport({
@@ -60,34 +66,6 @@ export function ProviderAccountSupport({
   );
 }
 
-/** Add an account or replace the binding for a provider that uses one account. */
-export function AccountSelectionTrigger({
-  requirement,
-  selection,
-  ...props
-}: ButtonProps & {
-  readonly requirement: AccountRequirement;
-  readonly selection: SelectedAccounts[string] | undefined;
-}) {
-  const switching = requirement.cardinality === "one" && typeof selection === "string";
-  return (
-    <Button
-      variant="ghost"
-      size="sm"
-      className="h-10 w-full justify-start rounded-none px-3.5 text-[13px] text-muted-foreground hover:text-foreground"
-      aria-label={`${switching ? "Switch" : "Add"} ${requirement.definition.name} account`}
-      {...props}
-    >
-      <HugeiconsIcon
-        icon={switching ? ArrowDataTransferHorizontalIcon : Add01Icon}
-        size={14}
-        aria-hidden
-      />
-      {switching ? "Switch account" : "Add account"}
-    </Button>
-  );
-}
-
 /** Remove only this binding; keep the reusable account and every other provider selection. */
 export function RemoveAccountBinding<E>({
   profile,
@@ -96,6 +74,7 @@ export function RemoveAccountBinding<E>({
   label,
   update,
   Failure,
+  onRemoved,
 }: {
   readonly profile: Profile;
   readonly slot: string;
@@ -107,6 +86,7 @@ export function RemoveAccountBinding<E>({
     E
   >;
   readonly Failure: ComponentType<FailureProps<E>>;
+  readonly onRemoved?: ((account: AccountId) => void) | undefined;
 }) {
   const save = useAtomSet(update, { mode: "promiseExit" });
   const result = useAtomValue(update);
@@ -136,6 +116,7 @@ export function RemoveAccountBinding<E>({
           const saved = await save({ accounts: next, expectedRevision: profile.revision });
           setPending(false);
           if (Exit.isFailure(saved)) setError(saved.cause);
+          else onRemoved?.(account);
         }}
       >
         <HugeiconsIcon icon={Cancel01Icon} size={13} aria-hidden />
@@ -149,11 +130,112 @@ export function RemoveAccountBinding<E>({
   );
 }
 
+/**
+ * Accounts are saved separately from the apps that select them, so removing one from an app
+ * keeps it. After an explicit removal leaves no app selecting an account, offer to delete it.
+ * Unselecting an account in a chooser is not a removal and does not prompt.
+ */
+export function useUnusedAccountPrompt<E, A>({
+  usage,
+  remove,
+  Failure,
+}: {
+  readonly usage: Atom.AtomResultFn<AccountId, AccountDetail, unknown>;
+  readonly remove: (account: AccountId) => Atom.AtomResultFn<void, A, E>;
+  readonly Failure: ComponentType<FailureProps<E>>;
+}) {
+  const read = useAtomSet(usage, { mode: "promiseExit" });
+  const [unused, setUnused] = useState<AccountDetail>();
+  const check = async (account: AccountId) => {
+    const exit = await read(account);
+    // The removal already succeeded; a failed read only skips this optional prompt.
+    if (Exit.isSuccess(exit) && exit.value.canManage && exit.value.apps.length === 0)
+      setUnused(exit.value);
+  };
+  return {
+    check,
+    prompt: unused && (
+      <DeleteUnusedAccount
+        key={unused.account.id}
+        data={unused}
+        remove={remove(unused.account.id)}
+        Failure={Failure}
+        onClose={() => setUnused(undefined)}
+      />
+    ),
+  };
+}
+
+function DeleteUnusedAccount<E, A>({
+  data,
+  remove,
+  Failure,
+  onClose,
+}: {
+  readonly data: AccountDetail;
+  readonly remove: Atom.AtomResultFn<void, A, E>;
+  readonly Failure: ComponentType<FailureProps<E>>;
+  readonly onClose: () => void;
+}) {
+  const run = useAtomSet(remove, { mode: "promiseExit" });
+  const result = useAtomValue(remove);
+  const pending = AsyncResult.isWaiting(result);
+  const provider = data.provider.definition.name;
+  return (
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open && !pending) onClose();
+      }}
+    >
+      <DialogContent className="sm:max-w-[440px]">
+        <DialogTitle>Delete unused account?</DialogTitle>
+        <div className="flex min-w-0 items-center gap-2.5 text-sm font-medium">
+          <ProviderIcon name={provider} url={providerDisplayUrl(data.provider.definition)} />
+          <span className="min-w-0 break-words">
+            {data.account.label || "Unnamed account"} · {provider}
+          </span>
+        </div>
+        <DialogDescription>
+          Accounts are saved separately from apps, so any app can reuse them. Removing an account
+          from an app keeps it saved. No app uses this account now.
+        </DialogDescription>
+        <p className="text-sm text-muted-foreground">
+          Delete it if you no longer need it. This removes the saved credentials from Executor but
+          does not revoke access at {provider}.
+        </p>
+        {AsyncResult.isFailure(result) && <Failure cause={result.cause} />}
+        <DialogFooter>
+          <Button variant="outline" disabled={pending} onClick={onClose}>
+            Keep account
+          </Button>
+          <Button
+            variant="destructive"
+            loading={pending}
+            onClick={async () => {
+              if (Exit.isSuccess(await run())) onClose();
+            }}
+          >
+            Delete account
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** Saves one slot's next binding in place; rows stay disabled while a save is in flight. */
+export interface AccountChooser {
+  readonly choose: (slot: string, value: SelectedAccounts[string]) => void;
+  readonly pending: boolean;
+}
+
 /** Provider rows show the account bindings inside one profile or its editor. */
 export function AppAccounts({
   app,
   selection,
   accounts,
+  chooser,
   chooseAction,
   reconnectAction,
   accountActions,
@@ -163,6 +245,7 @@ export function AppAccounts({
   readonly app: App;
   readonly selection: SelectedAccounts;
   readonly accounts: readonly AccountSummary[];
+  readonly chooser?: AccountChooser | undefined;
   readonly chooseAction?: ReactNode;
   readonly reconnectAction?: (account: AccountSummary) => ReactNode;
   readonly accountActions?: (slot: string, requirement: AccountRequirement) => ReactNode;
@@ -182,6 +265,26 @@ export function AppAccounts({
       {requirements.map(([slot, requirement]) => {
         const selected = selection[slot];
         const ids = typeof selected === "string" ? [selected] : (selected ?? []);
+        const many = requirement.cardinality === "many";
+        // Choosing lists every compatible saved account oldest first, so a new account joins
+        // the end; bound accounts that are no longer compatible stay visible to be removed.
+        const rows = chooser
+          ? [
+              ...accounts
+                .filter((account) => account.provider === requirement.provider)
+                .toSorted(
+                  (a, b) =>
+                    a.createdAt.getTime() - b.createdAt.getTime() || a.id.localeCompare(b.id),
+                )
+                .map((account) => account.id),
+              ...ids.filter(
+                (id) =>
+                  !accounts.some(
+                    (account) => account.id === id && account.provider === requirement.provider,
+                  ),
+              ),
+            ]
+          : ids;
         const action = accountActions?.(slot, requirement) ?? chooseAction;
         const showSlot = requirements.some(
           ([otherSlot, other]) =>
@@ -219,57 +322,100 @@ export function AppAccounts({
                 </span>
               )}
             </div>
-            {(ids.length > 0 || action) && (
+            {(rows.length > 0 || action) && (
               <div
                 className={
-                  ids.length === 0
+                  rows.length === 0
                     ? "overflow-hidden rounded-lg border border-dashed"
                     : "overflow-hidden rounded-lg border"
                 }
               >
-                {ids.length > 0 && (
-                  <ul className="divide-y divide-border/50 text-[13px]">
-                    {ids.map((id) => {
+                {rows.length > 0 && (
+                  <ul
+                    role={chooser && !many ? "radiogroup" : undefined}
+                    aria-label={chooser ? `${requirement.definition.name} accounts` : undefined}
+                    className="divide-y divide-border/50 text-[13px]"
+                  >
+                    {rows.map((id) => {
                       const account = accounts.find((item) => item.id === id);
+                      const label = account?.label || (account ? "Unnamed account" : undefined);
+                      const bound = ids.includes(id);
+                      const status =
+                        account && accountNeedsSignIn(account) ? (
+                          <span className="flex items-center gap-2 text-xs text-sign-in-warning">
+                            Needs sign-in{reconnectAction?.(account)}
+                          </span>
+                        ) : account?.signIn?.state === "unavailable" ? (
+                          <span className="text-xs text-sign-in-warning">Unavailable</span>
+                        ) : (
+                          <AppCheck
+                            health={account?.health?.apps.find((entry) => entry.app === app.id)}
+                          />
+                        );
                       return (
                         <li
                           key={id}
                           className="group/account flex min-h-10 min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1 px-3.5 py-2 transition-colors hover:bg-muted/25 focus-within:bg-muted/25"
                         >
-                          <HugeiconsIcon
-                            icon={UserCircleIcon}
-                            size={16}
-                            className="shrink-0 text-muted-foreground"
-                            aria-hidden
-                          />
-                          <span className="min-w-0 flex-1 break-words [&_a:hover]:underline">
-                            {account ? (
-                              <AccountLink account={id}>
-                                {account.label || "Unnamed account"}
-                              </AccountLink>
-                            ) : (
-                              "Account disconnected"
-                            )}
-                          </span>
-                          {account && accountNeedsSignIn(account) ? (
-                            <span className="flex items-center gap-2 text-xs text-sign-in-warning">
-                              Needs sign-in{reconnectAction?.(account)}
-                            </span>
-                          ) : account?.signIn?.state === "unavailable" ? (
-                            <span className="text-xs text-sign-in-warning">Unavailable</span>
-                          ) : null}
-                          {removeAccountAction?.(
-                            slot,
-                            id,
-                            account?.label || "Account disconnected",
+                          {chooser ? (
+                            <label
+                              className={`flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 ${bound ? "" : "text-muted-foreground hover:text-foreground"} has-disabled:cursor-default`}
+                            >
+                              {many ? (
+                                <Checkbox
+                                  checked={bound}
+                                  disabled={chooser.pending}
+                                  onCheckedChange={(checked) =>
+                                    chooser.choose(
+                                      slot,
+                                      checked === true
+                                        ? [...ids, id]
+                                        : ids.filter((other) => other !== id),
+                                    )
+                                  }
+                                />
+                              ) : (
+                                <input
+                                  type="radio"
+                                  name={`${app.id}-${slot}`}
+                                  checked={bound}
+                                  disabled={chooser.pending || (!bound && !account)}
+                                  onChange={() => chooser.choose(slot, id)}
+                                  className="size-4 shrink-0 cursor-pointer appearance-none rounded-full border border-input shadow-xs outline-none transition-shadow checked:border-[5px] checked:border-primary focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-default disabled:opacity-50 dark:bg-input/30"
+                                />
+                              )}
+                              <span className="min-w-0 flex-1 break-words">
+                                {label ?? "Account disconnected"}
+                              </span>
+                            </label>
+                          ) : (
+                            <>
+                              <HugeiconsIcon
+                                icon={UserCircleIcon}
+                                size={16}
+                                className="shrink-0 text-muted-foreground"
+                                aria-hidden
+                              />
+                              <span className="min-w-0 flex-1 break-words [&_a:hover]:underline">
+                                {label ? (
+                                  <AccountLink account={id}>{label}</AccountLink>
+                                ) : (
+                                  "Account disconnected"
+                                )}
+                              </span>
+                            </>
                           )}
+                          {status}
+                          {/* Unchecking only unselects; removal is its own action and may offer deletion. */}
+                          {bound &&
+                            removeAccountAction?.(slot, id, label ?? "Account disconnected")}
                         </li>
                       );
                     })}
                   </ul>
                 )}
                 {action && (
-                  <div className={ids.length > 0 ? "border-t border-border/50" : undefined}>
+                  <div className={rows.length > 0 ? "border-t border-border/50" : undefined}>
                     {action}
                   </div>
                 )}
@@ -280,4 +426,10 @@ export function AppAccounts({
       })}
     </div>
   );
+}
+
+/** This app's check of a selected account; apps without a check show nothing. */
+function AppCheck({ health }: { readonly health: AccountAppHealth | undefined }) {
+  if (health === undefined || (!health.checkable && health.check === null)) return null;
+  return <AccountCheckResult health={health} />;
 }

@@ -2,10 +2,39 @@ import type { AccountSubmission } from "@executor-js/ui/contracts/credentials";
 import { useAtomSet } from "@effect/atom-react";
 import type { DashboardAccountDetail } from "@executor-js/local-server/contracts";
 import { AccountForm } from "@executor-js/ui/dashboard/account-form";
-import { replaceAccountCredentialsAtom } from "../../contracts/accounts.ts";
+import { accountAtom, replaceAccountCredentialsAtom } from "../../contracts/accounts.ts";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { Failure, ProviderIcon } from "../components/common.tsx";
+import { Failure, LoadingRows, ProviderIcon } from "../components/common.tsx";
+import type { AccountId } from "@executor-js/sdk";
+import { QueryView } from "@executor-js/ui/dashboard/context";
+import { HugeiconsIcon } from "@hugeicons/react";
+import { ArrowLeft02Icon } from "@hugeicons/core-free-icons";
 import { OAuthFields } from "./oauth-fields.tsx";
+
+/** Credential replacement is the one account flow that needs a full page, for its form and OAuth. */
+export function AccountCredentialsPage({ id }: { readonly id: AccountId }) {
+  return (
+    <div className="page setup-page w-full shrink-0 [padding:24px_24px_48px] my-0 mx-auto max-[1000px]:[padding:20px_20px_40px] max-w-212.5 max-[740px]:[padding:18px_max(16px,_env(safe-area-inset-right))_max(32px,_env(safe-area-inset-bottom))_max(16px,_env(safe-area-inset-left))]">
+      <Link
+        className="back-link inline-flex gap-1.5 items-center text-[12px] text-muted-foreground mb-4.25 hover:text-foreground max-[740px]:min-h-11 max-[740px]:inline-flex max-[740px]:items-center max-[740px]:-mt-2 max-[740px]:mb-3"
+        to="/accounts"
+        search={{ account: id }}
+      >
+        <HugeiconsIcon icon={ArrowLeft02Icon} strokeWidth={2} aria-hidden size={14} />
+        Accounts
+      </Link>
+      <QueryView key={id} query={accountAtom(id)} Failure={Failure} pending={<LoadingRows />}>
+        {(data) =>
+          data.canManage ? (
+            <AccountCredentials key={id} data={data} />
+          ) : (
+            <p>This account is managed by the local server.</p>
+          )
+        }
+      </QueryView>
+    </div>
+  );
+}
 
 /** Replace credentials without creating another identity or changing any app's selection. */
 export function AccountCredentials({
@@ -41,20 +70,20 @@ export function AccountCredentials({
           </>
         }
         actions={
-          <Link to="/accounts/$accountId" params={{ accountId: account.id }}>
+          <Link to="/accounts" search={{ account: account.id }}>
             Cancel
           </Link>
         }
         submit={({ fields }: AccountSubmission) => replace(fields)}
         onSaved={() => {
-          void navigate({ to: "/accounts/$accountId", params: { accountId: account.id } });
+          void navigate({ to: "/accounts", search: { account: account.id } });
         }}
         oauth={(props) => (
           <OAuthFields
             provider={provider}
             account={account}
             onSaved={() => {
-              void navigate({ to: "/accounts/$accountId", params: { accountId: account.id } });
+              void navigate({ to: "/accounts", search: { account: account.id } });
             }}
             {...props}
           />

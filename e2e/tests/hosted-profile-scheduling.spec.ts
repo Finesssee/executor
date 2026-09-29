@@ -8,6 +8,7 @@ import { HostedLive, withHostedCase } from "../support/case.ts";
 import { Profile, sharedProfileFixture } from "../support/hosted-profile.ts";
 import { createProfile } from "../support/profiles.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const SetupStatus = Schema.Struct({ status: Schema.String, failure: Schema.NullOr(Schema.String) });
 layer(HostedLive, { excludeTestServices: true })("Hosted profiles", (it) => {
@@ -89,17 +90,20 @@ layer(HostedLive, { excludeTestServices: true })("Hosted profiles", (it) => {
           files: [
             {
               path: "index.ts",
-              content: `import { defineApp, dynamicTools, mutation, object, interval } from "apps";
+              content: `import { defineApp, dynamicRouter, mutation, object, interval, router } from "apps";
 const tick = mutation({ input: object({}) }, async () => "ticked");
 export default defineApp({ accounts: {} }, async () => ({
-  mutations: { tick },
-  schedules: { tick: interval({ minutes: 1 }, tick, {}) },
-  dynamicTools: dynamicTools({
-    list: async () => { throw new Error("Dynamic catalog unavailable"); },
-    resolve: async () => undefined,
+  tools: router({
+    tick,
+    catalog: dynamicRouter({
+      list: async () => { throw new Error("Dynamic catalog unavailable"); },
+      resolve: async () => undefined,
+    }),
   }),
+  schedules: { tick: interval({ minutes: 1 }, tick, {}) },
 }));`,
             },
+            appsManifest,
           ],
         });
         expect(deployed.status, JSON.stringify(deployed.body)).toBe(200);
@@ -111,13 +115,18 @@ export default defineApp({ accounts: {} }, async () => ({
         yield* Effect.addFinalizer(() =>
           api.request(actors.owner, "DELETE", `${path}/profiles/${profile.id}`).pipe(Effect.orDie),
         );
-        // The dynamic catalog really fails for the full tool listing.
+        // The dynamic catalog really fails. Its router reports the failure while the declared
+        // mutation still lists.
         const catalog = yield* api.request(
           actors.owner,
           "GET",
           `${path}/tools?profile=${profile.id}`,
         );
-        expect(catalog.status, JSON.stringify(catalog.body)).not.toBe(200);
+        expect(catalog.status, JSON.stringify(catalog.body)).toBe(200);
+        expect(catalog.body).toMatchObject({
+          items: [{ name: "tick" }],
+          routers: [{ path: "catalog", error: { _tag: "HostEvaluationFailed" } }],
+        });
         const deadline = (yield* Clock.currentTimeMillis) + 30000;
         let setup = yield* body(
           SetupStatus,
@@ -138,7 +147,7 @@ export default defineApp({ accounts: {} }, async () => ({
           `${path}/schedules/definitions?profile=${profile.id}`,
         );
         expect(definitions.status, JSON.stringify(definitions.body)).toBe(200);
-        expect(definitions.body).toMatchObject([{ name: "tick", tool: "mutations.tick" }]);
+        expect(definitions.body).toMatchObject([{ name: "tick", tool: "tick" }]);
         const enabled = yield* api.request(actors.owner, "PATCH", `${path}/schedules/tick`, {
           profile: profile.id,
           enabled: true,

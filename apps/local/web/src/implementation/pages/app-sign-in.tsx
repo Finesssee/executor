@@ -1,35 +1,36 @@
-import type { DashboardError } from "../../contracts/errors.ts";
-import { useAtomSet } from "@effect/atom-react";
-import type { AppSignInId } from "@executor-js/local-server/app-ui";
-import { Exit, Redacted, type Cause } from "effect";
-import { useEffect, useState } from "react";
-import { authorizeAppAtom } from "../../contracts/app-ui.ts";
-import { Failure } from "../components/common.tsx";
+import type { AppSignInFailure, AppSignInId } from "@executor-js/local-server/app-ui";
 import { Link } from "@tanstack/react-router";
+import { useEffect } from "react";
 
-/** Complete a sign-in attempt without mounting dashboard inventory or authored app code. */
-export function AppSignInPage({ request }: { readonly request: AppSignInId }) {
-  const authorize = useAtomSet(authorizeAppAtom, { mode: "promiseExit" });
-  const [error, setError] = useState<Cause.Cause<DashboardError>>();
+const failureMessage: Record<AppSignInFailure, string> = {
+  ended: "This sign-in attempt ended. Open the app URL again.",
+  forbidden: "This sign-in request cannot access the app.",
+  unavailable: "The app is not deployed or is unavailable.",
+};
+
+/**
+ * The server answers `/app-auth` with a redirect once it sees this browser's login. The page renders
+ * only after pairing, which reloads it so the server can finish, or to explain a failure.
+ */
+export function AppSignInPage({
+  request,
+  failure,
+}: {
+  readonly request: AppSignInId | undefined;
+  readonly failure: AppSignInFailure | undefined;
+}) {
+  const pending = failure === undefined && request !== undefined;
   useEffect(() => {
-    let active = true;
-    void authorize({ payload: { request } }).then((exit) => {
-      if (!active) return;
-      if (Exit.isFailure(exit)) setError(exit.cause);
-      else window.location.replace(Redacted.value(exit.value.url));
-    });
-    return () => {
-      active = false;
-    };
-  }, [request, authorize]);
+    if (pending) window.location.replace(window.location.href);
+  }, [pending]);
   return (
     <div className="page setup-page w-full shrink-0 [padding:24px_24px_48px] my-0 mx-auto max-[1000px]:[padding:20px_20px_40px] max-w-212.5 max-[740px]:[padding:18px_max(16px,_env(safe-area-inset-right))_max(32px,_env(safe-area-inset-bottom))_max(16px,_env(safe-area-inset-left))]">
       <h1 className="text-[22px] font-semibold tracking-[-0.035em] leading-[1.35] [&>span]:text-muted-foreground [&>span]:text-[13px] [&>span]:font-mono [&>span]:font-normal [&>span]:ml-[8px] [&>span]:align-middle">
-        {error ? "Could not open app" : "Opening app…"}
+        {pending ? "Opening app…" : "Could not open app"}
       </h1>
-      {error && (
+      {failure !== undefined && (
         <>
-          <Failure cause={error} />
+          <p role="alert">{failureMessage[failure]}</p>
           <Link to="/apps">Back to apps</Link>
         </>
       )}

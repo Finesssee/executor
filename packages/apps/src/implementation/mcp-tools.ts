@@ -59,7 +59,7 @@ export const adaptMcpTools = (
   client: McpClient,
 ): Effect.Effect<McpTools, McpError | ProviderError> =>
   Effect.gen(function* () {
-    const metadata = yield* client.list;
+    const { tools: metadata } = yield* client.list;
     const entries = yield* Effect.forEach(metadata, (tool) =>
       adaptMcpTool(client, tool).pipe(Effect.map((adapted) => [tool.name, adapted] as const)),
     );

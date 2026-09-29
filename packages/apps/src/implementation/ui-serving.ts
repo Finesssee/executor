@@ -52,8 +52,10 @@ export const appDocument = <E, R>(options: {
     );
   });
 
-/** Revalidate immutable assets only after the host has checked current access and file existence.
- * Browsers may retain bytes, but neither browsers nor shared proxies may reuse them without authorization.
+/** Serve an asset only after the host has checked current access and file existence.
+ * Asset URLs name their deployment, so their bytes never change: the browser keeps them for a year
+ * and does not ask again. Shared proxies never store them. Revoking access stops every new request
+ * and all app data, while bytes a browser already downloaded stay in its cache.
  * HTML remains an uncached host-rendered entry point.
  */
 export const appAsset = (asset: AppUiAsset | undefined, build: string, path: string) =>
@@ -64,7 +66,7 @@ export const appAsset = (asset: AppUiAsset | undefined, build: string, path: str
     const etag = `W/"${encodeURIComponent(build)}/${encodeURIComponent(path)}"`;
     const headers = {
       ...appPrivateHeaders,
-      "cache-control": "private, no-cache, must-revalidate",
+      "cache-control": "private, max-age=31536000, immutable",
       vary: "Cookie",
       etag,
     };

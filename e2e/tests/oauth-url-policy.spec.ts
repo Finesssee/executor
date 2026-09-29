@@ -9,6 +9,7 @@ import { Actors } from "../support/actors.ts";
 import { Api, body } from "../support/api.ts";
 import { App, Resource } from "../support/contracts.ts";
 import { Target } from "../support/platform.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 layer(HostedLive, { excludeTestServices: true })("OAuth URL policy", (it) => {
   it.effect(scenarios.oauthUrlPolicy.title, (context) =>
@@ -30,12 +31,13 @@ layer(HostedLive, { excludeTestServices: true })("OAuth URL policy", (it) => {
               {
                 path: "index.ts",
                 content: `
-import { defineApp, defineProvider, oauth2 } from "apps";
+import { defineApp, defineProvider, oauth2, router } from "apps";
 const service = defineProvider({ name: "URL policy fixture", auth: {
   oauth: oauth2({ authorizationUrl: ${JSON.stringify(origin + "/authorize")}, tokenUrl: ${JSON.stringify(origin + "/token")}, scopes: ["read"] })
 } });
-export default defineApp({ accounts: { service } }, async () => ({  queries: {} }));`,
+export default defineApp({ accounts: { service } }, async () => ({  tools: router({}) }));`,
               },
+              appsManifest,
             ],
           });
           expect(deployed.status).toBe(200);

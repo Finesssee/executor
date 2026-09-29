@@ -11,6 +11,7 @@ import { HostedLive, withHostedCase } from "../support/case.ts";
 import { App } from "../support/contracts.ts";
 import { Evidence, Telemetry } from "../support/evidence.ts";
 import { holdQuery } from "../support/query-transition.ts";
+import { withApps } from "../support/apps-release.ts";
 const Batch = Schema.Struct({
   resourceSpans: Schema.Array(
     Schema.Struct({
@@ -41,15 +42,18 @@ layer(HostedLive, { excludeTestServices: true })("Optimistic observability", (it
               {
                 path: "package.json",
                 content: JSON.stringify({
-                  dependencies: { react: "^19.2.0", "react-dom": "^19.2.0" },
+                  dependencies: withApps({ react: "^19.2.0", "react-dom": "^19.2.0" }),
                 }),
               },
               {
                 path: "index.ts",
-                content: `import { defineApp, query, mutation, object, string, number, boolean } from "apps";
+                content: `import { defineApp, query, mutation, object, string, number, boolean, router } from "apps";
 export const read = query({ input: object({ key: string() }), output: number() }, async () => 1);
 export const write = mutation({ input: object({}), output: boolean() }, async () => true);
-export default defineApp({ accounts: {} }, { queries: { read }, mutations: { write } });`,
+export default defineApp({ accounts: {} }, { tools: router({
+   read,
+   write,
+ }) });`,
               },
               {
                 path: "ui/index.html",

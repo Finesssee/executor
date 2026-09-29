@@ -10,6 +10,7 @@ import { PagePending } from "./page-pending.tsx";
 import { Spinner } from "@executor-js/ui/components/spinner";
 import { lastOrganizationAtom, sessionAtom } from "../../contracts/auth.ts";
 import { organizationsAtom } from "../../contracts/organization.ts";
+import { keepFragment } from "../../contracts/navigation.ts";
 
 function SignInPending() {
   return (
@@ -36,7 +37,7 @@ function ReplaceAfterSignIn({
   const page = usePageUrl();
   // A fresh document drops prior session state and preserves signed return URLs verbatim.
   useEffect(() => {
-    if (verified) window.location.replace(destination);
+    if (verified) window.location.replace(keepFragment(destination));
   }, [destination, verified]);
   if (children !== undefined) return children;
   const pathname = new URL(destination, page.origin).pathname;

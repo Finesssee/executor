@@ -3,7 +3,7 @@ import { resolveOrganizationReference } from "./organization-reference.ts";
 import type { AuthContext } from "@better-auth/core";
 import { AppSignInId } from "apps/ui/auth/contracts";
 import { UiFailed, UiForbidden, UiUnauthorized } from "apps/ui/contracts";
-import { Clock, Effect, Redacted, Schema } from "effect";
+import { Clock, Effect, Redacted, Result, Schema } from "effect";
 import {
   AppUiAttempt,
   AppUiGrant,
@@ -31,6 +31,17 @@ const Organization = Schema.Struct({ id: OrganizationId, slug: OrganizationSlug 
 const Membership = Schema.Struct({ role: OrganizationRole });
 const Stored = Schema.Struct({ value: Schema.String, expiresAt: Schema.Date });
 const recordJson = Schema.fromJsonString(AppUiRecord);
+/** Run two checks together but report the first one's failure first, as if they ran in order. */
+const inOrder = <A, B, E1, E2>(first: Effect.Effect<A, E1>, second: Effect.Effect<B, E2>) =>
+  Effect.all([Effect.result(first), Effect.result(second)], { concurrency: "unbounded" }).pipe(
+    Effect.flatMap(([a, b]) =>
+      Result.isFailure(a)
+        ? Effect.fail<E1 | E2>(a.failure)
+        : Result.isFailure(b)
+          ? Effect.fail<E1 | E2>(b.failure)
+          : Effect.succeed([a.success, b.success] as const),
+    ),
+  );
 
 /** Adapt one existing Better Auth context. Persisted state works across restarts and serving processes. */
 export const hostedAppSessions = (
@@ -135,9 +146,10 @@ export const hostedAppSessions = (
       };
     });
   const access = (principal: typeof Principal.Type, target: Pick<AppUiTarget, "organization">) =>
-    parent(principal.sessionId, principal.userId).pipe(
-      Effect.andThen(membership(principal.userId, target)),
-    );
+    inOrder(
+      parent(principal.sessionId, principal.userId),
+      membership(principal.userId, target),
+    ).pipe(Effect.map(([, access]) => access));
   return HostedAppSessions.of({
     organization: (find) =>
       Effect.gen(function* () {
@@ -180,45 +192,49 @@ export const hostedAppSessions = (
         );
         return { request, proof };
       }),
-    authorize: (request, principal) =>
+    pending: (request) =>
+      read(key("attempt", request)).pipe(
+        Effect.flatMap((attempt) =>
+          Schema.is(AppUiAttempt)(attempt)
+            ? Effect.succeed(attempt.target)
+            : Effect.fail(unavailable()),
+        ),
+      ),
+    grant: (request, target, principal) =>
       Effect.gen(function* () {
-        const attempt = yield* read(key("attempt", request));
-        if (!Schema.is(AppUiAttempt)(attempt)) return yield* unavailable();
-        yield* access(principal, attempt.target);
         const code = yield* nonce;
         yield* put(
           key("grant", yield* digest(code)),
-          {
-            kind: "grant",
-            request,
-            target: attempt.target,
-            parent: principal.sessionId,
-            user: principal.userId,
-          },
+          { kind: "grant", request, target, parent: principal.sessionId, user: principal.userId },
           new Date((yield* Clock.currentTimeMillis) + 60_000),
         );
-        return { target: attempt.target, code };
+        return code;
       }),
     complete: (target, request, code, proof) =>
       Effect.gen(function* () {
         const attemptKey = key("attempt", request);
         const grantKey = key("grant", yield* digest(code));
-        const attempt = yield* read(attemptKey);
-        const grant = yield* read(grantKey);
+        const [attempt, grant, verifier] = yield* Effect.all(
+          [read(attemptKey), read(grantKey), digest(proof)],
+          { concurrency: "unbounded" },
+        );
         if (
           !Schema.is(AppUiAttempt)(attempt) ||
           !Schema.is(AppUiGrant)(grant) ||
           grant.request !== request ||
           !sameTarget(attempt.target, target) ||
           !sameTarget(grant.target, target) ||
-          attempt.proof !== (yield* digest(proof))
+          attempt.proof !== verifier
         )
           return yield* new UiUnauthorized();
-        const session = yield* parent(grant.parent, grant.user);
-        yield* membership(grant.user, target);
+        const [session] = yield* inOrder(
+          parent(grant.parent, grant.user),
+          membership(grant.user, target),
+        );
         // Only one callback across all issued codes may consume this browser attempt.
-        yield* read(attemptKey, true);
-        yield* read(grantKey, true);
+        yield* Effect.all([read(attemptKey, true), read(grantKey, true)], {
+          concurrency: "unbounded",
+        });
         const token = yield* nonce;
         const expiresAt = new Date(
           Math.min(

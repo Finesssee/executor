@@ -90,7 +90,7 @@ const server = Effect.gen(function* () {
     });
   const local = yield* startLocalServer(settings, bootstrap, { web: development, oauthCallback });
   yield* Console.log(JSON.stringify({ version: 1, url: local.url }));
-  yield* Effect.never;
+  return yield* Effect.never;
 });
 
 NodeRuntime.runMain(

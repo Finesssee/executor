@@ -26,14 +26,17 @@ export const startScheduleWorker = (
         execute: (operation) => pool.withPermitsIfAvailable(1)(operation).pipe(Effect.asVoid),
       })
       .pipe(
+        // Each pass is one trace, as a Cloud coordinator's dispatch is.
+        Effect.withSpan("schedule.dispatch"),
         Effect.catch(() => Effect.logError("Scheduled dispatch failed")),
         Effect.forkIn(scope),
         Effect.asVoid,
       );
     yield* Effect.gen(function* () {
       yield* Effect.flatten(ScheduleHostReady);
-      yield* Effect.forever(
+      return yield* Effect.forever(
         executor[ProfileHost].tick(config.concurrency).pipe(
+          Effect.withSpan("schedule.dispatch"),
           Effect.catch(() =>
             Effect.logError("Profile setup dispatch failed").pipe(Effect.as(false)),
           ),

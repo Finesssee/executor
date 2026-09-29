@@ -3,10 +3,18 @@ import { Effect, Schema } from "effect";
 import type { Route } from "playwright";
 import { Browser } from "./browser.ts";
 
-/** Self-host does not publish; replace only that capability on real workspace reads for UI checks. */
+type WorkspaceDisplay = { readonly revision: { readonly commit: string } };
+const WorkspaceDisplay = Schema.Struct({
+  revision: Schema.Struct({ commit: Schema.String }),
+});
+
+/**
+ * Self-host does not publish; replace only that capability on real workspace reads for UI checks.
+ * A function derives the result from the real revision, so saved repairs can change readiness.
+ */
 export const publishingPreview = (
   app: string,
-  publication: unknown,
+  publication: object | ((display: WorkspaceDisplay) => object),
   published: readonly unknown[] = [],
 ) =>
   Effect.gen(function* () {
@@ -23,7 +31,10 @@ export const publishingPreview = (
             contentType: "application/json",
             body: JSON.stringify({
               ...Schema.decodeUnknownSync(Schema.Record(Schema.String, Schema.Unknown))(body),
-              publication,
+              publication:
+                typeof publication === "function"
+                  ? publication(Schema.decodeUnknownSync(WorkspaceDisplay)(body))
+                  : publication,
             }),
           }),
         );

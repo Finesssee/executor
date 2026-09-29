@@ -1,5 +1,5 @@
 /** Provider declarations use native Effect schemas. The trusted host interprets them. */
-import { Data, Schema } from "effect";
+import { Data, type Effect, Schema } from "effect";
 import { type AccountId, HttpUrl } from "./schema.ts";
 
 /** A named secrets method; its schema retains the provider's own field names. */
@@ -127,10 +127,52 @@ export type AuthMethod =
 /** Auth method names are chosen by the provider author. */
 export type AuthMethods = Readonly<Record<string, AuthMethod>>;
 
-/** A provider declaration. The future host derives its identity from normalized content. */
+const displayText = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(255));
+
+/**
+ * Upstream identity that a passing account check may report for display. Only these fields are
+ * retained; the host never stores raw provider responses.
+ */
+export const AccountInfo = Schema.Struct({
+  externalId: Schema.optionalKey(displayText),
+  displayName: Schema.optionalKey(displayText),
+  username: Schema.optionalKey(displayText),
+  email: Schema.optionalKey(displayText),
+  avatarUrl: Schema.optionalKey(HttpUrl),
+  profileUrl: Schema.optionalKey(HttpUrl),
+});
+export type AccountInfo = typeof AccountInfo.Type;
+
+/** A passing account check. Failures are thrown, so there is no failing variant. */
+export const AccountCheckResult = Schema.Struct({ accountInfo: Schema.optionalKey(AccountInfo) });
+export type AccountCheckResult = typeof AccountCheckResult.Type;
+
+/** The account a provider's check verifies, with invocation-owned HTTP and cancellation. */
+export interface AccountCheckContext<Auth extends AuthMethods> {
+  readonly account: AccountOfMethods<Auth>;
+  readonly fetch: (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+  readonly signal: AbortSignal;
+}
+
+/**
+ * A safe authenticated read proving the account works for this app. Returning passes; a thrown
+ * `ProviderError` or HTTP status failure classifies the problem. Any other failure, including a
+ * timeout, means the check could not verify the account, not that its credentials are bad.
+ */
+export interface AccountCheck<Auth extends AuthMethods> {
+  // Method syntax lets a check typed for specific methods be stored as a general one.
+  run(context: AccountCheckContext<Auth>): Effect.Effect<AccountCheckResult | void, unknown>;
+}
+
+/** A provider declaration. The host derives its identity from the declaration, never its check. */
 export class Provider<Auth extends AuthMethods> extends Data.Class<{
   readonly name: string;
   readonly auth: Auth;
+  /**
+   * Stored without its method types so a specific provider still fills a general slot. The host
+   * binds the account against this provider's methods before running it.
+   */
+  readonly health?: AccountCheck<AuthMethods>;
 }> {
   /** Declare zero or more accounts from this provider without performing I/O. */
   many(): ManyAccounts<Auth> {
@@ -151,14 +193,14 @@ export type AuthMethodData<Method> =
       ? Response["Type"]
       : never;
 
+/** One account for these methods, discriminated by its author-chosen method name. */
+export type AccountOfMethods<Auth extends AuthMethods> = {
+  readonly [Method in keyof Auth & string]: {
+    readonly id: AccountId;
+    readonly method: Method;
+    readonly fields: AuthMethodData<Auth[Method]>;
+  };
+}[keyof Auth & string];
+
 /** One selected account, discriminated by its author-chosen method name. */
-export type AccountOf<P> =
-  P extends Provider<infer Auth>
-    ? {
-        readonly [Method in keyof Auth & string]: {
-          readonly id: AccountId;
-          readonly method: Method;
-          readonly fields: AuthMethodData<Auth[Method]>;
-        };
-      }[keyof Auth & string]
-    : never;
+export type AccountOf<P> = P extends Provider<infer Auth> ? AccountOfMethods<Auth> : never;

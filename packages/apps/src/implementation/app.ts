@@ -14,7 +14,8 @@ import type {
 import { fromPromise, type PromiseMethods } from "./authoring.ts";
 import { nativeWorkflow, type WorkflowDeclaration } from "./workflows.ts";
 import type { WorkflowContext } from "../contracts/workflows.ts";
-import { nativeOperation, type OperationDeclaration } from "./operations.ts";
+import { nativeOperation } from "./operations.ts";
+import { declaredOperations, nativeRouter, type RouterDeclaration } from "./router.ts";
 import { decoderOf, isSchema, type Schema } from "./schema.ts";
 
 type PromiseCatalog<Catalog> =
@@ -35,34 +36,33 @@ export type AppDefinition<Requirements extends AppRequirements> = {
     ? Readonly<Record<string, WorkflowDeclaration<WorkflowContext<Requirements>>>>
     : Key extends "schedules"
       ? Readonly<Record<string, ScheduleDeclaration<MutationContext<Requirements>>>>
-      : Key extends "queries"
-        ? Readonly<Record<string, OperationDeclaration<"query", QueryContext<Requirements>>>>
-        : Key extends "mutations"
-          ? Readonly<
-              Record<string, OperationDeclaration<"mutation", MutationContext<Requirements>>>
-            >
-          : Key extends "webhooks"
-            ? PromiseCatalog<NonNullable<NativeDefinition<WebhookContext<Requirements>>[Key]>>
-            : NativeDefinition<WebhookContext<Requirements>>[Key];
-} & { readonly name?: never; readonly tools?: never; readonly call?: never };
+      : Key extends "tools"
+        ? RouterDeclaration<QueryContext<Requirements>, MutationContext<Requirements>>
+        : Key extends "webhooks"
+          ? PromiseCatalog<NonNullable<NativeDefinition<WebhookContext<Requirements>>[Key]>>
+          : NativeDefinition<WebhookContext<Requirements>>[Key];
+} & {
+  readonly name?: never;
+  readonly queries?: never;
+  readonly mutations?: never;
+  readonly call?: never;
+};
 
 /** Adapt operation and webhook catalogs without evaluating their handlers. */
 export type EffectDefinition<Def> = {
-  readonly [Key in keyof Def]: Key extends "dynamicTools"
-    ? NonNullable<NativeDefinition<unknown>["dynamicTools"]>
+  readonly [Key in keyof Def]: Key extends "tools"
+    ? NonNullable<NativeDefinition<unknown>["tools"]>
     : Key extends "workflows"
       ? Readonly<Record<string, import("../contracts/workflows.ts").AppWorkflow>>
       : Key extends "schedules"
         ? NonNullable<NativeDefinition<unknown>["schedules"]>
-        : Key extends "queries" | "mutations"
-          ? Readonly<Record<string, import("../contracts/operations.ts").AppOperation>>
-          : Key extends "webhooks"
-            ? NonNullable<NativeDefinition<WebhookContext>["webhooks"]>
-            : Key extends "skills"
-              ? NonNullable<NativeDefinition<unknown>["skills"]>
-              : Key extends "dynamicSkills"
-                ? NonNullable<NativeDefinition<unknown>["dynamicSkills"]>
-                : Def[Key];
+        : Key extends "webhooks"
+          ? NonNullable<NativeDefinition<WebhookContext>["webhooks"]>
+          : Key extends "skills"
+            ? NonNullable<NativeDefinition<unknown>["skills"]>
+            : Key extends "dynamicSkills"
+              ? NonNullable<NativeDefinition<unknown>["dynamicSkills"]>
+              : Def[Key];
 };
 
 const InternalApp = Symbol("apps.App");
@@ -91,11 +91,17 @@ export const toEffectApp = <
   app: App<Requirements, Def>,
 ): NativeApp<Requirements["accounts"], EffectDefinition<Def>> => app[InternalApp];
 
+/** Source written before routers (protocols 1 to 3) declares `queries` and `mutations` catalogs. */
+function rejectCatalogs(definition: object) {
+  if ("queries" in definition || "mutations" in definition)
+    throw new Error("Put queries and mutations in a router under tools");
+}
+
 function adaptDefinition<
   Requirements extends AppRequirements,
   Def extends AppDefinition<Requirements>,
 >(definition: Def): EffectDefinition<Def> {
-  if ("tools" in definition) throw new Error("Use queries and mutations instead of tools");
+  rejectCatalogs(definition);
   const webhooks =
     definition.webhooks === undefined
       ? {}
@@ -122,15 +128,6 @@ function adaptDefinition<
             ]),
           ),
         };
-  const operations = (kind: "query" | "mutation", catalog: Readonly<Record<string, unknown>>) =>
-    Object.fromEntries(
-      Object.entries(catalog).map(([name, value]) => {
-        const operation = nativeOperation(value);
-        if (operation === undefined || operation.kind !== kind)
-          throw new Error("Invalid app data operation");
-        return [name, operation];
-      }),
-    );
   const workflows =
     definition.workflows === undefined
       ? {}
@@ -143,32 +140,37 @@ function adaptDefinition<
             }),
           ),
         };
-  const data = {
-    ...(definition.queries === undefined
-      ? {}
-      : { queries: operations("query", definition.queries) }),
-    ...(definition.mutations === undefined
-      ? {}
-      : { mutations: operations("mutation", definition.mutations) }),
-  };
+  const root = definition.tools === undefined ? undefined : nativeRouter(definition.tools);
+  if (definition.tools !== undefined && root === undefined)
+    throw new Error("tools must be a router");
+  const data = root === undefined ? {} : { tools: root };
+  const declared = root?.kind === "router" ? declaredOperations(root) : [];
+  // Workflows and schedules name a mutation by its declaration, so each has one path.
+  const mutations = new Set<unknown>();
+  for (const { operation } of declared) {
+    if (operation.kind !== "mutation") continue;
+    if (mutations.has(operation))
+      throw new Error("A mutation can be mounted at only one path in tools");
+    mutations.add(operation);
+  }
   const schedules =
     definition.schedules === undefined
       ? {}
       : {
           schedules: Object.fromEntries(
             Object.entries(definition.schedules).map(([name, schedule]) => {
-              const matches = Object.entries(definition.mutations ?? {}).filter(
-                ([, operation]) => operation === schedule.operation,
+              const target = nativeOperation(schedule.operation);
+              const match = declared.find(
+                ({ operation }) => operation === target && operation.kind === "mutation",
               );
-              const match = matches[0];
-              if (match === undefined || matches.length !== 1)
-                throw new Error("A schedule must reference exactly one named mutation in this app");
+              if (match === undefined)
+                throw new Error("A schedule must reference a mutation in this app's tools");
               return [
                 name,
                 {
                   timing: EffectSchema.decodeUnknownSync(ScheduleTiming)(schedule.timing),
                   input: EffectSchema.decodeUnknownSync(JsonValue)(schedule.input),
-                  tool: `mutations.${match[0]}`,
+                  tool: match.name,
                 },
               ];
             }),
@@ -196,6 +198,8 @@ export const defineApp = <
     | (Def & AppDefinition<Requirements>)
     | ((context: AppContext<Requirements>) => Promise<Def & AppDefinition<Requirements>>),
 ): App<Requirements, Def> => {
+  // A static definition is checked when the module loads, so such source fails its build.
+  if (typeof definition !== "function") rejectCatalogs(definition);
   const evaluate = typeof definition === "function" ? definition : async () => definition;
   const factory = fromPromise(evaluate);
   const native: NativeApp<Requirements["accounts"], EffectDefinition<Def>> = {

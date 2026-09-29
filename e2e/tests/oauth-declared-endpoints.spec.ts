@@ -1,6 +1,7 @@
 /**
  * Providers that declare OAuth endpoints directly, shaped like Google's authorization server, and
- * discovered servers that likewise leave client authentication to the client.
+ * discovered servers that likewise leave client authentication to the client. Accounts started
+ * without a name take the owner's first free default name for the provider when they complete.
  */
 import { expect, layer } from "@effect/vitest";
 import { Effect, Schema } from "effect";
@@ -14,7 +15,9 @@ import { Resource } from "../support/contracts.ts";
 import { Target } from "../support/platform.ts";
 import { oauthSetupIssuer } from "../support/oauth-setup-issuer.ts";
 import { createProfile, Profile } from "../support/profiles.ts";
+import { nameConnectedAccount } from "../support/name-account.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const AppProvider = Schema.Struct({
   id: Schema.String,
@@ -32,6 +35,7 @@ const Failure = Schema.Struct({
   reason: Schema.optional(Schema.String),
 });
 const Read = Schema.Struct({ refreshed: Schema.Boolean });
+const SavedAccount = Schema.Struct({ id: Schema.String, label: Schema.String });
 const clients = {
   confidential: { clientId: "confidential-client", clientSecret: "synthetic-manual-secret" },
   public: { clientId: "public-client" },
@@ -65,10 +69,13 @@ layer(HostedLive, { excludeTestServices: true })("OAuth declared endpoints", (it
               files: [
                 {
                   path: "index.ts",
-                  content: `import { defineApp, defineProvider, oauth2, query, object } from "apps";
+                  content: `import { defineApp, defineProvider, oauth2, query, object, router } from "apps";
 const service=defineProvider({name:${JSON.stringify(name)},auth:{oauth:oauth2(${JSON.stringify(config)})}});
-export default defineApp({accounts:{service}},async({accounts})=>({queries:{read:query({input:object({})},async({fetch})=>{const result=await fetch(${JSON.stringify(`${issuer.origin}/resource`)},{headers:{authorization:"Bearer "+accounts.service.fields.access_token}});return result.json();})}}));`,
+export default defineApp({accounts:{service}},async({accounts})=>({tools: router({
+  read:query({input:object({})},async({fetch})=>{const result=await fetch(${JSON.stringify(`${issuer.origin}/resource`)},{headers:{authorization:"Bearer "+accounts.service.fields.access_token}});return result.json();}),
+})}));`,
                 },
+                appsManifest,
               ],
             });
             expect(response.status).toBe(200);
@@ -93,13 +100,15 @@ export default defineApp({accounts:{service}},async({accounts})=>({queries:{read
         const start = (
           connection: string,
           client: { readonly clientId: string; readonly clientSecret?: string },
+          /** `null` starts sign-in without a name. */
+          label: string | null = `Declared ${client.clientId}`,
         ) =>
           Effect.gen(function* () {
             const response = yield* api.request(
               actors.owner,
               "POST",
               `${prefix}/connections/${connection}/oauth/start`,
-              { method: "oauth", label: `Declared ${client.clientId}`, client },
+              { method: "oauth", ...(label === null ? {} : { label }), client },
             );
             expect(response.status, JSON.stringify(response.body)).toBe(200);
             return yield* body(Redirect, response);
@@ -129,7 +138,7 @@ export default defineApp({accounts:{service}},async({accounts})=>({queries:{read
               response.status,
               `${JSON.stringify(response.body)}, checks=${JSON.stringify((yield* issuer.metrics).tokenChecks)}`,
             ).toBe(200);
-            const account = yield* body(Resource, response);
+            const account = yield* body(SavedAccount, response);
             yield* Effect.addFinalizer(() =>
               api
                 .request(actors.owner, "DELETE", `${prefix}/accounts/${account.id}`)
@@ -149,6 +158,7 @@ export default defineApp({accounts:{service}},async({accounts})=>({queries:{read
                 `${prefix}/connections/${attempt.connection}`,
               )).body,
             ).toMatchObject({ state: { status: "completed", account: { id: account.id } } });
+            return account;
           });
         // Tokens are issued inside the host's renewal window, so using the account refreshes it.
         const expectRenewed = (
@@ -161,7 +171,7 @@ export default defineApp({accounts:{service}},async({accounts})=>({queries:{read
               actors.owner,
               "POST",
               `${prefix}/apps/${app.id}/tools/call`,
-              { profile: attempt.profile.id, tool: "queries.read", input: {} },
+              { profile: attempt.profile.id, tool: "read", kind: "query", input: {} },
             );
             const metrics = yield* issuer.metrics;
             expect(
@@ -196,8 +206,9 @@ export default defineApp({accounts:{service}},async({accounts})=>({queries:{read
           expiresIn: 20,
         });
 
+        // Neither sign-in names its account, so each takes the owner's next default name.
         const confidential = yield* connect(undeclared);
-        const confidentialStart = yield* start(confidential.connection, clients.confidential);
+        const confidentialStart = yield* start(confidential.connection, clients.confidential, null);
         yield* issuer.allowClient({
           ...clients.confidential,
           redirect: confidentialStart.redirectUri,
@@ -205,33 +216,64 @@ export default defineApp({accounts:{service}},async({accounts})=>({queries:{read
         yield* issuer.allowClient({ ...clients.public, redirect: confidentialStart.redirectUri });
         const confidentialCallback = new URL(yield* consent(confidentialStart.authorizationUrl));
         expect(confidentialCallback.searchParams.get("iss")).toBe(signInOrigin);
-        yield* expectCompleted(
+        const confidentialAccount = yield* expectCompleted(
           confidential,
           yield* complete(confidential.connection, confidentialCallback.href),
           undeclared,
         );
+        expect(confidentialAccount.label).toBe("Default");
         expect((yield* issuer.metrics).nonceRequested).toBe(true);
         expect((yield* issuer.metrics).lastExchangeAuth).toBe("client_secret_basic");
         yield* expectRenewed(confidential, undeclared);
 
         const publicClient = yield* connect(undeclared);
-        const publicStart = yield* start(publicClient.connection, clients.public);
-        yield* expectCompleted(
+        const publicStart = yield* start(publicClient.connection, clients.public, null);
+        const publicAccount = yield* expectCompleted(
           publicClient,
           yield* complete(publicClient.connection, yield* consent(publicStart.authorizationUrl)),
           undeclared,
         );
         expect((yield* issuer.metrics).lastExchangeAuth).toBe("none");
+        expect(publicAccount.label).toBe("Default 2");
+        // A reconnect keeps the account's current name instead of taking another default.
+        const renamed = yield* api.request(
+          actors.owner,
+          "PATCH",
+          `${prefix}/accounts/${publicAccount.id}`,
+          { label: "Renamed public account" },
+        );
+        expect(renamed.status).toBe(200);
+        const reconnection = yield* body(
+          Resource,
+          yield* api.request(
+            actors.owner,
+            "POST",
+            `${prefix}/accounts/${publicAccount.id}/connections`,
+          ),
+        );
+        const reconnectStart = yield* start(reconnection.id, clients.public, null);
+        const reconnected = yield* complete(
+          reconnection.id,
+          yield* consent(reconnectStart.authorizationUrl),
+        );
+        expect(reconnected.status, JSON.stringify(reconnected.body)).toBe(200);
+        expect(yield* body(SavedAccount, reconnected)).toEqual({
+          id: publicAccount.id,
+          label: "Renamed public account",
+        });
 
         // A declared issuer is the service's identifier, so the callback and ID tokens must match it.
         const declared = yield* deploy("Declared issuer", { ...endpoints, issuer: signInOrigin });
         const matching = yield* connect(declared);
         const matchingStart = yield* start(matching.connection, clients.confidential);
-        yield* expectCompleted(
-          matching,
-          yield* complete(matching.connection, yield* consent(matchingStart.authorizationUrl)),
-          declared,
-        );
+        // A name supplied when sign-in starts is used as given.
+        expect(
+          (yield* expectCompleted(
+            matching,
+            yield* complete(matching.connection, yield* consent(matchingStart.authorizationUrl)),
+            declared,
+          )).label,
+        ).toBe("Declared confidential-client");
         yield* expectRenewed(matching, declared);
         const expectRejected = (
           attempt: { readonly profile: typeof Profile.Type; readonly connection: string },
@@ -299,7 +341,7 @@ export default defineApp({accounts:{service}},async({accounts})=>({queries:{read
           page.goto(`/org/${actors.organization.slug}/apps/${formApp.id}?view=accounts`),
         );
         yield* browser.use("Open the account form", (page) =>
-          page.getByRole("button", { name: "Add Open client auth account", exact: true }).click(),
+          page.getByRole("button", { name: "Connect new account", exact: true }).click(),
         );
         yield* browser.use("The client secret is offered as optional", (page) => {
           const dialog = page.getByRole("dialog");
@@ -327,17 +369,15 @@ export default defineApp({accounts:{service}},async({accounts})=>({queries:{read
         yield* browser.use("Connect a public client without a secret", (page) => {
           const dialog = page.getByRole("dialog");
           return dialog
-            .getByLabel("Account name", { exact: true })
-            .fill("Public form account")
-            .then(() =>
-              dialog.getByLabel("Client ID", { exact: true }).fill(clients.public.clientId),
-            )
+            .getByLabel("Client ID", { exact: true })
+            .fill(clients.public.clientId)
             .then(() =>
               dialog.getByRole("button", { name: "Connect Open client auth", exact: true }).click(),
             )
+            .then(() => nameConnectedAccount(page, "Public form account"))
             .then(() =>
               page
-                .getByRole("link", { name: "Public form account", exact: true })
+                .getByRole("radio", { name: "Public form account", exact: true, checked: true })
                 .waitFor({ state: "visible" }),
             );
         });
@@ -386,14 +426,18 @@ export default defineApp({accounts:{service}},async({accounts})=>({queries:{read
           scopes: ["read"],
           grant: "authorization_code",
         });
-        const signInWith = (client: {
-          readonly clientId: string;
-          readonly clientSecret?: string;
-        }) =>
+        const signInWith = (
+          client: { readonly clientId: string; readonly clientSecret?: string },
+          methods?: readonly ("client_secret_basic" | "client_secret_post")[],
+        ) =>
           Effect.gen(function* () {
             const attempt = yield* connect(discovered);
             const started = yield* start(attempt.connection, client);
-            yield* issuer.allowClient({ ...client, redirect: started.redirectUri });
+            yield* issuer.allowClient({
+              ...client,
+              redirect: started.redirectUri,
+              ...(methods === undefined ? {} : { methods }),
+            });
             yield* expectCompleted(
               attempt,
               yield* complete(attempt.connection, yield* consent(started.authorizationUrl)),
@@ -405,7 +449,17 @@ export default defineApp({accounts:{service}},async({accounts})=>({queries:{read
         expect(yield* signInWith(clients.public)).toBe("none");
         // A secret uses the body form when the server accepts only that one.
         yield* issuer.configure({ authMethods: ["none", "client_secret_post"] });
-        expect(yield* signInWith(clients.confidential)).toBe("client_secret_post");
+        expect(yield* signInWith(clients.confidential, ["client_secret_post"])).toBe(
+          "client_secret_post",
+        );
+        // A server can accept both forms while this client was registered for Basic only
+        // (RFC 8414 section 2, RFC 7591 section 2), so an entered secret keeps Basic.
+        yield* issuer.configure({
+          authMethods: ["none", "client_secret_basic", "client_secret_post"],
+        });
+        expect(yield* signInWith(clients.confidential, ["client_secret_basic"])).toBe(
+          "client_secret_basic",
+        );
       }),
     ),
   );

@@ -1,2 +1,15 @@
 /* Dashboard utilities live with their views and are scanned by every product. */
 @source "../dashboard";
+
+/*
+ * A name prompt that follows the dialog which saved the account takes its place: it appears
+ * without an entrance, and the closing dialog does not animate out underneath it.
+ */
+[data-name-account-handoff][data-state="open"],
+.name-account-handoff[data-state="open"] {
+  animation: none;
+}
+body:has([data-name-account-handoff][data-state="open"])
+  :is([data-slot="dialog-content"], [data-slot="dialog-overlay"])[data-state="closed"] {
+  display: none;
+}

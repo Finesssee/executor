@@ -234,10 +234,30 @@ const accounts = table("executor_accounts", {
   createdAt: column("created_at", Schema.Date),
 });
 
+/** Tables of the 4.0.2 layout. */
+export const version402Tables = { ...version4Tables, accounts };
+
+/**
+ * Version 4.0.3 records each app's latest check of an account, one row per account and app. A
+ * result is current only for the credential generation and deployment it names. Display info is
+ * kept from the last passing check, with its own time, when a later check fails.
+ */
+const accountChecks = table("executor_account_checks", {
+  id: idColumn("id", Schema.String, { type: "varchar(255)" }),
+  account: column("account", AccountId, { type: "varchar(255)" }),
+  app: column("app", AppId, { type: "varchar(255)" }),
+  deployment: column("deployment", DeploymentId, { type: "varchar(255)" }),
+  credentialGeneration: column("credential_generation", Schema.Int),
+  status: column("status", Schema.String, { type: "varchar(32)" }),
+  checkedAt: column("checked_at", Schema.Date),
+  info: column("account_info", Schema.NullOr(Schema.Json)).default(null),
+  infoCheckedAt: column("info_checked_at", Schema.NullOr(Schema.Date)).default(null),
+}).unique("executor_account_checks_account_app", ["account", "app"]);
+
 /** Current ORM layout. Profiles own account selections; apps declare requirements. */
 export const storageSchema = schema({
-  version: "4.0.2",
-  tables: { ...version4Tables, accounts },
+  version: "4.0.3",
+  tables: { ...version402Tables, accountChecks },
   relations: {
     accounts: ({ one }) => ({
       providerDefinition: one("providers", ["provider", "id"]).foreignKey(),

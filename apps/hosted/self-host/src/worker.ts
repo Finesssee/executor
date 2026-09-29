@@ -136,7 +136,7 @@ const prepare = (state: DurableObjectState, env: Environment) =>
       const blobs = bindingBlobStore(env.BLOBS);
       const directory = yield* Config.NonEmptyString("EXECUTOR_REPOSITORIES_DIR");
       const services = yield* Layer.build(
-        selfHostExecutorServices(executorSkillFiles(skills), egress, () =>
+        selfHostExecutorServices(egress, () =>
           Effect.gen(function* () {
             const host = yield* bindingWorkerdApps({
               binding: env.APPS,
@@ -181,50 +181,69 @@ const prepare = (state: DurableObjectState, env: Environment) =>
     }).pipe(Effect.provideContext(common));
   });
 
-/** The product store has its own disk service, namespace and migration journal. */
+/**
+ * The product store has its own disk service, namespace and migration journal.
+ *
+ * Opening it runs schema migrations and data steps, which can take longer on a large install than
+ * workerd allows a `blockConcurrencyWhile` callback: after 30 seconds workerd cancels the callback
+ * and resets the object. So the store opens outside it, and every entry point waits for the open
+ * product instead. Nothing is served, built or run in the background before the open finishes.
+ */
 export class ExecutorProduct extends DurableObject<Environment> implements ProductStub {
-  readonly #scope = Scope.makeUnsafe();
-  readonly #ready: Promise<Effect.Success<ReturnType<typeof prepare>>>;
+  readonly #state: DurableObjectState;
+  readonly #env: Environment;
+  #opening: Promise<Effect.Success<ReturnType<typeof prepare>>> | undefined;
   constructor(state: DurableObjectState, env: Environment) {
     super(state, env);
-    this.#ready = state.blockConcurrencyWhile(async () => {
-      try {
-        const config = await Effect.runPromise(configuration(env.NATIVE));
-        const product = await Effect.runPromise(
-          prepare(state, env).pipe(
-            Effect.provideService(Scope.Scope, this.#scope),
-            Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown(config))),
-            Effect.provide(FetchHttpClient.layer),
-          ),
-        );
-        await state.storage.setAlarm(Date.now() + 30_000);
-        return product;
-      } catch {
-        await Effect.runPromise(Scope.close(this.#scope, Exit.void));
-        throw new Error(
-          "Executor product storage could not open. The original PostgreSQL directory has been preserved.",
-        );
-      }
-    });
-    this.state = state;
+    this.#state = state;
+    this.#env = env;
+    // Start at once, as after a restart; a failure is reported to the events that wait for it.
+    this.#product().catch(() => undefined);
   }
-  private readonly state: DurableObjectState;
+  /** The open product. A failed open releases what it acquired, and the next event retries it. */
+  #product() {
+    this.#opening ??= this.#open().catch((error: unknown) => {
+      this.#opening = undefined;
+      throw error;
+    });
+    return this.#opening;
+  }
+  async #open() {
+    const scope = Scope.makeUnsafe();
+    try {
+      const config = await Effect.runPromise(configuration(this.#env.NATIVE));
+      const product = await Effect.runPromise(
+        prepare(this.#state, this.#env).pipe(
+          Effect.provideService(Scope.Scope, scope),
+          Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown(config))),
+          Effect.provide(FetchHttpClient.layer),
+        ),
+      );
+      await this.#state.storage.setAlarm(Date.now() + 30_000);
+      return product;
+    } catch {
+      await Effect.runPromise(Scope.close(scope, Exit.void));
+      throw new Error(
+        "Executor product storage could not open. The original PostgreSQL directory has been preserved.",
+      );
+    }
+  }
   /** Dispatch the existing authenticated product routes. */
   async fetch(request: Request): Promise<Response> {
-    return (await this.#ready).fetch(request);
+    return (await this.#product()).fetch(request);
   }
   /** Private workflow callbacks are reached only through the named service entrypoint. */
   async workflow(request: Request): Promise<Response> {
-    return (await this.#ready).workflow(request);
+    return (await this.#product()).workflow(request);
   }
   /** The offline export process owns the volume lock; no public socket serves this method. */
   async exportDatabase(): Promise<Response> {
-    return (await this.#ready).exportDatabase();
+    return (await this.#product()).exportDatabase();
   }
   /** Restore the background owner after a restart even when no public request arrives. */
   async alarm(): Promise<void> {
-    await this.#ready;
-    await this.state.storage.setAlarm(Date.now() + 30_000);
+    await this.#product();
+    await this.#state.storage.setAlarm(Date.now() + 30_000);
   }
 }
 

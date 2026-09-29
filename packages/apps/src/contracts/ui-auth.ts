@@ -1,8 +1,6 @@
 /* oxlint-disable no-control-regex -- control characters in paths are rejected on purpose */
 /** Browser authentication protocol. Identity and session storage belong to the host. */
 import { Schema } from "effect";
-import { HttpApi, HttpApiEndpoint, HttpApiGroup } from "effect/unstable/httpapi";
-import { UiFailed, UiForbidden, UiUnauthorized } from "./ui.ts";
 
 /** Opaque correlation ID; possession alone does not authorize an app session. */
 export const AppSignInId = Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/)).pipe(
@@ -31,23 +29,10 @@ export const AppReturnPath = Schema.String.check(
   }),
 ).pipe(Schema.brand("AppReturnPath"));
 export type AppReturnPath = typeof AppReturnPath.Type;
-/** The trusted callback exchanges an authorization code bound to a browser attempt. */
+/** Callback query on the app origin. The code is single-use and works only with its attempt's cookie. */
 export const AppSignInCallback = Schema.Struct({ request: AppSignInId, code: AppSignInCode });
-/** Host-owned endpoints on every app origin, independent of the product's login mechanism. */
-export const AppSignInApi = HttpApi.make("app-sign-in").add(
-  HttpApiGroup.make("appSignIn")
-    .add(
-      HttpApiEndpoint.post("start", "/_executor/auth/start", {
-        payload: Schema.Struct({ returnTo: AppReturnPath }),
-        success: Schema.Struct({ url: Schema.String }),
-        error: [UiForbidden, UiFailed],
-      }),
-    )
-    .add(
-      HttpApiEndpoint.post("complete", "/_executor/auth/complete", {
-        payload: AppSignInCallback,
-        success: Schema.Struct({ returnTo: AppReturnPath }),
-        error: [UiUnauthorized, UiForbidden, UiFailed],
-      }),
-    ),
-);
+/** Host-owned callback path on every app origin. */
+export const appSignInCallbackPath = "/_executor/auth/callback";
+/** Why the product could not authorize an attempt; the dashboard explains it without retrying. */
+export const AppSignInFailure = Schema.Literals(["ended", "forbidden", "unavailable"]);
+export type AppSignInFailure = typeof AppSignInFailure.Type;

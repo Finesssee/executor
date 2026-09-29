@@ -26,16 +26,20 @@ const files = (dependency: string, direct: string, unused: string) => [
   },
   {
     path: "index.ts",
-    content: `import { defineApp, query, mutation, object, defineDatabase, table, string, packageFixture } from "apps";
+    content: `import * as apps from "apps";
+import * as host from "apps/host";
+import { defineApp, query, mutation, object, defineDatabase, table, string } from "apps";
 import { value } from "direct-fixture";
 import { mcpOperations } from "apps/mcp";
 import { graphqlOperations } from "apps/graphql";
 import manifest from "./package.json";
 const database = defineDatabase({ notes: table({ text: string() }) });
+// apps@0.0.1-beta.0 predates CacheError and isolatedCacheSession.
+const framework = () => ({ current: "CacheError" in apps, cacheSession: typeof host.isolatedCacheSession });
 export default defineApp({ accounts: {}, database }, {
-  queries: { dependencies: query({ input: object({}) }, async () => ({ value, mcp: typeof mcpOperations, graphql: typeof graphqlOperations, declared: manifest.dependencies["unused-fixture"] })), version: query({ input: object({}) }, async () => packageFixture),
+  queries: { dependencies: query({ input: object({}) }, async () => ({ value, mcp: typeof mcpOperations, graphql: typeof graphqlOperations, declared: manifest.dependencies["unused-fixture"] })), version: query({ input: object({}) }, async () => framework()),
     notes: query({ input: object({}) }, async ({ db }) => (await db.notes.withIndex("by_creation").collect()).map(row => row.text)) },
-  mutations: { save: mutation({ input: object({ text: string() }) }, async ({ db }, input) => { await db.notes.insert(input); return packageFixture; }) }
+  mutations: { save: mutation({ input: object({ text: string() }) }, async ({ db }, input) => { await db.notes.insert(input); return framework(); }) }
 });`,
   },
   {
@@ -46,9 +50,14 @@ export default defineApp({ accounts: {}, database }, {
   {
     path: "ui/main.ts",
     content:
-      'import { packageFixture } from "apps"; document.querySelector("[role=status]").textContent = packageFixture;',
+      'import * as apps from "apps"; document.querySelector("[role=status]").textContent = "CacheError" in apps ? "current framework" : "published beta.0";',
   },
 ];
+const Published = { current: false, cacheSession: "undefined" };
+const Catalog = Schema.Struct({
+  items: Schema.Array(Schema.Struct({ name: Schema.String, readOnly: Schema.Boolean })),
+  routers: Schema.Array(Schema.Unknown),
+});
 
 layer(HostedLive, { excludeTestServices: true })("Packaged apps", (it) => {
   it.effect(scenarios.appPackage.title, (context) =>
@@ -62,19 +71,48 @@ layer(HostedLive, { excludeTestServices: true })("Packaged apps", (it) => {
         const prefix = `/api/organizations/${actors.organization.id}`;
         const deployed = yield* api.request(actors.owner, "POST", `${prefix}/apps/deploy`, {
           name: `Package ${randomUUID().slice(0, 8)}`,
-          files: files(packages.older, packages.direct, packages.unused),
+          files: files(packages.published, packages.direct, packages.unused),
         });
         expect(deployed.status, JSON.stringify(deployed.body)).toBe(200);
         const app = yield* body(App, deployed);
         yield* Effect.addFinalizer(() =>
           api.request(actors.owner, "DELETE", `${prefix}/apps/${app.id}`).pipe(Effect.orDie),
         );
-        const call = (tool: string, input: Record<string, string> = {}) =>
-          api.request(actors.owner, "POST", `${prefix}/apps/${app.id}/tools/call`, { tool, input });
-        expect(yield* body(Schema.String, yield* call("queries.version"))).toBe("older-package");
-        expect(
-          yield* body(Schema.String, yield* call("mutations.save", { text: "retained row" })),
-        ).toBe("older-package");
+        // Callers may name the kind or leave it to the catalog. Protocol-1 tools keep their names.
+        const call = (
+          tool: string,
+          input: Record<string, string> = {},
+          kind?: "query" | "mutation",
+        ) =>
+          api.request(actors.owner, "POST", `${prefix}/apps/${app.id}/tools/call`, {
+            tool,
+            input,
+            ...(kind === undefined ? {} : { kind }),
+          });
+        const catalog = yield* body(
+          Catalog,
+          yield* api.request(actors.owner, "GET", `${prefix}/apps/${app.id}/tools`),
+        );
+        expect(catalog.items.map((tool) => [tool.name, tool.readOnly]).toSorted()).toEqual([
+          ["mutations.save", false],
+          ["queries.dependencies", true],
+          ["queries.notes", true],
+          ["queries.version", true],
+        ]);
+        expect(catalog.routers).toEqual([]);
+        expect((yield* call("queries.version")).body).toEqual(Published);
+        expect((yield* call("queries.version", {}, "query")).body).toEqual(Published);
+        expect((yield* call("mutations.save", { text: "retained row" })).body).toEqual(Published);
+        expect((yield* call("mutations.save", { text: "named row" }, "mutation")).body).toEqual(
+          Published,
+        );
+        const mismatch = yield* call("mutations.save", { text: "never saved" }, "query");
+        expect(mismatch.status).toBe(409);
+        expect(mismatch.body).toMatchObject({
+          _tag: "ToolKindMismatch",
+          requested: "query",
+          actual: "mutation",
+        });
         const dependencies = yield* call("queries.dependencies");
         expect(dependencies.status).toBe(200);
         expect(dependencies.body).toEqual({
@@ -84,17 +122,18 @@ layer(HostedLive, { excludeTestServices: true })("Packaged apps", (it) => {
           declared: packages.unused,
         });
         const downloaded = yield* packages.requests;
-        expect(downloaded["/older.tgz"]).toBe(1);
+        expect(downloaded["/apps-0.0.1-beta.0.tgz"]).toBe(1);
         expect(downloaded["/direct-fixture.tgz"]).toBe(1);
         expect(downloaded["/transitive-fixture.tgz"]).toBe(1);
         expect(downloaded).not.toHaveProperty("/unused.tgz");
         const rebuilt = yield* saveAndDeploy(actors.owner, `${prefix}/apps/${app.id}`, {
-          files: files(packages.older, packages.direct, packages.unused),
+          files: files(packages.published, packages.direct, packages.unused),
         });
         expect(rebuilt.status, JSON.stringify(rebuilt.body)).toBe(200);
-        expect(yield* body(Schema.String, yield* call("queries.version"))).toBe("older-package");
+        expect((yield* call("queries.version")).body).toEqual(Published);
         expect(yield* body(Schema.Array(Schema.String), yield* call("queries.notes"))).toEqual([
           "retained row",
+          "named row",
         ]);
         const current = yield* body(
           Schema.Struct({ id: Schema.String }),
@@ -103,8 +142,13 @@ layer(HostedLive, { excludeTestServices: true })("Packaged apps", (it) => {
         const rejected = yield* saveAndDeploy(actors.owner, `${prefix}/apps/${app.id}`, {
           files: files(packages.unsupported, packages.direct, packages.unused),
         });
-        expect(rejected.status).toBeGreaterThanOrEqual(400);
-        expect(yield* body(Schema.String, yield* call("queries.version"))).toBe("older-package");
+        expect(rejected.status).toBe(422);
+        expect(rejected.body).toMatchObject({
+          _tag: "DeploymentBuildFailed",
+          reason:
+            "This app's apps framework uses host protocol 6. This host supports protocol 1, 2, 3, 4, 5. Declare a supported apps version.",
+        });
+        expect((yield* call("queries.version")).body).toEqual(Published);
         expect(
           (yield* body(
             Schema.Struct({ id: Schema.String }),
@@ -119,8 +163,8 @@ layer(HostedLive, { excludeTestServices: true })("Packaged apps", (it) => {
         yield* browser.use("Open the UI built with the app's own framework", (page) =>
           page.goto(location.url),
         );
-        yield* browser.use("The browser uses the older package too", (page) =>
-          page.getByRole("status").filter({ hasText: "older-package" }).waitFor(),
+        yield* browser.use("The browser uses the published package too", (page) =>
+          page.getByRole("status").filter({ hasText: "published beta.0" }).waitFor(),
         );
       }),
     ),

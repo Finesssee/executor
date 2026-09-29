@@ -176,6 +176,10 @@ export const createEmulatorFixture = (origin: string) =>
 const make = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const target = yield* Target;
+  // Methods use the client captured when the service is built, not one from each caller.
+  const http = yield* HttpClient.HttpClient;
+  const request = (...args: Parameters<typeof emulatorRequest>) =>
+    emulatorRequest(...args).pipe(Effect.provideService(HttpClient.HttpClient, http));
   const file = yield* Config.String("E2E_EMULATORS");
   const fixture = yield* fs.readFileString(file).pipe(
     Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(EmulatorFixture))),
@@ -186,12 +190,7 @@ const make = Effect.gen(function* () {
   if (value.origin !== target.metadata.origin)
     return yield* new EmulatorFailed({ operation: "Fixture belongs to another server" });
   const messages = (email: string) =>
-    emulatorRequest(
-      value.services.mail.baseUrl,
-      "/emails",
-      undefined,
-      value.services.mail.token,
-    ).pipe(
+    request(value.services.mail.baseUrl, "/emails", undefined, value.services.mail.token).pipe(
       Effect.flatMap(
         Schema.decodeUnknownEffect(
           Schema.Struct({
@@ -217,7 +216,7 @@ const make = Effect.gen(function* () {
         const match = /^(executor-next-[a-z0-9-]+?)-(free|team|enterprise)$/.exec(input.planId);
         if (!match?.[1])
           return yield* new EmulatorFailed({ operation: "Expected a stage-scoped billing plan" });
-        yield* emulatorRequest(
+        yield* request(
           value.services.billing.baseUrl,
           "/_emulate/seed",
           {
@@ -237,10 +236,10 @@ const make = Effect.gen(function* () {
         const domain = provider === "google" ? `${login}.company.example` : "example.test";
         const email = `${login}@${domain}`;
         if (provider === "google")
-          yield* emulatorRequest(value.services.company.baseUrl, "/_emulate/seed", {
+          yield* request(value.services.company.baseUrl, "/_emulate/seed", {
             brands: [{ domain, title: "Example Company" }],
           });
-        yield* emulatorRequest(value.services[provider].baseUrl, "/_emulate/seed", {
+        yield* request(value.services[provider].baseUrl, "/_emulate/seed", {
           users: [
             {
               ...(provider === "github" ? { login } : {}),
@@ -258,7 +257,7 @@ const make = Effect.gen(function* () {
       readonly name: string;
       readonly picture: string;
     }) =>
-      emulatorRequest(value.services.google.baseUrl, "/_emulate/seed", {
+      request(value.services.google.baseUrl, "/_emulate/seed", {
         users: [{ ...user, email_verified: true }],
       }).pipe(Effect.asVoid),
     received: (email: string) =>

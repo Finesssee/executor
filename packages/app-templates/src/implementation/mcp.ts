@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import { packageFile, sourceFiles } from "./files.ts";
+import { appsPeerVersion, packageFile, sourceFiles } from "./files.ts";
 
 /**
  * A remote MCP app whose connection was confirmed: public, or OAuth discovered from the server.
@@ -13,30 +13,30 @@ export const generateMcpSource = (
   Effect.gen(function* () {
     const serialize = (value: unknown) => JSON.stringify(value, null, 2);
     const index = oauth
-      ? `import { defineApp, accountOperations } from "apps"
-import { mcpOperations } from "apps/mcp"
+      ? `import { defineApp, accountRouter } from "apps"
+import { mcpRouter } from "apps/mcp"
 import { provider } from "./provider.ts"
 
-export default defineApp({ accounts: { service: provider.many() } }, async ({ accounts, signal, cache }) =>
-  accountOperations(accounts.service, async (account) => mcpOperations({
+export default defineApp({ accounts: { service: provider.many() } }, async ({ accounts, signal, cache }) => ({
+  tools: await accountRouter(accounts.service, async (account) => mcpRouter({
     url: ${serialize(url)},
     cache: cache.forAccount(account),
     accountId: account.id,
     headers: { Authorization: "Bearer " + account.fields.access_token },
     signal,
   }), { signal }),
-)
+}))
 `
       : `import { defineApp } from "apps"
-import { mcpOperations } from "apps/mcp"
+import { mcpRouter } from "apps/mcp"
 
-export default defineApp({ accounts: {} }, async ({ accounts, signal, cache }) =>
-  mcpOperations({
+export default defineApp({ accounts: {} }, async ({ signal, cache }) => ({
+  tools: await mcpRouter({
     url: ${serialize(url)},
     cache,
     signal,
   }),
-)
+}))
 `;
     return {
       files: yield* sourceFiles([
@@ -57,7 +57,9 @@ export const provider = defineProvider({
               },
             ]
           : []),
-        packageFile(name, { "@modelcontextprotocol/sdk": "1.30.0" }),
+        packageFile(name, {
+          "@modelcontextprotocol/sdk": appsPeerVersion("@modelcontextprotocol/sdk"),
+        }),
       ]),
     };
   });

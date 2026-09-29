@@ -42,10 +42,10 @@ layer(HostedLive, { excludeTestServices: true })("Framework authoring", (it) => 
           evidence = yield* Evidence;
         const { execute, queries } = yield* frameworkSession;
         const found = yield* execute(
-          `return await ${queries}.framework_search({query: "withOptimisticUpdate"});`,
+          `return await ${queries}.framework.search({query: {text: "withOptimisticUpdate"}});`,
         ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.Struct({ reference: Reference }))));
         const update = yield* execute(
-          `return await ${queries}.framework_describe(${JSON.stringify({ symbol: "AppMutation.withOptimisticUpdate", ...found.reference })});`,
+          `return await ${queries}.framework.describe(${JSON.stringify({ query: { symbol: "AppMutation.withOptimisticUpdate", ...found.reference } })});`,
         ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(Description)));
         yield* evidence.json("framework-reference.json", {
           reference: found.reference,
@@ -66,7 +66,7 @@ layer(HostedLive, { excludeTestServices: true })("Framework authoring", (it) => 
           api.request(actors.owner, "DELETE", `${prefix}/${app.id}`).pipe(Effect.orDie),
         );
         const url = yield* waitForAppUrl(actors.owner, `${prefix}/${app.id}/ui`);
-        yield* browser.use("Open the example returned by framework_describe", (page) =>
+        yield* browser.use("Open the example returned by framework.describe", (page) =>
           page.goto(url),
         );
         yield* browser.use("Wait for the actual empty query result", (page) =>

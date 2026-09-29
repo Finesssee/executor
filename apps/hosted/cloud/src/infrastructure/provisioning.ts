@@ -12,7 +12,7 @@ import {
 } from "@executor-js/hosted-server/provisioning";
 import { SqlClient } from "effect/unstable/sql";
 import { cloudExecutor } from "./executor.ts";
-import { AppDataSupervisor } from "./app-data.ts";
+import { appDataSupervisors } from "./app-data.ts";
 import { cloudEmail } from "./email.ts";
 import { cloudWelcomeEmails } from "./welcome-email.ts";
 import { AppDomainCoordinator } from "./app-domains.ts";
@@ -25,7 +25,7 @@ export class Provisioning extends Cloudflare.Workflow<Provisioning>()(
   "Provisioning",
   Effect.gen(function* () {
     const executor = yield* cloudExecutor(
-      yield* AppDataSupervisor,
+      yield* appDataSupervisors,
       yield* cloudArtifactsTokensLive,
     );
     const emails = yield* cloudWelcomeEmails((yield* cloudEmail.pipe(Effect.orDie)).welcome);

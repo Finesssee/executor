@@ -4,6 +4,7 @@ import { RequiredAction } from "./authorization.ts";
 import {
   App,
   Account,
+  AccountHealth,
   Provider,
   AppId,
   AccountId,
@@ -118,7 +119,13 @@ export const ResourceDirectory = Schema.Struct({
     Schema.Struct({ app: App, access: AppAccess, profiles: Schema.Array(Profile) }),
   ),
   accounts: Schema.Array(
-    Schema.Struct({ account: Account, access: AccountAccess, provider: Provider }),
+    Schema.Struct({
+      account: Account,
+      access: AccountAccess,
+      provider: Provider,
+      /** Checks by the apps listed here; reading them never runs a check. */
+      health: Schema.optionalKey(AccountHealth),
+    }),
   ),
 });
 /** Resource policy and member preferences are product endpoints, not generic SDK operations. */

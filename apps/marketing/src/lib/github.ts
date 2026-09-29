@@ -22,8 +22,10 @@ const TTL_OK_MS = 30 * 60 * 1000; // cache a real count for ~30 min per isolate
 const TTL_FAIL_MS = 60 * 1000; // but retry soon after a miss, never pin a null
 const TIMEOUT_MS = 4000;
 
+/* oxlint-disable executor/no-module-level-mutable-state -- the static site build shares one count across its pages */
 let cached: { value: number | null; at: number } | null = null;
 let inflight: Promise<number | null> | null = null;
+/* oxlint-enable executor/no-module-level-mutable-state */
 
 async function fetchStars(): Promise<number | null> {
   const controller = new AbortController();

@@ -68,7 +68,7 @@ const command = Command.make("test-self-host", {
         Layer.provide(BunHttpServer.layerHttpServices),
       );
       yield* Console.log(`Starting local test server at ${target.origin}/login`);
-      yield* Layer.launch(server);
+      return yield* Layer.launch(server);
     }).pipe(Effect.provideServiceEffect(ConfigProvider.ConfigProvider, testServerConfiguration)),
   ),
 );

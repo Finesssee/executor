@@ -7,6 +7,7 @@ import { Actors } from "../support/actors.ts";
 import { Api, body, type Session } from "../support/api.ts";
 import { Browser } from "../support/browser.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
+import { openThroughBrowser } from "../support/in-app-navigation.ts";
 import { advanceToReconciliation, installBrowserClock } from "../support/query-transition.ts";
 const App = Schema.Struct({
   id: Schema.String,
@@ -69,7 +70,7 @@ layer(HostedLive, { excludeTestServices: true })("Executor API-key account", (it
             page.goto(`/org/${actors.organization.slug}/apps/${app.id}?view=accounts`),
           );
           yield* browser.use("The Accounts tab shows this user's managed account", (page) =>
-            page.getByRole("link", { name: account.label, exact: true }).waitFor(),
+            page.getByRole("radio", { name: account.label, exact: true, checked: true }).waitFor(),
           );
           yield* browser.use("Return to the app list", (page) =>
             page.getByRole("link", { name: "Back to apps", exact: true }).click(),
@@ -128,10 +129,22 @@ layer(HostedLive, { excludeTestServices: true })("Executor API-key account", (it
                     .getByRole("button", { name: `Remove ${account.label}`, exact: true })
                     .click(),
               );
+              // No other app uses the managed key, so the page offers to delete it; keep it.
+              yield* browser.use("Keep the managed account when offered its deletion", (page) =>
+                page
+                  .getByRole("dialog", { name: "Delete unused account?" })
+                  .getByRole("button", { name: "Keep account", exact: true })
+                  .click(),
+              );
+              yield* browser.use("The deletion offer closes", (page) =>
+                page
+                  .getByRole("dialog", { name: "Delete unused account?" })
+                  .waitFor({ state: "hidden" }),
+              );
               yield* browser.use("Wait for the confirmed removal", (page) =>
                 page
-                  .getByRole("link", { name: account.label, exact: true })
-                  .waitFor({ state: "hidden" }),
+                  .getByRole("radio", { name: account.label, exact: true, checked: false })
+                  .waitFor(),
               );
               yield* browser.use("Return to the list after changing the profile", (page) =>
                 page.getByRole("link", { name: "Back to apps", exact: true }).click(),
@@ -187,8 +200,10 @@ layer(HostedLive, { excludeTestServices: true })("Executor API-key account", (it
               directory,
             );
             yield* installBrowserClock;
-            yield* browser.use("Open Apps during team installation", (page) =>
-              page.goto(`/org/${actors.organization.slug}/apps`),
+            // A document load renders the directory on the server, beyond the browser hold.
+            yield* openThroughBrowser(
+              "Open Apps during team installation",
+              `/org/${actors.organization.slug}/apps`,
             );
             yield* held.requested;
             yield* browser.use("Missing app has one skeleton while the workflow runs", (page) =>
@@ -326,7 +341,8 @@ layer(HostedLive, { excludeTestServices: true })("Executor API-key account", (it
         const call = (actor: Session, profile: string) =>
           api.request(actor, "POST", `${path}/tools/call`, {
             profile,
-            tool: "queries.context_get",
+            tool: "context.get",
+            kind: "query",
             input: {},
           });
         const [ownerCall, adminCall, deniedCall] = yield* Effect.all(

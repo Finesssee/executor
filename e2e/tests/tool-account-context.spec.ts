@@ -9,6 +9,7 @@ import { HostedLive, withHostedCase } from "../support/case.ts";
 import { App, Resource } from "../support/contracts.ts";
 import { accountToolSource, checkToolAccountContext } from "../support/tool-account-context.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 layer(HostedLive, { excludeTestServices: true })("Tool account context", (it) => {
   it.effect(scenarios.toolAccountContext.title, (context) =>
@@ -21,7 +22,7 @@ layer(HostedLive, { excludeTestServices: true })("Tool account context", (it) =>
         const prefix = `/api/organizations/${actors.organization.id}`;
         const deployed = yield* api.request(actors.owner, "POST", `${prefix}/apps/deploy`, {
           name: `Account tools ${randomUUID().slice(0, 8)}`,
-          files: [{ path: "index.ts", content: accountToolSource }],
+          files: [{ path: "index.ts", content: accountToolSource }, appsManifest],
         });
         expect(deployed.status).toBe(200);
         const app = yield* body(App, deployed);

@@ -12,13 +12,13 @@ return await tools.search({ query: "Executor" });
 Search returns `items` with exact callable `path`, `description` and TypeScript
 `signature`. It also returns `remaining` and `next: { offset } | null` for paging.
 Hosted exposes tools generated from its OpenAPI spec under `tools.executor`.
-Discover and call `queries.context_get({})` to read the organization approved
+Discover and call `context.get({})` to read the organization approved
 for this MCP connection. Its result has `organization`, `slug` and `role`.
 Use `organization` explicitly in management calls. Never guess `me` or `default`,
 and do not search local files for an organization or credentials.
 
 ```js
-return await tools.executor.profiles["<management-profile-id>"].mutations.apps_deploy({
+return await tools.executor.profiles["<management-profile-id>"].apps.deploy({
   path: { organization: "<approved-organization-id>" },
   body: {
     name: "Hello",
@@ -28,16 +28,16 @@ return await tools.executor.profiles["<management-profile-id>"].mutations.apps_d
 ```
 
 For an app you will edit, use the create, commit and deploy workflow. Local and hosted management
-apps generate `mutations.appManagement_create`, `queries.appManagement_source`,
-`mutations.appManagement_commit`, `mutations.appManagement_deploy`, and
-`mutations.appManagement_copy` from the serving OpenAPI contracts. Discover
+apps generate `appManagement.create`, `appManagement.source`,
+`appManagement.commit`, `appManagement.deploy`, and
+`appManagement.copy` from the serving OpenAPI contracts. Discover
 their exact signatures first. They use ordinary app IDs, with route parameters
 under `path` and request payloads under `body`.
 
 Create the app, read its working source, and save the complete file list with
 `expected: source.revision.commit` and a commit message. Deploy the returned
 `revision.commit` with `body: { commit }`, or deploy a complete file list with
-`body: { files }`. Supply exactly one. `appManagement_deploy` does not accept
+`body: { files }`. Supply exactly one. `appManagement.deploy` does not accept
 `expected` or `expectedDeployment`. Commits and Git pushes do not change the running version. A copy is another normal app with fresh Git history and no accounts or app data.
 Running apps copy their deployed source and deploy the copy. Unfinished apps copy
 their working files and remain undeployed.
@@ -48,7 +48,7 @@ are supported; `version` is optional author metadata and does not select an
 Executor release. Executor app dependencies are deferred. Include the app source
 it needs directly; do not add `executor.dependencies` or an Executor lockfile.
 
-Copy a public app with `appManagement_copy`, using `from: { package, commit }`
+Copy a public app with `appManagement.copy`, using `from: { package, commit }`
 and a new `name`. Owned apps use the same operation with `from: { app }`. This creates an independent app and Git repository with empty
 account selections. Republishing or unpublishing the original does not change
 installed copies. A changed listing must be reviewed again before installation.
@@ -58,22 +58,22 @@ pushing the source there. Agents edit their owned copy through normal app tools.
 Hosted deployment currently creates a new named app and returns the app directly.
 It rejects an existing name. Use source commits and deployment by app ID for edits.
 After deployment, start a new execute to discover and call its tools.
-Other hosted operations include `organization_inventory`, `organization_catalog`,
-`apps_install`, `apps_importCustom`, `apps_get`, `appUi_location`, profile operations, and
-`apps_remove`. Always read their discovered signatures before calling them.
+Other hosted operations include `organization.inventory`, `organization.catalog`,
+`apps.install`, `apps.importCustom`, `apps.get`, `appUi.location`, profile operations, and
+`apps.remove`. Always read their discovered signatures before calling them.
 
-For hosted account setup, create a profile with `profiles_create` first.
+For hosted account setup, create a profile with `profiles.create` first.
 The host derives its owner and subject from the caller. Pass the returned ID to
 the connection request:
 
 ```js
 const executor = tools.executor.profiles["<management-profile-id>"];
 const path = { organization: "<approved-organization-id>", app: "<app-id>" };
-const profile = await executor.mutations.profiles_create({
+const profile = await executor.profiles.create({
   path,
   body: { accounts: {}, idempotencyKey: "vercel-setup" },
 });
-return await executor.mutations.accounts_connect({
+return await executor.accounts.connect({
   path,
   body: { profile: profile.id, requirement: "vercel" },
 });
@@ -81,7 +81,7 @@ return await executor.mutations.accounts_connect({
 
 Give the returned `url` to the user. It opens Executor's signed-in browser form;
 credentials and OAuth are completed there. Check progress with
-`accounts_connection`, passing `path.organization` and `path.connection`.
+`accounts.connection`, passing `path.organization` and `path.connection`.
 Members can read inventory; administrators can deploy, connect, and run app tools.
 The server rechecks the caller's grant and current membership on every API call.
 The management app's caller credential is never saved as a shared account.
@@ -95,7 +95,7 @@ Send the actual source string in `files[].content`.
 
 ```js
 const executor = tools.executor.profiles["<management-profile-id>"];
-return await executor.mutations.apps_deploy({
+return await executor.apps.deploy({
   body: {
     owner: "my-project",
     name: "Hello",
@@ -114,18 +114,18 @@ Discovery is prepared at the start of each `execute`. In a **new** execution,
 call the deployed app using its returned `app.slug`:
 
 ```js
-return await tools["<app-slug>"].queries.greet({ name: "Ada" });
+return await tools["<app-slug>"].greet({ name: "Ada" });
 ```
 
 App source and `execute` code run in different environments. App source can
 import packages and use fetch. An `execute` program can call exposed tools and
 transform data, but has no direct imports, fetch, filesystem or process APIs.
 Do not place `defineApp` declarations directly in execute code; deploy them as
-source strings through `apps_deploy`.
+source strings through `apps.deploy`.
 
 ### Carry source as data
 
-When source comes from `framework_describe` or `appManagement_source`, transform
+When source comes from `framework.describe` or `appManagement.source`, transform
 its `files` in the same execution and pass them to create or commit. For a small
 edit, replace only the affected file content and retain the other files. Check
 that the expected text exists before applying a text replacement. Do not print
@@ -141,15 +141,15 @@ local path. Submit the actual contents through the available tool interface.
 
 ## Updating a hosted app
 
-Use the shared commit and deploy workflow to edit an existing app. `appManagement_source`
-reads working Git source; `apps_source` reads immutable deployed source. Saving
+Use the shared commit and deploy workflow to edit an existing app. `appManagement.source`
+reads working Git source; `apps.source` reads immutable deployed source. Saving
 one does not change the other. Read both when you need to compare pending edits
 with the running app.
 
 ```js
 const executor = tools.executor.profiles["<management-profile-id>"];
 const path = { organization: "<approved-organization-id>", app: "<app-id>" };
-const source = await executor.queries.appManagement_source({ path });
+const source = await executor.appManagement.source({ path });
 const entry = source.files.find((file) => file.path === "index.ts");
 if (!entry || entry.content.split("<exact old text>").length !== 2) {
   throw new Error("Expected one match in index.ts; review the edit.");
@@ -159,11 +159,11 @@ const files = source.files.map((file) =>
     ? { ...file, content: file.content.replace("<exact old text>", "<replacement text>") }
     : file,
 );
-const saved = await executor.mutations.appManagement_commit({
+const saved = await executor.appManagement.commit({
   path,
   body: { expected: source.revision.commit, files, message: "Update app" },
 });
-return await executor.mutations.appManagement_deploy({
+return await executor.appManagement.deploy({
   path,
   body: { commit: saved.revision.commit },
 });
@@ -176,8 +176,8 @@ deployment }`, preserves the app ID and data, and never updates the Git branch.
 It has no expected-active-deployment argument. Check profiles after changing
 account requirements; saved selections can become incompatible with new code.
 
-`apps_deployments` lists retained versions. `apps_source` accepts an optional
-`query.deployment` to read a specific version. `apps_activate` requires
+`apps.deployments` lists retained versions. `apps.source` accepts an optional
+`query.deployment` to read a specific version. `apps.activate` requires
 `body: { deployment, expectedDeployment }`, where `expectedDeployment` is the
 app's current active deployment. A stale value returns `AppDeploymentChanged`.
 Activation only changes which code runs; it does not reverse app data or changes
@@ -186,14 +186,15 @@ hosted product’s access rules. Discover tools again in a new execute after cha
 
 ## Dependencies and current boundaries
 
-An optional `package.json` can declare normal npm dependencies, including `apps`.
-When declared, that package supplies the server and browser framework. An exact
-version keeps rebuilds on the same framework; ranges or tags can advance during
-a rebuild. The host retains the compiled version with each deployment. Missing
+Every app declares the exact `apps` version in `package.json` `dependencies`:
+`{ "dependencies": { "apps": "<version>" } }`. A deploy without it fails and names
+the version this host ships. That package supplies the server and browser
+framework, and the exact version keeps rebuilds on it across host upgrades. New
+apps created by Executor already declare the host's version; keep it when
+editing, and change it only to upgrade the app. The host retains the compiled version with each deployment. Missing
 or unsupported packages fail the build without replacing the active app.
 Installation disables lifecycle scripts. Do not depend on the Executor SDK in
-app code. Without a declared `apps` package, the Node SDK adapter reserves `apps`
-and Effect for the host. Native dependencies that need scripts are unsupported.
+app code. Native dependencies that need scripts are unsupported.
 
 Hosted builds currently run with limited memory. A build with very large
 dependencies can fail with `BuildMemoryExceeded`; no new deployment is activated.

@@ -6,19 +6,20 @@ import { Api, body } from "./api.ts";
 import { Actors } from "./actors.ts";
 import { App } from "./contracts.ts";
 import { createProfile, selectProfileAccounts } from "./profiles.ts";
+import { appsManifest } from "./apps-release.ts";
 
 const files = [
   {
     path: "index.ts",
     content: `
-import { defineApp, defineProvider, secrets, dynamicTools, query, object, string, boolean } from "apps";
+import { defineApp, defineProvider, secrets, dynamicRouter, query, object, string, boolean, router } from "apps";
 const provider=defineProvider({name:"Cache scope",auth:{key:secrets({label:"Key",fields:object({token:string()})})}});
 export default defineApp({ accounts: { service: provider.many() } }, async ctx => ({
-  dynamicTools: dynamicTools({
-    list: async () => [],
-    resolve: async name => name === "queries.lazy" ? query({ input: object({}) }, async () => "resolved-without-list") : undefined,
-  }),
-  queries: {
+  tools: router({
+    source: dynamicRouter({
+      list: async () => [],
+      resolve: async name => name === "lazy" ? query({ input: object({}) }, async () => "resolved-without-list") : undefined,
+    }),
     private: query({input:object({id:string()})},async (_, {id})=>ctx.cache.forAccount({id}).get({key:"private",schema:string(),freshFor:"1 minute",load:async()=>crypto.randomUUID()})),
     expired: query({input:object({})},async()=>ctx.cache.get({key:"expired",schema:string(),freshFor:0,load:async()=>crypto.randomUUID()})),
     held: query({input:object({})},async()=>ctx.cache.get({key:"held",schema:string(),freshFor:"1 minute",load:async({cache,signal})=>{
@@ -55,10 +56,11 @@ export default defineApp({ accounts: { service: provider.many() } }, async ctx =
     failed: query({ input: object({}) }, async () => ctx.cache.get({ key: "failure", schema: string(), freshFor: "1 minute", load: async () => { throw new Error("Synthetic failure"); } })),
     recovered: query({ input: object({}) }, async () => ctx.cache.get({ key: "failure", schema: string(), freshFor: "1 minute", load: async () => "recovered" })),
     invalid: query({ input: object({}) }, async () => { await ctx.cache.write([{key:"schema",value:123}], "1 minute"); return ctx.cache.read("schema", string()); }),
-  },
+  }),
 }));
 `,
   },
+  appsManifest,
 ];
 export const cacheApp = Effect.gen(function* () {
   const api = yield* Api;
@@ -83,7 +85,9 @@ export const cacheApp = Effect.gen(function* () {
   const request = (name: string, input: Schema.Json = {}, profile = first.id) =>
     api.request(actors.owner, "POST", `${path}/tools/call`, {
       profile,
-      tool: `queries.${name}`,
+      tool: `${name}`,
+      // Every fixture tool is a query.
+      kind: "query",
       input,
     });
   const call = (name: string, input: Schema.Json = {}, profile = first.id) =>

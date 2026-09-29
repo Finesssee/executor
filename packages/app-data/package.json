@@ -2,13 +2,15 @@
   "name": "@executor-js/app-data",
   "private": true,
   "type": "module",
+  "sideEffects": false,
   "exports": {
     ".": "./src/index.ts",
     "./contracts": "./src/contracts/database.ts",
     "./schema": "./src/implementation/schema.ts",
     "./node": "./src/node.ts",
     "./worker-bundle": "./src/contracts/worker-bundle.ts",
-    "./cloudflare": "./src/cloudflare.ts"
+    "./cloudflare": "./src/cloudflare.ts",
+    "./evaluated": "./src/contracts/evaluated.ts"
   },
   "dependencies": {
     "@effect/sql-sqlite-node": "https://pkg.pr.new/Effect-TS/effect/@effect/sql-sqlite-node@c7d1ffff31a3e2ae0b0b0796b742bddeb797269d",

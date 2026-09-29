@@ -645,7 +645,7 @@ results fail; missing parents are never replaced by synthetic success records.
 
 `framework discovery deploys its checked example with optimistic updates and rollback`
 reads the built-in app through MCP, checks native and imported tool output signatures,
-follows a pinned skill topic, and deploys the example returned by `framework_describe`.
+follows a pinned skill topic, and deploys the example returned by `framework.describe`.
 It holds the real write and reconciliation read at the browser boundary, checks the
 optimistic row and draft, rejects a later write, then retries and reloads persisted data.
 Run it with `bun run e2e:self-host --test-name 'framework discovery deploys'`.

@@ -50,7 +50,7 @@ layer(HostedLive, { excludeTestServices: true })("Import diagnostics", (it) => {
           ),
         );
         const tool = discovered.items.find(
-          ({ path }) => path.includes(profile.id) && path.endsWith(".mutations.apps_importCustom"),
+          ({ path }) => path.includes(profile.id) && path.endsWith(".apps.importCustom"),
         );
         if (tool === undefined) return yield* Effect.die("Management import tool missing");
         const outcome = yield* execute(`try {

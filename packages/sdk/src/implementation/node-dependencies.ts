@@ -5,8 +5,6 @@ import { platform } from "node:os";
 import type { SourceFiles } from "../contracts/deployment.ts";
 import { RuntimeBuildFailed } from "../contracts/runtime.ts";
 
-/** These packages must resolve to the host's single framework/Effect instance. */
-export const hostPackages = ["apps", "effect", "@effect/platform-node", "@executor-js/sdk"];
 const InstalledPackage = Schema.Struct({
   name: Schema.optional(Schema.String),
   bin: Schema.optional(Schema.Union([Schema.String, Schema.Record(Schema.String, Schema.String)])),
@@ -17,7 +15,6 @@ export const installNodeDependencies = (
   directory: string,
   cacheDirectory: string,
   source: SourceFiles,
-  publishedFramework = false,
 ) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -80,12 +77,7 @@ export const installNodeDependencies = (
           .pipe(
             Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(InstalledPackage))),
           );
-        if (
-          manifest.name !== undefined &&
-          (publishedFramework
-            ? manifest.name === "@executor-js/sdk"
-            : hostPackages.includes(manifest.name))
-        )
+        if (manifest.name === "@executor-js/sdk")
           return yield* new RuntimeBuildFailed({ stage: "dependencies" });
         // Bun makes bin targets world-writable. Normalize only declared executables
         // before retention, so live and restored builds have the same portable mode.

@@ -10,14 +10,11 @@ import type {
 import { Clock, Deferred, Effect, Exit, Result, Schema, Semaphore } from "effect";
 import { fingerprint } from "./implementation/cursor.ts";
 import { AppDatabaseError } from "./contracts/database.ts";
-import {
-  CacheCommand,
-  CacheError,
-  CacheReply,
-  changesCache,
-} from "@executor-js/app-cache/contracts";
+import { CacheCommand, CacheError, CacheReply } from "@executor-js/app-cache/contracts";
 import { holdLeases } from "@executor-js/app-cache";
+import { discardsEvaluated } from "@executor-js/app-cache/changes";
 import { sqliteCache } from "@executor-js/app-cache/sqlite";
+import { evaluatedStore } from "./implementation/evaluated.ts";
 
 /** Executable bytes, supplied by the trusted build store rather than a browser request. */
 export const FacetBundle = WorkerBundle;
@@ -32,7 +29,7 @@ export const FacetInvocation = Schema.Struct({
 });
 /**
  * The supervisor attaches the revision before releasing its serialized invocation, and whether
- * the invocation replaced or removed app cache data.
+ * the invocation invalidated app cache data.
  */
 export const FacetResult = Schema.Struct({
   value: Schema.Json,
@@ -55,6 +52,7 @@ const failed = (cause?: unknown) => {
  * could not be read, retires the name. Later calls load the same code under a fresh one.
  */
 const retired = new Map<string, string>();
+// oxlint-disable-next-line executor/no-module-level-mutable-state -- marks this isolate's cold-start failures; it carries no request data
 let coldStartToken: string | undefined;
 /** Marks this isolate's failed cold starts; authored code cannot produce it. */
 const coldStartFailure = () => (coldStartToken ??= `Worker cold start ${crypto.randomUUID()}`);
@@ -181,7 +179,21 @@ export const makeFacetSupervisor = (
   Effect.gen(function* () {
     const execution = yield* Semaphore.make(1);
     const metadata = yield* Semaphore.make(1);
-    const store = sqliteCache(state.storage);
+    const evaluated = evaluatedStore(state.storage);
+    const cached = sqliteCache(state.storage);
+    // Every cache command, from the host or from an invocation, passes here, so an invalidation
+    // is recorded for evaluated results before any caller can read them again.
+    const store = (namespace: string, command: unknown) =>
+      cached(namespace, command).pipe(
+        Effect.tap(() =>
+          discardsEvaluated(command)
+            ? Clock.currentTimeMillis.pipe(
+                Effect.flatMap(evaluated.changed),
+                Effect.mapError(() => new CacheError({ reason: "storage" })),
+              )
+            : Effect.void,
+        ),
+      );
     const cache = (namespace: string, command: unknown) =>
       store(namespace, command).pipe(
         Effect.match({
@@ -391,7 +403,7 @@ export const makeFacetSupervisor = (
                                 Effect.flatMap(leases.transport),
                                 Effect.tap(() =>
                                   Effect.sync(() => {
-                                    if (changesCache(command)) cacheChanged = true;
+                                    if (discardsEvaluated(command)) cacheChanged = true;
                                   }),
                                 ),
                                 Effect.match({
@@ -451,6 +463,9 @@ export const makeFacetSupervisor = (
       );
     return {
       cache,
+      /** Host-evaluated results; failures are reported as `null`, a miss. */
+      evaluated: (command: unknown) =>
+        evaluated.command(command).pipe(Effect.orElseSucceed(() => null)),
       invoke: (
         input: typeof FacetInvocation.Type,
         load: () => Promise<typeof FacetBundle.Type>,

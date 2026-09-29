@@ -20,22 +20,22 @@ layer(HostedLive, { excludeTestServices: true })("Shared authorization", (it) =>
         const headers = {
           authorization: `Bearer ${Redacted.value(refreshed.tokens).access_token}`,
         };
-        expect((yield* call("mutations.echo", headers)).status).toBe(200);
-        expect((yield* call("mutations.later", headers)).status).toBe(403);
+        expect((yield* call("echo", headers)).status).toBe(200);
+        expect((yield* call("later", headers)).status).toBe(403);
         expect(
           (yield* api.request(actors.owner, "POST", "/api/auth/mcp/grants/narrow", {
             id: grant.grantId,
             policy: { kind: "tools", apps: [], approval: "client" },
           })).status,
         ).toBe(200);
-        expect((yield* call("mutations.echo", headers)).status).toBe(403);
+        expect((yield* call("echo", headers)).status).toBe(403);
         const inventory = yield* body(
           Inventory,
           yield* api.request(anonymous, "GET", `${prefix}/inventory`, undefined, headers),
         );
         expect(inventory.apps).toEqual([]);
         yield* oauth.revoke(refreshed);
-        expect((yield* call("mutations.echo", headers)).status).toBe(401);
+        expect((yield* call("echo", headers)).status).toBe(401);
       }).pipe(Effect.provide(Layer.mergeAll(McpOAuth.layer, McpClient.layer))),
     ),
   );

@@ -9,6 +9,7 @@ import { App, Resource } from "../support/contracts.ts";
 import { Evidence, Telemetry } from "../support/evidence.ts";
 import { accountToolSource } from "../support/tool-account-context.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const Index = Schema.Struct({ items: Schema.Array(Schema.Struct({ name: Schema.String })) });
 
@@ -24,7 +25,7 @@ layer(HostedLive, { excludeTestServices: true })("Cloud build reuse", (it) => {
         const prefix = `/api/organizations/${actors.organization.id}`;
         const deployed = yield* api.request(actors.owner, "POST", `${prefix}/apps/deploy`, {
           name: `Build reuse ${randomUUID().slice(0, 8)}`,
-          files: [{ path: "index.ts", content: accountToolSource }],
+          files: [{ path: "index.ts", content: accountToolSource }, appsManifest],
         });
         expect(deployed.status).toBe(200);
         const app = yield* body(App, deployed);
@@ -106,10 +107,10 @@ layer(HostedLive, { excludeTestServices: true })("Cloud build reuse", (it) => {
             };
           });
 
-        const first = yield* coldIndex(work, "queries.work");
+        const first = yield* coldIndex(work, "work");
         expect(first.source, "A new build is read from retained storage").toBe("miss");
         expect(first.blobReads).toBe(1);
-        const second = yield* coldIndex(personal, "queries.personal");
+        const second = yield* coldIndex(personal, "personal");
         expect(second.source, "The isolate reuses the build it already decoded").toBe("memory");
         expect(second.blobReads, "A reused build is not read from R2 again").toBe(0);
       }),

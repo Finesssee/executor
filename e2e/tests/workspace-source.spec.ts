@@ -17,11 +17,13 @@ import {
   settledTrace,
   type Spans,
 } from "../support/workspace-cache.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const App = Schema.Struct({ id: Schema.String, repository: Schema.NullOr(Schema.String) });
 const files = (value: string) => [
   { path: "index.ts", content: `export default ${JSON.stringify(value)};` },
   { path: "nested/deep/value.json", content: JSON.stringify({ value }) },
+  appsManifest,
 ];
 
 layer(HostedLive, { excludeTestServices: true })("Workspace source", (it) => {

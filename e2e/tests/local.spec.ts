@@ -6,6 +6,7 @@ import { Api, body, BrowserCookies } from "../support/api.ts";
 import { Browser } from "../support/browser.ts";
 import { Target } from "../support/platform.ts";
 import { TestLive, withCase } from "../support/case.ts";
+import { withApps } from "../support/apps-release.ts";
 
 layer(TestLive, { excludeTestServices: true })("Local pairing", (it) => {
   it.effect(scenarios.local.title, (context) =>
@@ -53,16 +54,18 @@ layer(TestLive, { excludeTestServices: true })("Local pairing", (it) => {
               {
                 path: "index.ts",
                 content: `
-            import { defineApp, query, object, string } from "apps";
+            import { defineApp, query, object, string, router } from "apps";
             import isNumber from "is-number";
             export default defineApp({ accounts: {} }, {
-              queries: { echo: query({ input: object({ value: string() }) }, async (_ctx, input) => ({ value: input.value, numeric: isNumber("2") })) },
+              tools: router({
+                echo: query({ input: object({ value: string() }) }, async (_ctx, input) => ({ value: input.value, numeric: isNumber("2") })),
+              }),
             });
           `,
               },
               {
                 path: "package.json",
-                content: JSON.stringify({ dependencies: { "is-number": "7.0.0" } }),
+                content: JSON.stringify({ dependencies: withApps({ "is-number": "7.0.0" }) }),
               },
             ],
           },
@@ -78,7 +81,8 @@ layer(TestLive, { excludeTestServices: true })("Local pairing", (it) => {
           "/v1/tools/call",
           {
             app: deployedApp.app.id,
-            tool: "queries.echo",
+            tool: "echo",
+            kind: "query",
             input: { value: "packaged-runtime-ok" },
           },
           { authorization: `Bearer ${Redacted.value(target.apiKey)}` },

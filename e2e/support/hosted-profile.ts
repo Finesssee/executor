@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { Api, body, type Session } from "./api.ts";
 import { Actors } from "./actors.ts";
 import { App, Resource } from "./contracts.ts";
+import { appsManifest } from "./apps-release.ts";
 /** Synthetic personal profiles and connections owned by one hosted scenario. */
 export const Profile = Schema.Struct({
   id: Schema.String,
@@ -17,19 +18,22 @@ export const Profile = Schema.Struct({
   ),
 });
 export const Access = Schema.Struct({ revision: Schema.String });
-const source = `import {defineApp,defineProvider,secrets,query,mutation,workflow,interval,object,string} from "apps";
+const source = `import {defineApp,defineProvider,secrets,query,mutation,workflow,interval,object,string, router} from "apps";
 const service=defineProvider({name:"Personal profile fixture",auth:{key:secrets({label:"Key",fields:object({token:string()})})}});
 const who=query({input:object({})},async ctx=>({context:{auth:"auth" in ctx,profile:"profile" in ctx},account:ctx.accounts.service.id,extra:ctx.accounts.extra.map(a=>a.id)}));
 const tick=mutation({input:object({})},async ctx=>ctx.accounts.service.id);
 const capture=workflow({input:object({})},async ctx=>ctx.step.do("identity",async step=>({context:{auth:"auth" in step,profile:"profile" in step},account:step.accounts.service.id})));
-export default defineApp({accounts:{service,extra:service.many()}}, async ctx => ({queries:{who},mutations:{tick},workflows:{capture},schedules:{tick:interval({minutes:1},tick,{})}, skills: [{name:"selected-account",description:"Instructions for the selected account",files:[{path:"SKILL.md",content:"---\\nname: selected-account\\ndescription: Instructions for the selected account\\n---\\n"+ctx.accounts.service.id}]}]}));`;
+export default defineApp({accounts:{service,extra:service.many()}}, async ctx => ({tools: router({
+  who,
+  tick,
+}),workflows:{capture},schedules:{tick:interval({minutes:1},tick,{})}, skills: [{name:"selected-account",description:"Instructions for the selected account",files:[{path:"SKILL.md",content:"---\\nname: selected-account\\ndescription: Instructions for the selected account\\n---\\n"+ctx.accounts.service.id}]}]}));`;
 export const profileFixture = Effect.gen(function* () {
   const api = yield* Api,
     actors = yield* Actors;
   const prefix = `/api/organizations/${actors.organization.id}`;
   const deployed = yield* api.request(actors.owner, "POST", `${prefix}/apps/deploy`, {
     name: `Personal app ${randomUUID().slice(0, 8)}`,
-    files: [{ path: "index.ts", content: source }],
+    files: [{ path: "index.ts", content: source }, appsManifest],
   });
   expect(deployed.status, JSON.stringify(deployed.body)).toBe(200);
   const app = yield* body(App, deployed),
@@ -128,7 +132,8 @@ export const profileFixture = Effect.gen(function* () {
   const call = (actor: Session, profile: string) =>
     api.request(actor, "POST", `${path}/tools/call`, {
       profile,
-      tool: "queries.who",
+      tool: "who",
+      kind: "query",
       input: {},
     });
   return {

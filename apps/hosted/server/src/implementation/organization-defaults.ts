@@ -1,6 +1,7 @@
 import { organizationAppCreation, personalAccountCreation } from "./resource-lifecycle.ts";
 import type { HostedApiDocument } from "../contracts/api.ts";
 import { managedAccountKey } from "./api-keys.ts";
+import { pinnedOnly } from "@executor-js/app-management/data-steps";
 import { sourceFilesEqual } from "@executor-js/sdk/core";
 import {
   AccountId,
@@ -9,7 +10,6 @@ import {
   StorageError,
   type Executor,
   type ExecutorDatabase,
-  type SourceFile,
 } from "@executor-js/sdk/core";
 import { Effect, Redacted, Schema } from "effect";
 import { SqlClient } from "effect/unstable/sql";
@@ -35,7 +35,6 @@ export const organizationDefaults = (
   executor: Executor,
   origin: string,
   storage: ExecutorDatabase,
-  skills: readonly SourceFile[],
   document: Effect.Effect<HostedApiDocument>,
   requireVerifiedEmail = true,
 ) =>
@@ -61,7 +60,7 @@ export const organizationDefaults = (
         const owner = organizationOwner(organization);
         if (!state.initialized) {
           const { defaultExecutorAppSource } = yield* executorApp;
-          const source = yield* defaultExecutorAppSource(origin, skills, yield* document);
+          const source = yield* defaultExecutorAppSource(origin, yield* document);
           const existing = (yield* executor.apps.list({ owner, name: "Executor" }))[0];
           if (existing === undefined) {
             yield* executor.apps.deploy({ owner, name: "Executor", files: source.files }).pipe(
@@ -99,13 +98,14 @@ export const organizationDefaults = (
           const deployment = yield* executor.apps.source({ owner, app: app.id });
           if (deployment.id !== app.activeDeployment) return;
           const { defaultExecutorAppSource } = yield* executorApp;
-          const source = yield* defaultExecutorAppSource(origin, skills, yield* document);
+          const source = yield* defaultExecutorAppSource(origin, yield* document);
           if (!sourceFilesEqual(deployment.files, source.files)) {
             // A failed upgrade keeps the working installation, and member setup continues.
             const upgraded = yield* Effect.gen(function* () {
               const workspace = yield* executor.apps.workspace({ owner, app: app.id });
-              // Unsaved edits mean someone is changing this copy; leave it to them.
-              if (!sourceFilesEqual(workspace.files, deployment.files)) return undefined;
+              // Unsaved edits mean someone is changing this copy; leave it to them. The framework
+              // pin is a system commit, not an edit.
+              if (!pinnedOnly(workspace.files, deployment.files)) return undefined;
               return (yield* executor.apps.deploy({ owner, app: app.id, files: source.files })).app;
             }).pipe(
               Effect.catch(() =>
@@ -124,13 +124,13 @@ export const organizationDefaults = (
           const deployment = yield* executor.apps.source({ owner, app: app.id });
           if (deployment.id !== app.activeDeployment) return;
           const { defaultExecutorAppSource, executorAppSource } = yield* executorApp;
-          const source = yield* defaultExecutorAppSource(origin, skills, yield* document);
+          const source = yield* defaultExecutorAppSource(origin, yield* document);
           if (!sourceFilesEqual(deployment.files, source.files)) {
             // Upgrade only the untouched, unconfigured catalog version. Preserve user edits and connections.
-            const catalog = yield* executorAppSource(origin, skills, yield* document);
+            const catalog = yield* executorAppSource(origin, yield* document);
             if (!sourceFilesEqual(deployment.files, catalog.files)) return;
             const workspace = yield* executor.apps.workspace({ owner, app: app.id });
-            if (!sourceFilesEqual(workspace.files, deployment.files)) return;
+            if (!pinnedOnly(workspace.files, deployment.files)) return;
             current = (yield* executor.apps.deploy({
               owner,
               app: app.id,
@@ -149,7 +149,7 @@ export const organizationDefaults = (
                 .pipe(Effect.catchTag("AccountNotFound", () => Effect.succeed(undefined)));
         };
         const existingProfile = yield* storage
-          .orm("4.0.2")
+          .orm("4.0.3")
           .findFirst("profiles", {
             where: (b) =>
               b.and(
@@ -178,7 +178,7 @@ export const organizationDefaults = (
           return;
         // Build/network work finished above. Only account creation or selection repair needs the lock.
         yield* storage
-          .orm("4.0.2")
+          .orm("4.0.3")
           .transaction(
             Effect.gen(function* () {
               // Only metadata changes, so take the non-key lock. It still serializes member

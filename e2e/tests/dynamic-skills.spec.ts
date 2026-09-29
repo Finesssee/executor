@@ -12,6 +12,7 @@ import { McpClient } from "../support/mcp-client.ts";
 import { McpOAuth } from "../support/mcp-oauth.ts";
 import { skillUpstream } from "../support/skill-upstream.ts";
 import { createProfile } from "../support/profiles.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const Bundle = Schema.Struct({
   deployment: Schema.String,
@@ -40,10 +41,10 @@ layer(HostedLive, { excludeTestServices: true })("Dynamic skills", (it) => {
           files: [
             {
               path: "index.ts",
-              content: `import { defineApp, dynamicSkills, query, object } from "apps";
+              content: `import { defineApp, dynamicSkills, query, object, router } from "apps";
 import { githubSkills, wellKnownSkills } from "apps/skills";
 export default defineApp({ accounts: {} }, async (ctx) => ({
-  queries: { ping: query({ input: object({}) }, async () => "pong") },
+  tools: router({ ping: query({ input: object({}) }, async () => "pong") }),
   dynamicSkills: dynamicSkills({ list: async () => [
     ...await wellKnownSkills({ url: ${JSON.stringify(upstream.url)}, fetch: ctx.fetch, signal: ctx.signal }),
     ...await githubSkills({ repo: "synthetic/skills", path: "skills", signal: ctx.signal, fetch: (input, init) => {
@@ -59,6 +60,7 @@ export default defineApp({ accounts: {} }, async (ctx) => ({
                 "---\nname: packaged-guide\ndescription: Packaged instructions.\n---\n# Packaged guide",
             },
             { path: "skills/packaged-guide/references/example.md", content: "Pinned reference" },
+            appsManifest,
           ],
         });
         expect(response.status, JSON.stringify(response.body)).toBe(200);
@@ -76,7 +78,8 @@ export default defineApp({ accounts: {} }, async (ctx) => ({
         expect(tools.status).toBe(200);
         const ping = yield* api.request(actors.owner, "POST", `${base}/tools/call`, {
           profile: profile.id,
-          tool: "queries.ping",
+          tool: "ping",
+          kind: "query",
           input: {},
         });
         expect(ping.status).toBe(200);

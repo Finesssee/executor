@@ -1,4 +1,4 @@
-/** Browser failures must reach both OTLP and Sentry after real response decoding. */
+/** Browser failures must reach both OTLP and Sentry after real response decoding, naming their page. */
 import { expect, layer } from "@effect/vitest";
 import { Effect, Schedule, Schema } from "effect";
 import { scenarios } from "../test-plan.ts";
@@ -47,6 +47,7 @@ layer(HostedLive, { excludeTestServices: true })("Browser observability", (it) =
             });
           }),
         );
+        const pageIds: Array<string> = [];
         for (const [name, body, status, kind] of [
           ["schema", '{"privateFixture":"do-not-export"}', 200, "BrowserDecodeFailed"],
           ["json", "{", 200, "BrowserDecodeFailed"],
@@ -80,6 +81,15 @@ layer(HostedLive, { excludeTestServices: true })("Browser observability", (it) =
             ),
           ).toBe(true);
           expect(JSON.stringify(trace)).not.toContain("do-not-export");
+          // The browser's API spans name the page that reported the failure.
+          const browserSpans = trace.data.filter(({ span }) =>
+            ["ui.api", "ui.api.transport"].includes(span.operationName),
+          );
+          expect(browserSpans.length).toBeGreaterThan(0);
+          expect(browserSpans.map(({ span }) => span.tags["executor.page.id"])).toEqual(
+            browserSpans.map(() => failure.page_id),
+          );
+          pageIds.push(failure.page_id);
           const reported = yield* awaitSentry(
             (event) => event.contexts?.trace?.trace_id === failure.trace_id,
           );
@@ -87,6 +97,8 @@ layer(HostedLive, { excludeTestServices: true })("Browser observability", (it) =
           expect(JSON.stringify(reported)).not.toContain("do-not-export");
           yield* evidence.json(`${name}-failure.json`, { failure, trace, reported });
         }
+        // Each failure came from a fresh document, and each document has its own page id.
+        expect(new Set(pageIds).size).toBe(pageIds.length);
         yield* browser.use("Leave the decoded failure document", (page) =>
           page.goto("about:blank"),
         );

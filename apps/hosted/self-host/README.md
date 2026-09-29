@@ -149,6 +149,10 @@ straight to the server, so the built-in Executor app works when that origin
 resolves to a private address. Set `EXECUTOR_APPS_ALLOW_PRIVATE_FETCH=true` to
 let app code reach other private network addresses.
 
+Upgrades apply pending data steps at startup, before serving, and log a summary
+line starting `Data step pass finished`. Set `EXECUTOR_DATA_STEPS=report` to hold
+them: each start then logs what they would change and writes nothing.
+
 Optional OIDC SSO and observability settings are listed in [compose.yaml](compose.yaml).
 
 ## Diagnose startup

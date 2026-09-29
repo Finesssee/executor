@@ -22,7 +22,6 @@ export const buildUi = (
     const staging = yield* fs.realPath(directory);
     const source = path.join(staging, "source");
     const output = path.join(staging, "ui");
-    const framework = path.dirname(yield* path.fromFileUrl(new URL(import.meta.resolve("apps"))));
     const host = path.dirname(yield* path.fromFileUrl(new URL(import.meta.url)));
     const entries = plan.entries.map((logical) => ({
       logical,
@@ -70,19 +69,13 @@ export const buildUi = (
                   builder.onResolve({ filter: /^apps(?:\/.*)?$/ }, (args) => {
                     if (!isBrowserAppImport(args.path))
                       return { errors: [{ text: "This apps entry point is server-only." }] };
-                    if (dependencies.apps !== undefined) {
-                      if (args.pluginData === "resolved") return undefined;
-                      return builder.resolve(args.path, {
-                        kind: args.kind,
-                        resolveDir: source,
-                        pluginData: "resolved",
-                      });
-                    }
-                    return Effect.runPromise(
-                      path
-                        .fromFileUrl(new URL(import.meta.resolve(args.path)))
-                        .pipe(Effect.map((path) => ({ path }))),
-                    );
+                    // The app's declared `apps` package supplies the browser framework.
+                    if (args.pluginData === "resolved") return undefined;
+                    return builder.resolve(args.path, {
+                      kind: args.kind,
+                      resolveDir: source,
+                      pluginData: "resolved",
+                    });
                   });
                   builder.onResolve({ filter: /^[^./]/ }, async (args) => {
                     if (args.pluginData === "resolved") return undefined;
@@ -94,17 +87,9 @@ export const buildUi = (
                       missingPeers.add(name);
                       return { errors: [{ text: `Add ${name} to package.json dependencies.` }] };
                     }
-                    const frameworkImport =
-                      args.importer.startsWith(framework + path.sep) &&
-                      args.path !== "react" &&
-                      !args.path.startsWith("react/");
                     return builder.resolve(args.path, {
                       kind: args.kind,
-                      resolveDir: optionalPeers.has(name)
-                        ? source
-                        : frameworkImport
-                          ? framework
-                          : args.resolveDir,
+                      resolveDir: optionalPeers.has(name) ? source : args.resolveDir,
                       pluginData: "resolved",
                     });
                   });

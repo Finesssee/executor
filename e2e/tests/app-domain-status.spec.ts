@@ -9,6 +9,7 @@ import { waitForAppUrl } from "../support/app-pages.ts";
 import { Browser } from "../support/browser.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { App } from "../support/contracts.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 layer(HostedLive, { excludeTestServices: true })("App domain readiness", (it) => {
   it.effect(scenarios.appDomainStatus.title, (context) =>
@@ -28,6 +29,7 @@ layer(HostedLive, { excludeTestServices: true })("App domain readiness", (it) =>
                 'import { defineApp } from "apps"; export default defineApp({ accounts: {} }, {});',
             },
             { path: "ui/index.html", content: "<!doctype html><h1>Domain ready</h1>" },
+            appsManifest,
           ],
         });
         expect(response.status).toBe(200);

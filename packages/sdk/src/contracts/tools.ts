@@ -1,4 +1,13 @@
-import { ApiErrorResponse, McpError, ProviderError, SkillLoadFailed } from "apps/contracts";
+import {
+  ApiErrorResponse,
+  FailureCode,
+  FailureMessage,
+  FailureName,
+  FailureSource,
+  McpError,
+  ProviderError,
+  SkillLoadFailed,
+} from "apps/contracts";
 import { ProfileId } from "./shared.ts";
 import { UserFacingError } from "@executor-js/utils/user-facing-error";
 import { ProfileErrors, ProfileRevision } from "./profiles.ts";
@@ -8,6 +17,7 @@ import {
   ApprovalElicitation,
   ApprovalResponse,
   ElicitationFailed,
+  HostedRouter,
   HostedTool,
   HostedToolSummary,
   type ElicitationHandler,
@@ -82,12 +92,21 @@ export const Tool = Schema.Struct({
 
 export type Tool = typeof Tool.Type;
 
+/**
+ * A group of tools in an app's live catalog. `path` is "" for the app's root. Its instructions,
+ * when present, are the skill named `skill`. A router with `error` could not list its tools.
+ */
+export const ToolRouter = HostedRouter;
+export type ToolRouter = typeof ToolRouter.Type;
+
 /** One page of a live catalog, evaluated using the named profile's saved selections. */
 export const ToolPage = Schema.Struct({
   profile: Schema.optional(ProfileId),
   profileRevision: Schema.optional(ProfileRevision),
   deployment: DeploymentId,
   items: Schema.Array(Tool),
+  /** Every router in the catalog, on every page. */
+  routers: Schema.Array(ToolRouter),
   next: Schema.optional(Cursor),
 });
 
@@ -109,6 +128,7 @@ export const ToolIndex = Schema.Struct({
   profileRevision: Schema.optional(ProfileRevision),
   deployment: DeploymentId,
   items: Schema.Array(ToolSummary),
+  routers: Schema.Array(ToolRouter),
 });
 
 export type ToolIndex = typeof ToolIndex.Type;
@@ -117,6 +137,26 @@ const evaluationInstructions =
   "Reproduce tool discovery for the current app, deployment, and selected profile. Inspect safe runtime diagnostics to distinguish an unavailable build, invalid app definition, invalid account bindings, protocol failure, or app evaluation failure. This error alone does not identify which cause occurred. Do not assume an account needs reconnecting. Verify that the Tools page loads after the repair.";
 const skillInstructions =
   "The app loads skills from a remote source. Read the app source to find the skill loader and its options. Do not print credentials or raw responses, and do not change accounts. If the factory awaits the loader, tools and skills both fail when that load fails. Declare it with dynamicSkills instead, such as dynamicSkills: dynamicSkills({ list: () => githubSkills(...) }), so only skill reads call it. To stop depending on the remote source, the app can bundle its skill folders and read them with folderSkills. Verify that the Skills and Tools pages load after the repair.";
+
+/**
+ * The error an app's own code threw, or the specific app data failure it hit. The message is the
+ * app's own text, bounded and with the invocation's account secrets replaced.
+ */
+export const AppFailure = Schema.Struct({
+  source: FailureSource,
+  errorName: FailureName,
+  code: Schema.optional(FailureCode),
+  message: FailureMessage,
+});
+export type AppFailure = typeof AppFailure.Type;
+
+/** One line naming who raised the failure and its own message. */
+export const appFailureText = ({ source, errorName, code, message }: AppFailure) =>
+  source === "storage"
+    ? `App data failed (${code ?? errorName}): ${message}`
+    : source === "service"
+      ? `The app's API call failed: ${message}`
+      : `The app threw ${errorName}: ${message}`;
 
 /** Present a skill load failure with the loader's own message. */
 const skillPresentation = ({
@@ -251,6 +291,8 @@ export const AppEvaluationFailed = UserFacingError.define({
         status: SkillLoadFailed.fields.status,
       }),
     ),
+    /** Present when the app's own code threw while loading its definition. */
+    failure: Schema.optional(AppFailure),
     /** Present when the app's MCP server caused the failure. */
     mcp: Schema.optional(
       Schema.Struct({
@@ -260,20 +302,31 @@ export const AppEvaluationFailed = UserFacingError.define({
       }),
     ),
   },
-  presentation: ({ skills, mcp }) =>
+  presentation: ({ skills, mcp, failure }) =>
     mcp !== undefined
       ? mcpPresentation(mcp)
-      : skills === undefined
+      : failure !== undefined
         ? {
             title: "Tools could not be loaded",
-            description: "Executor could not load this app’s tool definitions.",
+            description: `Executor could not load this app’s tool definitions. ${appFailureText(failure)}`,
             recovery: {
-              action: "Try again. If this continues, copy the fix prompt to investigate the app.",
-              instructions: evaluationInstructions,
+              action:
+                "Try again. If this continues, fix the app code that raised this error and deploy it.",
+              instructions: `The app's factory or dynamic tool loader raised this error, not Executor. A transient cause, such as an unavailable upstream, may clear on retry. Otherwise find where the app raises it, fix the cause, deploy the app, and verify that its tools load. Error: ${appFailureText(failure)}`,
             },
             retryable: true,
           }
-        : skillPresentation(skills),
+        : skills === undefined
+          ? {
+              title: "Tools could not be loaded",
+              description: "Executor could not load this app’s tool definitions.",
+              recovery: {
+                action: "Try again. If this continues, copy the fix prompt to investigate the app.",
+                instructions: evaluationInstructions,
+              },
+              retryable: true,
+            }
+          : skillPresentation(skills),
 });
 /** Parsed evaluation failure; raw runtime diagnostics never enter its presentation. */
 export type AppEvaluationFailed = typeof AppEvaluationFailed.Type;
@@ -321,8 +374,14 @@ export const AppProviderFailed = UserFacingError.define({
     account: Schema.optional(
       Schema.Struct({ id: AccountId, label: Schema.String, provider: Schema.String }),
     ),
+    /**
+     * The service refused the account's credentials during a mutation, and Executor has since
+     * renewed them. The mutation was not repeated, because it may have made changes before the
+     * refusal; a later call uses the renewed credentials.
+     */
+    credentialsRenewed: Schema.optional(Schema.Literal(true)),
   },
-  presentation: ({ reason, status, account }) => {
+  presentation: ({ reason, status, account, credentialsRenewed }) => {
     const service = account === undefined ? "The connected service" : account.provider;
     const target = account === undefined ? "" : ` for account “${account.label}”`;
     const http = status === undefined ? "" : ` (HTTP ${status})`;
@@ -340,6 +399,17 @@ export const AppProviderFailed = UserFacingError.define({
           retryable: true,
         };
       case "unauthorized":
+        if (credentialsRenewed === true)
+          return {
+            title: "Access renewed; request not repeated",
+            description: `${service} rejected the credentials${target}${http}. Executor has renewed the account’s access, but did not repeat this change automatically.`,
+            recovery: {
+              action:
+                "Check whether the change was already made, then try again. The renewed access is used from now on.",
+              instructions: `The provider rejected the account’s previous access token and Executor renewed it. Mutations are never repeated automatically: an earlier request in the same call may already have made changes. ${instructions}`,
+            },
+            retryable: true,
+          };
         return {
           title: "Authentication failed",
           description: `${service} rejected the credentials${target}${http}.`,
@@ -393,6 +463,21 @@ export class ToolNotFound extends Schema.TaggedError<ToolNotFound>()(
   { httpApiStatus: 404, description: "No tool matches this name in the evaluated app." },
 ) {}
 
+/** Whether a tool reads or writes; callers name it so storage is opened in the right mode. */
+export const ToolKind = Schema.Literals(["query", "mutation"]);
+export type ToolKind = typeof ToolKind.Type;
+
+/** The tool exists with the other kind. Nothing ran; call it again with `actual`. */
+export class ToolKindMismatch extends Schema.TaggedError<ToolKindMismatch>()(
+  "ToolKindMismatch",
+  { app: AppId, deployment: DeploymentId, tool: ToolName, requested: ToolKind, actual: ToolKind },
+  {
+    httpApiStatus: 409,
+    description:
+      "The tool was called as a query but is a mutation, or the reverse. The catalog's readOnly field gives its kind.",
+  },
+) {}
+
 /** The tool input did not match its declared schema. */
 export class InputInvalid extends Schema.TaggedError<InputInvalid>()(
   "InputInvalid",
@@ -412,10 +497,13 @@ export class ToolCallFailed extends Schema.TaggedError<ToolCallFailed>()(
     tool: ToolName,
     reason: Schema.String,
     response: Schema.optional(ApiErrorResponse),
+    /** The app's own error, or the app data failure, that stopped the operation. */
+    failure: Schema.optional(AppFailure),
   },
   {
     httpApiStatus: 502,
-    description: "The tool failed. The reason is sanitized; retry safety is not implied.",
+    description:
+      "The tool failed. The reason carries only the app's own bounded error message with account secrets replaced; retry safety is not implied.",
   },
 ) {}
 
@@ -467,6 +555,8 @@ export const ToolInvocation = Schema.Struct({
   owner: OwnerId,
   deployment: DeploymentId,
   tool: ToolName,
+  /** Approvals saved before calls named their kind carry none; resumption reads it from the catalog. */
+  kind: Schema.optionalKey(ToolKind),
   input: Json,
   accounts: Schema.Record(
     Schema.String,
@@ -541,6 +631,11 @@ export const ToolInputs = {
     expectedProfileRevision: Schema.optional(ProfileRevision),
     deployment: Schema.optional(DeploymentId),
     tool: ToolName,
+    /**
+     * "query" for tools the catalog marks readOnly, otherwise "mutation". Omitted, it is read from
+     * the catalog; supplied and wrong, the call fails with ToolKindMismatch before anything runs.
+     */
+    kind: Schema.optional(ToolKind),
     input: Schema.optional(Json),
   }),
   pruneApprovals: Schema.Struct({ owner: Schema.optional(OwnerId) }),
@@ -648,6 +743,7 @@ export const ToolsGroup = HttpApiGroup.make("tools")
         AccountRequired,
         AccountSelectionInvalid,
         ToolNotFound,
+        ToolKindMismatch,
         InputInvalid,
         ToolCallFailed,
         OAuthReconnectRequired,

@@ -8,6 +8,7 @@ import { HostedLive, withHostedCase } from "../support/case.ts";
 import { App } from "../support/contracts.ts";
 import { checkAppLoading } from "../support/app-loading.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 layer(HostedLive, { excludeTestServices: true })("App detail navigation", (it) => {
   for (const [scenario, viewport] of [
@@ -28,11 +29,14 @@ layer(HostedLive, { excludeTestServices: true })("App detail navigation", (it) =
               {
                 path: "index.ts",
                 content: `
-import { defineApp, query, object } from "apps";
+import { defineApp, query, object, router } from "apps";
 export default defineApp({ accounts: {} }, async () => ({
-  queries: { hello: query({ description: "A simple greeting", input: object({}) }, async () => "Hello") }
+  tools: router({
+    hello: query({ description: "A simple greeting", input: object({}) }, async () => "Hello"),
+  })
 }));`,
               },
+              appsManifest,
             ],
           });
           expect(deployed.status).toBe(200);

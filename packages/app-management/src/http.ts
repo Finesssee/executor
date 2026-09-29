@@ -6,6 +6,11 @@ import {
   type AppCapabilities,
 } from "./contracts/api.ts";
 export * from "./contracts/api.ts";
+export {
+  frameworkDocumentation,
+  frameworkHandlers,
+  frameworkRoutes,
+} from "./implementation/framework.ts";
 /** Product-authorized app authoring, release discovery, and ordinary Git access. */
 import { Context, Effect, Layer, Schema } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";

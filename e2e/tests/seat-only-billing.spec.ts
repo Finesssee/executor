@@ -53,7 +53,8 @@ layer(HostedLive, { excludeTestServices: true })("Seat-only billing", (it) => {
         const { app, receipt } = yield* deployMcpApp;
         const call = () =>
           api.request(actors.owner, "POST", `${prefix}/apps/${app.id}/tools/call`, {
-            tool: "mutations.echo",
+            tool: "echo",
+            kind: "mutation",
             input: { message: "seat-only" },
           });
         // The seeded seat-only catalog has no execution feature at all. The previous
@@ -62,7 +63,8 @@ layer(HostedLive, { excludeTestServices: true })("Seat-only billing", (it) => {
         expect(calls.map((result) => result.status)).toEqual([200, 200]);
         expect(
           (yield* api.request(actors.member, "POST", `${prefix}/apps/${app.id}/tools/call`, {
-            tool: "mutations.echo",
+            tool: "echo",
+            kind: "mutation",
             input: { message: "denied" },
           })).status,
         ).toBe(403);
@@ -89,7 +91,7 @@ layer(HostedLive, { excludeTestServices: true })("Seat-only billing", (it) => {
             {
               name: "execute",
               arguments: {
-                code: `return await tools[${JSON.stringify(app.slug)}].mutations.echo({message:"seat-only"});`,
+                code: `return await tools[${JSON.stringify(app.slug)}].echo({message:"seat-only"});`,
               },
             },
             undefined,

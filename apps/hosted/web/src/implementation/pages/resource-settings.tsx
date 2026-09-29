@@ -63,8 +63,7 @@ export function AccountAccessSettings({ account }: { readonly account: AccountId
   const { organization } = useOrganizationRoute();
   const save = useAtomSet(shareAccountAtom({ organization, account }), { mode: "promiseExit" });
   return (
-    <section className="mt-7 border-t pt-5 space-y-4">
-      <h2 className="text-sm font-medium">Groups</h2>
+    <section className="space-y-4">
       <QueryView
         query={accountAccessAtom({ organization, account })}
         Failure={HostedFailure}

@@ -10,6 +10,12 @@ import { clientCredentialsIssuer, machineClient } from "../support/client-creden
 import { scenarios } from "../test-plan.ts";
 import { Browser } from "../support/browser.ts";
 import { managementApp } from "../support/management-app.ts";
+import {
+  accountNameField,
+  accountNamePrompt,
+  nameConnectedAccount,
+} from "../support/name-account.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const Completed = Schema.Struct({
   status: Schema.Literal("completed"),
@@ -34,10 +40,11 @@ layer(HostedLive, { excludeTestServices: true })("Machine OAuth", (it) => {
           files: [
             {
               path: "index.ts",
-              content: `import { defineApp, defineProvider, oauth2 } from "apps";
+              content: `import { defineApp, defineProvider, oauth2, router } from "apps";
 const service=defineProvider({name:"Reporting",auth:{machine:oauth2({grant:"client_credentials",tokenUrl:${JSON.stringify(issuer.origin + "/token")},scopes:["reports:read"],tokenEndpointAuthMethod:"client_secret_post"})}});
-export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
+export default defineApp({accounts:{service}},async()=>({tools: router({})}));`,
             },
+            appsManifest,
           ],
         });
         expect(deployed.status).toBe(200);
@@ -58,7 +65,7 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
           page.goto(`/org/${actors.organization.slug}/apps/${app.id}?view=accounts`),
         );
         yield* browser.use("Open Connect", (page) =>
-          page.getByRole("button", { name: "Add Reporting account", exact: true }).click(),
+          page.getByRole("button", { name: "Connect new account", exact: true }).click(),
         );
         yield* browser.use("Machine credentials appear without protocol controls", (page) => {
           const dialog = page.getByRole("dialog");
@@ -75,7 +82,10 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
             .then((counts) => {
               expect(counts).toEqual([0, 0, 1]);
             })
-            .then(() => dialog.getByLabel("Account name", { exact: true }).fill("Team reports"))
+            .then(() => dialog.getByLabel("Account name", { exact: true }).count())
+            .then((nameFields) => {
+              expect(nameFields).toBe(0);
+            })
             .then(() =>
               dialog.getByLabel("Client ID", { exact: true }).fill(machineClient.clientId),
             )
@@ -122,18 +132,9 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
           return dialog
             .getByRole("alert")
             .waitFor({ state: "visible" })
-            .then(() =>
-              Promise.all([
-                dialog.getByLabel("Account name", { exact: true }).inputValue(),
-                dialog
-                  .getByLabel("Client secret", { exact: true })
-                  .inputValue()
-                  .then((value) => value === machineClient.clientSecret),
-              ]),
-            )
-            .then(([name, secretRetained]) => {
-              expect(name).toBe("Team reports");
-              expect(secretRetained).toBe(true);
+            .then(() => dialog.getByLabel("Client secret", { exact: true }).inputValue())
+            .then((secret) => {
+              expect(secret === machineClient.clientSecret).toBe(true);
             });
         });
         yield* browser.use("Retry the same connection", (page) =>
@@ -142,15 +143,27 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
             .getByRole("button", { name: "Connect Reporting", exact: true })
             .click(),
         );
-        yield* browser.use("Immediate completion updates the app", (page) =>
+        // Immediate completion closes the connection dialog and asks for a name over the app.
+        const prompt = yield* browser.use("Immediate completion asks to name the account", (page) =>
           page
-            .getByRole("dialog")
+            .getByRole("dialog", { name: "Connect Reporting", exact: true })
             .waitFor({ state: "hidden" })
+            .then(() => accountNamePrompt(page))
             .then(() =>
-              page
-                .getByRole("link", { name: "Team reports", exact: true })
-                .waitFor({ state: "visible" }),
-            )
+              accountNameField(page)
+                .inputValue()
+                .then((name) => ({ name, url: new URL(page.url()) })),
+            ),
+        );
+        expect(prompt.name).toBe("Default");
+        expect(prompt.url.pathname).toBe(`/org/${actors.organization.slug}/apps/${app.id}`);
+        expect(prompt.url.searchParams.has("rename")).toBe(false);
+        yield* browser.checkpoint("Machine account asks for a name");
+        yield* browser.use("Keep the default name", (page) => nameConnectedAccount(page));
+        yield* browser.use("The app shows the account without navigation", (page) =>
+          page
+            .getByRole("radio", { name: "Default", exact: true, checked: true })
+            .waitFor({ state: "visible" })
             .then(() => {
               expect(page.url()).toContain(`/apps/${app.id}`);
             }),
@@ -181,10 +194,13 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
             files: [
               {
                 path: "index.ts",
-                content: `import { defineApp, defineProvider, oauth2, query, object } from "apps";
+                content: `import { defineApp, defineProvider, oauth2, query, object, router } from "apps";
 const service=defineProvider({name:${JSON.stringify(authMethod)},auth:{machine:oauth2({grant:"client_credentials",${authMethod === "client_secret_post" ? `discover:${JSON.stringify(issuer.origin)}` : `tokenUrl:${JSON.stringify(issuer.origin + "/token")}`},scopes:["reports:read"],resource:${JSON.stringify(issuer.origin + "/resource")},tokenEndpointAuthMethod:${JSON.stringify(authMethod)}})}});
-export default defineApp({accounts:{service}},async({accounts})=>({queries:{read:query({input:object({})},async({fetch})=>{const result=await fetch(${JSON.stringify(issuer.origin + "/resource")},{headers:{authorization:"Bearer "+accounts.service.fields.access_token}});return result.json();})}}));`,
+export default defineApp({accounts:{service}},async({accounts})=>({tools: router({
+  read:query({input:object({})},async({fetch})=>{const result=await fetch(${JSON.stringify(issuer.origin + "/resource")},{headers:{authorization:"Bearer "+accounts.service.fields.access_token}});return result.json();}),
+})}));`,
               },
+              appsManifest,
             ],
           });
           expect(response.status).toBe(200);
@@ -294,21 +310,26 @@ export default defineApp({accounts:{service}},async({accounts})=>({queries:{read
             actors.owner,
             "POST",
             `${prefix}/apps/${app.id}/tools/call`,
-            { profile: profile.id, tool: "queries.read", input: {} },
+            { profile: profile.id, tool: "read", kind: "query", input: {} },
           );
           expect(read.status).toBe(200);
           const value = yield* body(Read, read);
           expect(value.authenticated).toBe(true);
           expect(value.generation).toBeGreaterThan(beforeRenewal);
           expect((yield* issuer.metrics).observed?.scope).toBe("reports:read");
+          // A refused client keeps the grant. The renewed token is still valid, so the call's
+          // renewal ahead of expiry fails and the call uses that token.
           yield* issuer.configure({ rejected: true });
-          const failed = yield* api.request(
+          const requests = (yield* issuer.metrics).requests;
+          const kept = yield* api.request(
             actors.owner,
             "POST",
             `${prefix}/apps/${app.id}/tools/call`,
-            { profile: profile.id, tool: "queries.read", input: {} },
+            { profile: profile.id, tool: "read", kind: "query", input: {} },
           );
-          expect(failed.status).not.toBe(200);
+          expect(kept.status, JSON.stringify(kept.body)).toBe(200);
+          expect(yield* body(Read, kept)).toEqual(value);
+          expect((yield* issuer.metrics).requests).toBe(requests + 1);
           yield* issuer.configure({ rejected: false, expiresIn: 120 });
           const reconnect = yield* body(
             Resource,
@@ -367,6 +388,57 @@ export default defineApp({accounts:{service}},async({accounts})=>({queries:{read
           expect(after.accounts.map((account) => account.id).sort()).toEqual(
             before.accounts.map((account) => account.id).sort(),
           );
+          // Unnamed machine accounts take the owner's next free default name for the provider.
+          const unnamed = [];
+          for (const expected of ["Default", "Default 2"]) {
+            const next = yield* body(
+              Resource,
+              yield* api.request(actors.owner, "POST", `${prefix}/apps/${app.id}/connections`, {
+                requirement: "service",
+                profile: profile.id,
+                ...(authMethod === "client_secret_post"
+                  ? { destination: { kind: "shared", audience: { kind: "everyone" } } }
+                  : {}),
+              }),
+            );
+            const named = yield* body(
+              Completed,
+              yield* api.request(
+                actors.owner,
+                "POST",
+                `${prefix}/connections/${next.id}/oauth/start`,
+                { method: "machine", client: machineClient },
+              ),
+            );
+            yield* Effect.addFinalizer(() =>
+              api
+                .request(actors.owner, "DELETE", `${prefix}/accounts/${named.account.id}`)
+                .pipe(Effect.orDie),
+            );
+            expect(named.account.label).toBe(expected);
+            unnamed.push(named.account);
+          }
+          const [firstDefault] = unnamed;
+          if (firstDefault === undefined) return yield* Effect.die("Missing default account");
+          const unnamedReconnect = yield* body(
+            Resource,
+            yield* api.request(
+              actors.owner,
+              "POST",
+              `${prefix}/accounts/${firstDefault.id}/connections`,
+            ),
+          );
+          expect(
+            (yield* body(
+              Completed,
+              yield* api.request(
+                actors.owner,
+                "POST",
+                `${prefix}/connections/${unnamedReconnect.id}/oauth/start`,
+                { method: "machine" },
+              ),
+            )).account,
+          ).toEqual(firstDefault);
         }
       }),
     ),

@@ -11,7 +11,7 @@ const key = (value: string) => Schema.decodeUnknownEffect(BlobKey)(value);
 /** A successful return makes both server code and every listed UI object available. Failed publication yields no build reference. */
 export const retainWorkerBuild = (
   build: BuildId,
-  bundle: WorkerBundle & Pick<typeof RetainedWorkerBuild.Type, "database">,
+  bundle: WorkerBundle & Pick<typeof RetainedWorkerBuild.Type, "database" | "protocol">,
   ui: readonly UiBuildFile[] | undefined,
 ) =>
   Effect.gen(function* () {

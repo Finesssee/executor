@@ -259,9 +259,15 @@ export class Browser extends Context.Service<
                   // Regions streamed into the page hydrate after the page itself. React marks
                   // each element it has hydrated; the first element of every completed region
                   // must carry that mark.
+                  // A region that has arrived is not shown at once: React batches reveals and
+                  // may hold one for several hundred milliseconds after the router hydrates.
+                  // Until then the region is marked `$?` or `$~`, its fallback is on screen and
+                  // its content waits in a hidden element that does not respond to input.
                   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_COMMENT);
                   for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
-                    if (!(node instanceof Comment) || node.data !== "$") continue;
+                    if (!(node instanceof Comment)) continue;
+                    if (node.data === "$?" || node.data === "$~") return false;
+                    if (node.data !== "$") continue;
                     // The region ends at its closing marker; an empty region has no element.
                     let first = node.nextSibling;
                     while (

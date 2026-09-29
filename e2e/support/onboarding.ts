@@ -217,6 +217,7 @@ const make = Effect.gen(function* () {
         page.route(
           "**/api/onboarding/prepare",
           (route) =>
+            // oxlint-disable-next-line executor/no-manual-effect-runtime-in-tests -- Playwright route handlers must return a Promise
             Effect.runPromise(
               Effect.gen(function* () {
                 started = true;

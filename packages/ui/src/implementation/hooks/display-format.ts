@@ -9,6 +9,7 @@ import {
 } from "../../contracts/display.ts";
 
 const unchanging = () => () => {};
+// oxlint-disable-next-line executor/no-module-level-mutable-state -- read only in the browser; server renders use the server snapshot
 let browserFormat: DisplayFormat | undefined;
 const currentBrowserFormat = () => (browserFormat ??= browserDisplayFormat());
 

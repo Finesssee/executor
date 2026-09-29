@@ -8,13 +8,16 @@ import { HostedLive, withHostedCase } from "../support/case.ts";
 import { App, Resource } from "../support/contracts.ts";
 import { holdQuery, refreshVisiblePage } from "../support/query-transition.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
-const fixture = `import {defineApp,defineProvider,secrets,query,workflow,object,string} from "apps";
+const fixture = `import {defineApp,defineProvider,secrets,query,workflow,object,string, router} from "apps";
 const service=defineProvider({name:"Resources fixture",auth:{key:secrets({label:"Key",fields:object({token:string()})})}});
 const capture=workflow({input:object({body:string()})},async(ctx,input)=>ctx.step.do("capture",async step=>({account:step.accounts.service.id,body:input.body})));
 const hold=workflow({input:object({})},async ctx=>{await ctx.step.sleep("hold","5 minutes");return "done";});
 const incoming={account:"service",config:object({channel:string()}),state:object({}),register:async()=>({}),unregister:async()=>{},handle:async()=>new Response(null,{status:204})};
-export default defineApp({accounts:{service}},{queries:{identity:query({input:object({})},async ctx=>ctx.accounts.service.id)},workflows:{capture,hold},webhooks:{incoming}});`;
+export default defineApp({accounts:{service}},{tools: router({
+  identity:query({input:object({})},async ctx=>ctx.accounts.service.id),
+}),workflows:{capture,hold},webhooks:{incoming}});`;
 const Profile = Schema.Struct({
   id: Schema.String,
   revision: Schema.Number,
@@ -35,7 +38,7 @@ layer(HostedLive, { excludeTestServices: true })("Grouped resources", (it) => {
           App,
           yield* api.request(actors.owner, "POST", `${prefix}/apps/deploy`, {
             name: `Resources ${randomUUID().slice(0, 8)}`,
-            files: [{ path: "index.ts", content: fixture }],
+            files: [{ path: "index.ts", content: fixture }, appsManifest],
           }),
         );
         const path = `${prefix}/apps/${app.id}`;

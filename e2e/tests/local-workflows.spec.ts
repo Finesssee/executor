@@ -11,6 +11,7 @@ import {
   workflowFiles,
   WorkflowRun as Run,
   WorkflowRows as Rows,
+  workflowToolKinds,
 } from "../support/workflow-app.ts";
 import { scenarios } from "../test-plan.ts";
 
@@ -144,24 +145,24 @@ layer(TestLive, { excludeTestServices: true })("Local workflows", (it) => {
               yield* Effect.sleep("100 millis");
             }
           });
-        const call = (tool: string, input: Schema.Json = {}) =>
+        const call = (tool: keyof typeof workflowToolKinds, input: Schema.Json = {}) =>
           Effect.gen(function* () {
             const response = yield* api.request(agent, "POST", "/v1/tools/call", {
               app: app.id,
               profile: profile.id,
               tool,
+              kind: workflowToolKinds[tool],
               input,
             });
             expect(response.status).toBe(200);
             return (yield* body(Completed, response)).value;
           });
-        expect(yield* call("queries.isolation")).toEqual({
+        expect(yield* call("isolation")).toEqual({
           hostEnvironmentAtImport: false,
           hostEnvironmentAtCall: false,
           hostFileAccess: false,
         });
-        const rows = () =>
-          call("queries.rows").pipe(Effect.flatMap(Schema.decodeUnknownEffect(Rows)));
+        const rows = () => call("rows").pipe(Effect.flatMap(Schema.decodeUnknownEffect(Rows)));
         const run = yield* start("process", { label: "pinned" }, name);
         expect((yield* start("process", { label: "pinned" }, name)).id).toBe(run.id);
         expect(
@@ -202,7 +203,7 @@ layer(TestLive, { excludeTestServices: true })("Local workflows", (it) => {
           files: workflowFiles("v2"),
         });
         expect(updated.status).toBe(200);
-        yield* call("mutations.release", { label: "pinned" });
+        yield* call("release", { label: "pinned" });
         const complete = yield* wait(run.id, "complete");
         expect(complete.deployment).toBe(app.activeDeployment);
         expect(complete.output).toMatchObject({
@@ -215,13 +216,13 @@ layer(TestLive, { excludeTestServices: true })("Local workflows", (it) => {
           (yield* rows()).filter((row) => row.label !== "pinned:before").map((row) => row.source),
         ).toEqual(["synthetic-refreshed", "synthetic-refreshed"]);
         const internal = yield* Schema.decodeUnknownEffect(Run)(
-          yield* call("mutations.launch", { key: name + "-handler" }),
+          yield* call("launch", { key: name + "-handler" }),
         );
         resources.runs.push({ app: app.id, id: internal.id });
         expect((yield* wait(internal.id, "complete")).output).toBe("v2");
         const history = yield* Schema.decodeUnknownEffect(
           Schema.Struct({ items: Schema.Array(Run) }),
-        )(yield* call("queries.history"));
+        )(yield* call("history"));
         expect(history.items.length).toBe(1);
         const listed = yield* api.request(
           agent,

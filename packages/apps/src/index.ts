@@ -46,6 +46,9 @@ export {
 } from "./implementation/schema.ts";
 
 export {
+  type AccountCheckContext,
+  type AccountCheckResult,
+  type AccountInfo,
   type AccountOf,
   type AuthMethod,
   type AuthMethodData,
@@ -54,9 +57,16 @@ export {
   type OAuth2Config,
   type Provider,
 } from "./contracts/provider.ts";
-export { defineProvider } from "./implementation/provider.ts";
-export { accountOperations } from "./implementation/account-operations.ts";
-export { dynamicTools } from "./implementation/dynamic-tools.ts";
+export { defineProvider, type ProviderOptions } from "./implementation/provider.ts";
+export { accountRouter } from "./implementation/account-router.ts";
+export {
+  router,
+  dynamicRouter,
+  type RouterDeclaration,
+  type RouterChild,
+  type RouterOptions,
+} from "./implementation/router.ts";
+export type { RouterIcon } from "./contracts/router.ts";
 export { dynamicSkills } from "./implementation/dynamic-skills.ts";
 export type { HostedTool as OperationDescription } from "./contracts/host.ts";
 

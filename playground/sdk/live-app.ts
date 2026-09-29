@@ -13,6 +13,7 @@ import { Effect, FileSystem, Layer, Path, Redacted } from "effect";
 import { NodeServices } from "@effect/platform-node";
 import { pgliteLayer } from "fumadb-effect/pglite";
 import { aesGcmCredentials as credentials } from "@executor-js/sdk/core";
+import apps from "apps/package.json" with { type: "json" };
 
 /** Storage belongs to the host; both clients share its connection and subscription coordinator. */
 export async function liveInbox(options: ExecutorOptions, app: AppId) {
@@ -61,6 +62,11 @@ export async function liveStorageWalkthrough() {
             return { path: name, content: yield* fs.readFileString(location) };
           }),
         );
+        // Every app declares the exact apps release it uses.
+        files.push({
+          path: "package.json",
+          content: JSON.stringify({ dependencies: { apps: apps.version } }),
+        });
         return yield* Effect.promise(async () => {
           const executor = await createExecutor(options);
           const { app } = await executor.apps.deploy({

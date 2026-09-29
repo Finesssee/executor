@@ -7,6 +7,8 @@ import { Api } from "../support/api.ts";
 import { TestLive, withCase } from "../support/case.ts";
 import { Target } from "../support/platform.ts";
 import { Evidence } from "../support/evidence.ts";
+import { Workspace } from "../support/app-authoring.ts";
+import { appsVersion, declaredApps } from "../support/apps-release.ts";
 
 const Catalogs = Schema.fromJsonString(
   Schema.Struct({
@@ -22,59 +24,69 @@ const Document = Schema.fromJsonString(
   Schema.Struct({ content: Schema.String, files: Schema.Array(Schema.String) }),
 );
 const Created = Schema.fromJsonString(Schema.Struct({ id: Schema.String }));
+const Apps = Schema.Array(Schema.Struct({ id: Schema.String, name: Schema.String }));
+const Deployed = Schema.Struct({
+  files: Schema.Array(Schema.Struct({ path: Schema.String, content: Schema.String })),
+});
 const Source = Schema.fromJsonString(
   Schema.Struct({ files: Schema.Array(Schema.Struct({ path: Schema.String })) }),
 );
+
+/** The real CLI, run as a child process against the managed local server with its own home. */
+const cli = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem,
+    processes = yield* ChildProcessSpawner.ChildProcessSpawner,
+    target = yield* Target,
+    evidence = yield* Evidence;
+  const packagedEntry = yield* Config.NonEmptyString("EXECUTOR_E2E_LOCAL_ENTRY").pipe(
+    Config.option,
+  );
+  // The packaged entry is JavaScript; Windows cannot execute it directly.
+  const entry = Option.isSome(packagedEntry) ? packagedEntry.value : "apps/local/server/src/bin.ts";
+  const home = yield* fs.makeTempDirectoryScoped({ prefix: "executor-apps-cli-" });
+  const origin = target.metadata.origin;
+  const run = (args: readonly string[], signedIn: boolean) =>
+    evidence.step(
+      `executor apps ${args.join(" ")}`,
+      Effect.scoped(
+        Effect.gen(function* () {
+          const child = yield* processes.spawn(
+            ChildProcess.make("node", [entry, "apps", ...args], {
+              extendEnv: false,
+              env: {
+                PATH: process.env.PATH ?? "",
+                HOME: home,
+                ...(signedIn ? { EXECUTOR_API_KEY: Redacted.value(target.apiKey) } : {}),
+              },
+              stdout: "pipe",
+              stderr: "pipe",
+              forceKillAfter: "3 seconds",
+            }),
+          );
+          const [code, stdout, stderr] = yield* Effect.all(
+            [
+              child.exitCode,
+              child.stdout.pipe(Stream.decodeText(), Stream.mkString),
+              child.stderr.pipe(Stream.decodeText(), Stream.mkString),
+            ],
+            { concurrency: 3 },
+          ).pipe(Effect.timeout("60 seconds"));
+          return { code: Number(code), stdout, stderr };
+        }),
+      ),
+    );
+  return { run, origin, fs };
+});
 
 layer(TestLive, { excludeTestServices: true })("Local apps CLI", (it) => {
   it.effect(scenarios.localAppsCli.title, (context) =>
     withCase(
       context,
       Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem,
-          processes = yield* ChildProcessSpawner.ChildProcessSpawner,
-          target = yield* Target,
+        const target = yield* Target,
           evidence = yield* Evidence,
           api = yield* Api;
-        const packagedEntry = yield* Config.NonEmptyString("EXECUTOR_E2E_LOCAL_ENTRY").pipe(
-          Config.option,
-        );
-        // The packaged entry is JavaScript; Windows cannot execute it directly.
-        const entry = Option.isSome(packagedEntry)
-          ? packagedEntry.value
-          : "apps/local/server/src/bin.ts";
-        const home = yield* fs.makeTempDirectoryScoped({ prefix: "executor-apps-cli-" });
-        const origin = target.metadata.origin;
-        const run = (args: readonly string[], signedIn: boolean) =>
-          evidence.step(
-            `executor apps ${args.join(" ")}`,
-            Effect.scoped(
-              Effect.gen(function* () {
-                const child = yield* processes.spawn(
-                  ChildProcess.make("node", [entry, "apps", ...args], {
-                    extendEnv: false,
-                    env: {
-                      PATH: process.env.PATH ?? "",
-                      HOME: home,
-                      ...(signedIn ? { EXECUTOR_API_KEY: Redacted.value(target.apiKey) } : {}),
-                    },
-                    stdout: "pipe",
-                    stderr: "pipe",
-                    forceKillAfter: "3 seconds",
-                  }),
-                );
-                const [code, stdout, stderr] = yield* Effect.all(
-                  [
-                    child.exitCode,
-                    child.stdout.pipe(Stream.decodeText(), Stream.mkString),
-                    child.stderr.pipe(Stream.decodeText(), Stream.mkString),
-                  ],
-                  { concurrency: 3 },
-                ).pipe(Effect.timeout("60 seconds"));
-                return { code: Number(code), stdout, stderr };
-              }),
-            ),
-          );
+        const { run, origin, fs } = yield* cli;
 
         const signedOut = yield* run(["list", "--host", origin], false);
         yield* evidence.json("signed-out.json", signedOut);
@@ -144,7 +156,7 @@ layer(TestLive, { excludeTestServices: true })("Local apps CLI", (it) => {
         yield* fs.makeDirectory(`${source}/.git`);
         yield* fs.writeFileString(
           `${source}/index.ts`,
-          'import { defineApp } from "apps";\nimport { label } from "./lib/label.ts";\nexport default defineApp({ accounts: {} }, async () => ({ queries: {} }));\nvoid label;\n',
+          'import { defineApp, router } from "apps";\nimport { label } from "./lib/label.ts";\nexport default defineApp({ accounts: {} }, async () => ({ tools: router({}) }));\nvoid label;\n',
         );
         yield* fs.writeFileString(`${source}/lib/label.ts`, 'export const label = "cli";\n');
         yield* fs.writeFileString(`${source}/node_modules/ignored/index.js`, "ignored\n");
@@ -170,6 +182,81 @@ layer(TestLive, { excludeTestServices: true })("Local apps CLI", (it) => {
             .map((file) => file.path)
             .sort(),
         ).toEqual(["index.ts", "lib/label.ts"]);
+        // The directory declares no apps release, so deploying it is refused with the one to add.
+        const directory = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Workspace))(
+          read.stdout,
+        );
+        const refused = yield* run(
+          ["deploy", "--host", origin, "--app", app.id, "--commit", directory.revision.commit],
+          true,
+        );
+        expect(refused.code).toBe(1);
+        expect(refused.stderr).toContain(
+          `Add "apps": "${appsVersion}" to package.json dependencies.`,
+        );
+      }),
+    ),
+  );
+  it.effect(scenarios.localAppsCliStarter.title, (context) =>
+    withCase(
+      context,
+      Effect.gen(function* () {
+        const target = yield* Target,
+          api = yield* Api;
+        const { run, origin } = yield* cli;
+        const session = yield* api.session();
+        // Without --files the starter declares the exact apps release this host ships, and builds.
+        const starter = yield* run(["create", "--host", origin, "--name", "CLI starter"], true);
+        expect(starter.code, starter.stderr).toBe(0);
+        const starterApp = yield* Schema.decodeUnknownEffect(Created)(starter.stdout);
+        yield* Effect.addFinalizer(() =>
+          session
+            .send("DELETE", `/v1/apps/${starterApp.id}`, undefined, {
+              authorization: `Bearer ${Redacted.value(target.apiKey)}`,
+            })
+            .pipe(Effect.orDie),
+        );
+        const starterSource = yield* run(
+          ["source", "--host", origin, "--app", starterApp.id],
+          true,
+        );
+        expect(starterSource.code, starterSource.stderr).toBe(0);
+        const starterWorkspace = yield* Schema.decodeUnknownEffect(
+          Schema.fromJsonString(Workspace),
+        )(starterSource.stdout);
+        expect(declaredApps(starterWorkspace.files)).toBe(appsVersion);
+        const deployed = yield* run(
+          [
+            "deploy",
+            "--host",
+            origin,
+            "--app",
+            starterApp.id,
+            "--commit",
+            starterWorkspace.revision.commit,
+          ],
+          true,
+        );
+        expect(deployed.code, deployed.stderr).toBe(0);
+
+        // The host-managed Executor app is generated with the same pinned release.
+        const inventory = yield* session.send("GET", "/v1/apps", undefined, {
+          authorization: `Bearer ${Redacted.value(target.apiKey)}`,
+        });
+        const executorApp = (yield* Schema.decodeUnknownEffect(Apps)(inventory.body)).find(
+          (app) => app.name === "Executor",
+        );
+        expect(executorApp, "the local Executor app").toBeDefined();
+        const executorSource = yield* session.send(
+          "GET",
+          `/v1/apps/${executorApp?.id ?? ""}/source`,
+          undefined,
+          { authorization: `Bearer ${Redacted.value(target.apiKey)}` },
+        );
+        expect(executorSource.status).toBe(200);
+        expect(
+          declaredApps((yield* Schema.decodeUnknownEffect(Deployed)(executorSource.body)).files),
+        ).toBe(appsVersion);
       }),
     ),
   );

@@ -9,12 +9,16 @@ import { Workspace } from "../support/app-authoring.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { Evidence, Telemetry } from "../support/evidence.ts";
 import { Target } from "../support/platform.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const files = [
   {
     path: "index.ts",
-    content: `import {defineApp,object,query} from 'apps'; export default defineApp({accounts:{}},{queries:{hello:query({input:object({})},async()=>"historical snapshot")}});`,
+    content: `import {defineApp,object,query, router} from 'apps'; export default defineApp({accounts:{}},{tools: router({
+  hello:query({input:object({})},async()=>"historical snapshot"),
+})});`,
   },
+  appsManifest,
 ];
 
 layer(HostedLive, { excludeTestServices: true })("Historical source", (it) => {
@@ -50,10 +54,11 @@ layer(HostedLive, { excludeTestServices: true })("Historical source", (it) => {
         for (let revision = 0; revision < 2; revision += 1) {
           const response = yield* api.request(actors.owner, "POST", `${path}/commits`, {
             expected: current.revision.commit,
+            // Workspace reads list files by path, so the saved list keeps that order.
             files: [
               ...files,
               { path: "later.txt", content: randomBytes(256 * 1024).toString("base64") },
-            ],
+            ].toSorted((a, b) => a.path.localeCompare(b.path)),
             message: `Later revision ${revision}`,
           });
           expect(response.status).toBe(200);

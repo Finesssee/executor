@@ -8,6 +8,7 @@ import { Api, body } from "../support/api.ts";
 import { Browser } from "../support/browser.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { Evidence } from "../support/evidence.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 layer(HostedLive, { excludeTestServices: true })("Request observability", (it) => {
   it.effect(scenarios.requestTiming.title, (context) =>
@@ -30,6 +31,7 @@ layer(HostedLive, { excludeTestServices: true })("Request observability", (it) =
                 content:
                   'import { defineApp } from "apps"; export default defineApp({accounts:{}},{});',
               },
+              appsManifest,
             ],
           }),
         );

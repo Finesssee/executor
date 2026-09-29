@@ -1,4 +1,4 @@
-import { AccountConnectionId, ProfileId } from "@executor-js/sdk";
+import { AccountConnectionId, AccountId, ProfileId } from "@executor-js/sdk";
 import { AppView } from "@executor-js/ui/contracts/dashboard";
 import { Option, Schema } from "effect";
 import { OrganizationId } from "@executor-js/hosted-server/organization";
@@ -20,6 +20,18 @@ export function parseConnectionSearch(search: Record<string, unknown>): {
     client: Option.getOrUndefined(
       Schema.decodeUnknownOption(Schema.Literal("change"))(search.client),
     ),
+  };
+}
+
+/** The account list marks a linked account, which has no page of its own. */
+export function parseAccountsSearch(search: Record<string, unknown>): ReturnType<
+  typeof parseConnectionSearch
+> & {
+  readonly account?: AccountId | undefined;
+} {
+  return {
+    ...parseConnectionSearch(search),
+    account: Option.getOrUndefined(Schema.decodeUnknownOption(AccountId)(search.account)),
   };
 }
 
@@ -82,10 +94,16 @@ export function hostedPageTitle(
         : item
           ? "App"
           : "Apps";
-  if (page === "accounts")
-    return action === "disconnect" ? "Disconnect account" : item ? "Account" : "Accounts";
+  if (page === "accounts") return "Accounts";
   return "Dashboard";
 }
+
+/**
+ * Sign-in finishes with a fresh document. Keep the current fragment, as an HTTP redirect without its
+ * own fragment would, so an app deep link's fragment survives signing in on the way.
+ */
+export const keepFragment = (url: string): string =>
+  url.includes("#") ? url : `${url}${window.location.hash}`;
 
 /** Return providers through sign-in completion without changing the encoded final destination. */
 export const signInCallback = (redirect: string): string =>

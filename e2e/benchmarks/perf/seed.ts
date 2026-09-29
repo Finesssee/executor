@@ -12,6 +12,7 @@ import { formatSpec, type EmulatorSpec } from "./emulator.ts";
 import { fixtureActors, stableUuid } from "./sessions.ts";
 import { productionShape, random, toolsPerApp, type Random } from "./shape.ts";
 import type { StageControl } from "./stage.ts";
+import { appsManifest, withApps } from "../../support/apps-release.ts";
 
 export const AppReceipt = Schema.Struct({
   id: Schema.String,
@@ -229,15 +230,15 @@ const expectOk = (operation: string, response: { status: number; body: unknown }
       );
 
 // `seed` caches a value that is stale at once; `stale` serves it and refreshes it for up to 30 s.
-const refreshSource = `import { defineApp, query, mutation, object, string } from "apps";
+const refreshSource = `import { defineApp, query, mutation, object, string, router } from "apps";
 import { always } from "apps/operations/approval";
 const slowRefresh = (signal) => new Promise((resolve) => {
   const timer = setTimeout(resolve, 60_000);
   signal.addEventListener("abort", () => { clearTimeout(timer); resolve(undefined); }, { once: true });
 });
 const options = (key) => ({ key, schema: string(), freshFor: 0, staleFor: "10 minutes" });
-export default defineApp({ accounts: {} }, async (ctx) => ({ queries: {
-  pause: query({ input: object({}) }, async () => {
+export default defineApp({ accounts: {} }, async (ctx) => ({ tools: router({
+   pause: query({ input: object({}) }, async () => {
     await new Promise((resolve) => setTimeout(resolve, 3_000));
     return true;
   }),
@@ -246,21 +247,20 @@ export default defineApp({ accounts: {} }, async (ctx) => ({ queries: {
     await slowRefresh(signal);
     return "refreshed";
   } })),
-}, mutations: {
-  approved: mutation({ input: object({}), approval: always() }, async () => ({ ran: true })),
-} }));`;
+   approved: mutation({ input: object({}), approval: always() }, async () => ({ ran: true })),
+ }) }));`;
 
 /** Source an agent would author for an emulator app; keyed apps read an `x-api-key` token. */
 const authoredFiles = (kind: "mcp" | "openapi", url: string, keyed: boolean) => {
   const operations =
     kind === "mcp"
-      ? (account: string) => `mcpOperations({
+      ? (account: string) => `mcpRouter({
     url: ${JSON.stringify(url)},
     cache: ${account === "" ? "cache" : "cache.forAccount(account)"},
     ${account === "" ? "" : 'accountId: account.id,\n    headers: { "x-api-key": account.fields.token },'}
     signal,
   })`
-      : (account: string) => `liveOpenapiOperations({
+      : (account: string) => `liveOpenapiRouter({
     ...${JSON.stringify({
       source: { url },
       allowedOrigin: new URL(url).origin,
@@ -274,20 +274,21 @@ const authoredFiles = (kind: "mcp" | "openapi", url: string, keyed: boolean) => 
   })`;
   const helper =
     kind === "mcp"
-      ? 'import { mcpOperations } from "apps/mcp";'
-      : 'import { liveOpenapiOperations } from "apps/openapi";';
+      ? 'import { mcpRouter } from "apps/mcp";'
+      : 'import { liveOpenapiRouter } from "apps/openapi";';
   return [
     {
       path: "index.ts",
       content: keyed
-        ? `import { accountOperations, defineApp } from "apps";
+        ? `import { accountRouter, defineApp, router } from "apps";
 ${helper}
 import { provider } from "./provider.ts";
-export default defineApp({ accounts: { service: provider.many() } }, async ({ accounts, cache, fetch, signal }) =>
-  accountOperations(accounts.service, async (account) => ${operations("account")}, { signal }));`
-        : `import { defineApp } from "apps";
+export default defineApp({ accounts: { service: provider.many() } }, async ({ accounts, cache, fetch, signal }) => ({
+  tools: await accountRouter(accounts.service, async (account) => ${operations("account")}, { signal }),
+}));`
+        : `import { defineApp, router } from "apps";
 ${helper}
-export default defineApp({ accounts: {} }, async ({ cache, fetch, signal }) => ${operations("")});`,
+export default defineApp({ accounts: {} }, async ({ cache, fetch, signal }) => ({ tools: await ${operations("")} }));`,
     },
     ...(keyed
       ? [
@@ -304,7 +305,7 @@ export const provider = defineProvider({
     {
       path: "package.json",
       content: JSON.stringify({
-        dependencies: kind === "mcp" ? { "@modelcontextprotocol/sdk": "1.30.0" } : {},
+        dependencies: withApps(kind === "mcp" ? { "@modelcontextprotocol/sdk": "1.30.0" } : {}),
       }),
     },
   ];
@@ -317,7 +318,7 @@ const seedApp = (client: ProductClient, root: string, app: AppPlan, emulator: st
       const deployed = yield* client
         .request("POST", `${root}/apps/deploy`, {
           name: app.name,
-          files: [{ path: "index.ts", content: refreshSource }],
+          files: [{ path: "index.ts", content: refreshSource }, appsManifest],
         })
         .pipe(
           Effect.flatMap((response) => expectOk(`deploy ${app.name}`, response)),
@@ -332,13 +333,15 @@ const seedApp = (client: ProductClient, root: string, app: AppPlan, emulator: st
           files: [
             {
               path: "package.json",
-              content: JSON.stringify({ dependencies: { "@modelcontextprotocol/sdk": "1.30.0" } }),
+              content: JSON.stringify({
+                dependencies: withApps({ "@modelcontextprotocol/sdk": "1.30.0" }),
+              }),
             },
             {
               path: "index.ts",
-              content: `import { defineApp } from "apps";
-import { mcpOperations } from "apps/mcp";
-export default defineApp({ accounts: {} }, async () => mcpOperations({ url: ${JSON.stringify(url)} }));`,
+              content: `import { defineApp, router } from "apps";
+import { mcpRouter } from "apps/mcp";
+export default defineApp({ accounts: {} }, async () => ({ tools: await mcpRouter({ url: ${JSON.stringify(url)} }) }));`,
             },
           ],
         })

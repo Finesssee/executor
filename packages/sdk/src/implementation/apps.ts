@@ -28,7 +28,12 @@ import {
   SourceFiles,
 } from "../contracts/deployment.ts";
 import type { Executor } from "../contracts/executor.ts";
-import { RuntimeBuildFailed, type Runtime } from "../contracts/runtime.ts";
+import {
+  RuntimeBuildFailed,
+  RuntimeAppsDependencyMissing,
+  RuntimeProtocolUnsupported,
+  type Runtime,
+} from "../contracts/runtime.ts";
 import {
   AppCodeId,
   AppId,
@@ -49,6 +54,33 @@ import { readInitialSource, writeInitialSource } from "./initial-source.ts";
 type DeployInput = NonNullable<Parameters<Executor["apps"]["deploy"]>[0]>;
 
 /** Read a configured app, applying an optional owner constraint. */
+
+/** Carry the runtime's stage, location and underlying failure to the deployer. */
+const deploymentBuildFailed = (owner: OwnerId, name: string, error: RuntimeBuildFailed) => {
+  const { stage, dependency, location } = error;
+  const hint =
+    dependency === undefined ? undefined : `Add ${dependency} to package.json dependencies.`;
+  const detail =
+    error.declaration !== undefined
+      ? error.declaration.message
+      : error.message.length > 0
+        ? error.message
+        : hint;
+  // Compiler messages already begin with their location.
+  const where =
+    location === undefined || detail?.includes(location.file) === true
+      ? ""
+      : ` in ${location.file}${location.line === undefined ? "" : `:${location.line}${location.column === undefined ? "" : `:${location.column}`}`}`;
+  return new DeploymentBuildFailed({
+    owner,
+    name,
+    reason: hint ?? error.declaration?.message ?? "App build failed",
+    stage,
+    ...(location === undefined ? {} : { location }),
+    message: `App build failed at the ${stage} stage${where}${detail === undefined ? "." : `: ${detail}`}`,
+  });
+};
+
 export const storedApp = (db: Query, input: Parameters<Executor["apps"]["get"]>[0]) =>
   Effect.gen(function* () {
     const row = yield* query(() =>
@@ -223,6 +255,8 @@ export const makeApps = (
               owner: input.owner,
               name: deployName,
               reason: "Invalid source files",
+              stage: "source",
+              message: "App build failed: the source files are invalid.",
             }),
         ),
       );
@@ -230,21 +264,33 @@ export const makeApps = (
         Effect.mapError((error) =>
           Schema.is(BuildMemoryExceeded)(error)
             ? error
-            : new DeploymentBuildFailed({
-                owner: input.owner,
-                name: deployName,
-                reason:
-                  Schema.is(RuntimeBuildFailed)(error) && error.dependency !== undefined
-                    ? `Add ${error.dependency} to package.json dependencies.`
-                    : "App build failed",
-              }),
+            : Schema.is(RuntimeProtocolUnsupported)(error)
+              ? new DeploymentBuildFailed({
+                  owner: input.owner,
+                  name: deployName,
+                  reason: `${error.message} Declare a supported apps version.`,
+                  message: `${error.message} Declare a supported apps version.`,
+                })
+              : Schema.is(RuntimeAppsDependencyMissing)(error)
+                ? new DeploymentBuildFailed({
+                    owner: input.owner,
+                    name: deployName,
+                    reason: error.message,
+                    message: error.message,
+                  })
+                : deploymentBuildFailed(input.owner, deployName, error),
         ),
       );
       const entries = yield* Effect.forEach(
         Object.entries(built.requirements.accounts),
         ([slot, value]) =>
           identifyProvider(value.definition, crypto).pipe(
-            Effect.map((provider) => ({ slot, provider, cardinality: value.cardinality })),
+            Effect.map((provider) => ({
+              slot,
+              provider,
+              cardinality: value.cardinality,
+              health: value.health,
+            })),
           ),
       );
       const requirements: AppRequirements = {
@@ -255,9 +301,14 @@ export const makeApps = (
           ? {}
           : { database: built.requirements.database }),
         accounts: Object.fromEntries(
-          entries.map(({ slot, provider, cardinality }) => [
+          entries.map(({ slot, provider, cardinality, health }) => [
             slot,
-            { provider: provider.id, definition: provider.definition, cardinality },
+            {
+              provider: provider.id,
+              definition: provider.definition,
+              cardinality,
+              ...(health === undefined ? {} : { health }),
+            },
           ]),
         ),
       };
@@ -545,6 +596,9 @@ export const makeApps = (
             );
             yield* query(() => tx.deleteMany("schedules", { where: (b) => b("app", "=", app.id) }));
             yield* query(() => tx.deleteMany("profiles", { where: (b) => b("app", "=", app.id) }));
+            yield* query(() =>
+              tx.deleteMany("accountChecks", { where: (b) => b("app", "=", app.id) }),
+            );
             yield* query(() => tx.deleteMany("apps", { where: (b) => b("id", "=", app.id) }));
           }
           return { app: input.app };

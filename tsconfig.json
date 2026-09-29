@@ -4,6 +4,7 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "lib": ["ES2023", "DOM"],
+    "types": ["node"],
     "strict": true,
     "exactOptionalPropertyTypes": true,
     "noUncheckedIndexedAccess": true,
@@ -13,7 +14,33 @@
     "noEmit": true,
     "skipLibCheck": true,
     "jsx": "react-jsx",
-    "resolveJsonModule": true
+    "resolveJsonModule": true,
+    "plugins": [
+      {
+        "name": "@effect/language-service",
+        // Errors fail the typecheck. Warnings are reported; suggestions stay in the editor.
+        "includeSuggestionsInTsc": false,
+        "ignoreEffectWarningsInTscExitCode": true,
+        "diagnosticSeverity": {
+          "missingEffectContext": "error",
+          "missingEffectError": "error",
+          "missingLayerContext": "error",
+          "leakingRequirements": "error",
+          // Warning until author and Promise boundaries get typed errors: 313 and 21 sites.
+          "anyUnknownInErrorContext": "warning",
+          "unknownInEffectCatch": "warning",
+          "floatingEffect": "error",
+          "floatingEffectInVitest": "error",
+          "missingReturnYieldStar": "error",
+          "globalFetchInEffect": "error",
+          "globalConsoleInEffect": "error",
+          // Warning until Effect code reads time through Clock/DateTime: 92 sites.
+          "globalDateInEffect": "warning",
+          // Warning until imports move behind platform services or edges: 247 sites, 214 in e2e.
+          "nodeBuiltinImport": "warning"
+        }
+      }
+    ]
   },
   "exclude": [
     "apps/local/web",
@@ -25,5 +52,5 @@
     "**/dist",
     "**/.blume"
   ],
-  "include": ["packages", "apps", "playground"]
+  "include": ["packages", "apps", "playground", "scripts/oxlint-plugin.ts"]
 }

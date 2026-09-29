@@ -210,17 +210,16 @@ const makeAppDomainCoordinator = Effect.gen(function* () {
             saved === undefined
               ? undefined
               : yield* Schema.decodeUnknownEffect(DomainObservation)(saved);
-          if (
-            observation === undefined ||
-            observation.slug !== team.slug ||
-            observation.checkedAt + 300_000 < (yield* Clock.currentTimeMillis)
-          ) {
+          if (observation === undefined || observation.slug !== team.slug) {
             // Coalesce concurrent first visits before reading and applying the desired set.
             yield* arm(1_000);
             if (yield* state.storage.get<boolean>("reconcileError")) return "failed" as const;
             return "pending" as const;
           }
-          if (observation.status !== "ready") yield* arm(15_000);
+          // An old observation is refreshed in the background. Issued certificates do not lapse
+          // because a reconciliation was late, so a ready team keeps its link meanwhile.
+          if (observation.checkedAt + 300_000 < (yield* Clock.currentTimeMillis)) yield* arm(1_000);
+          else if (observation.status !== "ready") yield* arm(15_000);
           return observation.status;
         }),
       wake: () => arm(1_000),

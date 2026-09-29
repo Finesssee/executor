@@ -21,6 +21,11 @@ export interface AddAccountSearch {
   readonly profile?: ProfileId | undefined;
 }
 
+/** The account list marks a linked account, which has no page of its own. */
+export interface AccountsSearch {
+  readonly account?: AccountId | undefined;
+}
+
 /** Setup offers a newly connected account, then validates its compatibility. */
 export interface SetupSearch {
   readonly selected?: AccountId | undefined;
@@ -51,6 +56,13 @@ export function parseAddAccountSearch(search: Record<string, unknown>): AddAccou
     app: Option.getOrUndefined(app),
     slot: Option.getOrUndefined(slot),
     profile: Option.getOrUndefined(Schema.decodeUnknownOption(ProfileId)(search.profile)),
+  };
+}
+
+/** Ignore a malformed account identity instead of rejecting the list. */
+export function parseAccountsSearch(search: Record<string, unknown>): AccountsSearch {
+  return {
+    account: Option.getOrUndefined(Schema.decodeUnknownOption(AccountId)(search.account)),
   };
 }
 
@@ -93,8 +105,7 @@ export function localPageTitle(pathname: string): string {
   if (section === "accounts") {
     if (item === "add") return "Connect account";
     if (action === "credentials") return "Update credentials";
-    if (action === "disconnect") return "Disconnect account";
-    return item ? "Account" : "Accounts";
+    return "Accounts";
   }
   return "Dashboard";
 }

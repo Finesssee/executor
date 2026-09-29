@@ -73,18 +73,31 @@ export const makeAppManagementAtoms = <R, E>(
           }),
         ),
       )
-      .pipe(Atom.setIdleTTL("5 minutes")),
+      .pipe(
+        hydrate("sourceDisplayFile", {
+          ...params,
+          app: key.app,
+          commit: key.commit,
+          path: key.path,
+        }),
+        Atom.setIdleTTL("5 minutes"),
+      ),
   );
   const history = Atom.family((app: AppId) =>
     runtime
       .atom(Effect.flatMap(client, (api) => api.history({ params: { ...params, app } })))
       .pipe(hydrate("history", { ...params, app }), refreshOnFocus),
   );
-  /** Exact working bytes for an editor. Unmounted editors release it, so each edit reads afresh. */
+  /**
+   * Exact working bytes for an editor. The page's first read reaches the browser with the page;
+   * unmounted editors release it, so each later edit reads afresh.
+   */
   const workspace = Atom.family((app: AppId) =>
     runtime
       .atom(Effect.flatMap(client, (api) => api.source({ params: { ...params, app } })))
-      .pipe((source) => acknowledgedQuery(source, retainFailure)),
+      .pipe(hydrate("source", { ...params, app }), (source) =>
+        acknowledgedQuery(source, retainFailure),
+      ),
   );
   /**
    * Commit one text file on top of the current working source; a null base creates a new file. Like a Git host's web

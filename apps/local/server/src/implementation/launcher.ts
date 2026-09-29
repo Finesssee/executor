@@ -53,5 +53,5 @@ export const launch = (mode: LaunchMode, platform: string) =>
           Effect.catch(() => Console.log("Open the connection link above in your browser.")),
         );
     }
-    yield* Effect.never;
+    return yield* Effect.never;
   });

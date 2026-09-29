@@ -34,6 +34,7 @@ export const holdOrganizationEntry = Effect.gen(function* () {
   const released = yield* Deferred.make<void>();
   const active = new Set<Promise<void>>();
   const hold = (route: Route) => {
+    // oxlint-disable-next-line executor/no-manual-effect-runtime-in-tests -- Playwright route handlers must return a Promise
     const pending = Effect.runPromise(
       Effect.gen(function* () {
         yield* Deferred.succeed(arrived, undefined);

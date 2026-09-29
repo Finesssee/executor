@@ -8,6 +8,7 @@ import { Actors } from "../support/actors.ts";
 import { Api, body } from "../support/api.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { App } from "../support/contracts.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const Deployed = Schema.Struct({ ...App.fields, activeDeployment: Schema.String });
 const Catalog = Schema.Struct({
@@ -33,7 +34,7 @@ const Document = Schema.Struct({
 const source = `import { defineApp } from "apps";
 export default defineApp({ accounts: {} }, async () => ({}));`;
 const document = (version: string) =>
-  `---\nname: search-messages\ndescription: Search cached messages.\nallowed-tools: queries.search\nmetadata:\n  version: "${version}"\n---\nRead [examples](references/examples.md).\n`;
+  `---\nname: search-messages\ndescription: Search cached messages.\nallowed-tools: search\nmetadata:\n  version: "${version}"\n---\nRead [examples](references/examples.md).\n`;
 const files = (version: string) => [
   { path: "index.ts", content: source },
   { path: "private.txt", content: "Outside the skill directory" },
@@ -44,6 +45,7 @@ const files = (version: string) => [
     path: "skills/other/SKILL.md",
     content: "---\nname: other\ndescription: Another skill\n---\nOther.",
   },
+  appsManifest,
 ];
 
 const deploy = (name: string) =>

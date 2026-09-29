@@ -119,7 +119,7 @@ const main = Effect.scoped(
     );
     yield* Effect.addFinalizer(() => Effect.sync(() => socket.closeAllConnections()));
     yield* Console.log(`Executor cloud dev: ${origin.origin}`);
-    yield* Effect.never;
+    return yield* Effect.never;
   }),
 ).pipe(Effect.provide(NodeServices.layer));
 

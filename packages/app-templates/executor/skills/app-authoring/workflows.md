@@ -37,14 +37,14 @@ Background operations retain approval rules and fail if they require live input.
 Declare schedules against the same mutation objects registered on the app:
 
 ```ts
-import { defineApp, mutation, interval, cron, object, string } from "apps";
+import { defineApp, mutation, interval, cron, object, string, router } from "apps";
 
 const record = mutation({ input: object({ message: string() }) }, async (_ctx, { message }) => ({
   message,
 }));
 
 export default defineApp({ accounts: {} }, async () => ({
-  mutations: { record },
+  tools: router({ record }),
   schedules: {
     heartbeat: interval({ minutes: 5 }, record, { message: "Heartbeat" }),
     morning: cron({ expression: "0 9 * * MON-FRI", timezone: "America/Los_Angeles" }, record, {
@@ -58,7 +58,7 @@ Intervals accept one positive integer unit: `seconds`, `minutes` or `hours`,
 and must resolve to at least 60 seconds. A shorter interval fails when the app
 is evaluated. Use Run now to try a schedule without waiting for its next tick.
 Calendar schedules accept five-field cron expressions and default to UTC.
-The mutation must appear once in the app's mutation catalog. Its input is
+The mutation must appear once in the app's `tools` router, outside dynamic routers. Its input is
 checked during app evaluation. External handlers use
 `MutationContext<typeof requirements>`, exactly as ordinary mutations do. Read
 selected providers through `ctx.accounts` and declared storage through `ctx.db`;

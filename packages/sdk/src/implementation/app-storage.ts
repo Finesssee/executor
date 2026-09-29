@@ -27,9 +27,10 @@ export const makeAppData = (
     kind: "query" | "mutate",
     input: AppDataInput,
     observeRevision?: (revision: number) => void,
+    read: ReturnType<typeof snapshot> = snapshot(db, input),
   ) =>
     Effect.gen(function* () {
-      const state = yield* snapshot(db, input);
+      const state = yield* read;
       const accounts = yield* resolve(state, resolveAccount, lifecycle);
       return yield* runtime[kind]({
         build: state.deployment.build,
@@ -61,8 +62,16 @@ export const makeAppData = (
                 return Stream.tick("15 seconds").pipe(
                   Stream.mapEffect(() => snapshot(db, input)),
                   Stream.changesWith((a, b) => a.deployment.id === b.deployment.id),
-                  Stream.switchMap((state) =>
-                    Stream.merge(
+                  Stream.switchMap((state) => {
+                    // The deployment's first query uses the selections just read for it.
+                    // Later executions reread them, so they see account and profile changes.
+                    let fresh: InvocationSnapshot | undefined = state;
+                    const current = Effect.suspend(() => {
+                      const known = fresh;
+                      fresh = undefined;
+                      return known === undefined ? snapshot(db, input) : Effect.succeed(known);
+                    });
+                    return Stream.merge(
                       // First data does not wait for the notification connection.
                       // The initial notification is skipped only if its writes were
                       // already observed by a successful query. Setup races still reread.
@@ -74,17 +83,24 @@ export const makeAppData = (
                               () => new AppDataFailed({ app: input.app, name: input.name }),
                             ),
                           ),
-                    ).pipe(Stream.merge(Stream.tick("15 seconds").pipe(Stream.drop(1)))),
-                  ),
-                  Stream.filterMapEffect((revision) =>
-                    typeof revision === "number" &&
-                    observedRevision !== undefined &&
-                    revision <= observedRevision
-                      ? Effect.succeed(Result.fail(undefined))
-                      : execute("query", input, (revision) => {
-                          observedRevision = revision;
-                        }).pipe(Effect.map(Result.succeed)),
-                  ),
+                    ).pipe(
+                      Stream.merge(Stream.tick("15 seconds").pipe(Stream.drop(1))),
+                      Stream.filterMapEffect((revision) =>
+                        typeof revision === "number" &&
+                        observedRevision !== undefined &&
+                        revision <= observedRevision
+                          ? Effect.succeed(Result.fail(undefined))
+                          : execute(
+                              "query",
+                              input,
+                              (revision) => {
+                                observedRevision = revision;
+                              },
+                              current,
+                            ).pipe(Effect.map(Result.succeed)),
+                      ),
+                    );
+                  }),
                   Stream.changesWith(Schema.toEquivalence(Json)),
                   Stream.zipWithIndex,
                   Stream.map(([value, revision]) => ({ value, revision })),

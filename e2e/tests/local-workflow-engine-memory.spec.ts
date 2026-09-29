@@ -6,6 +6,7 @@
 import { randomUUID } from "node:crypto";
 import { expect, layer } from "@effect/vitest";
 import { Effect, Schedule, Schema } from "effect";
+import { appsManifest } from "../support/apps-release.ts";
 import { TestLive, withCase } from "../support/case.ts";
 import { startLocalProduct, workflowEngines } from "../support/local-workflow-engines.ts";
 import { scenarios } from "../test-plan.ts";
@@ -32,6 +33,7 @@ export default defineApp({ accounts: {} }, {
   workflows: { once: workflow({ input: object({}) }, async (ctx) => ctx.step.do("once", async () => ctx.runId)) },
 });`,
               },
+              appsManifest,
             ],
           });
           const runs = yield* Effect.forEach(Array.from({ length: 8 }, randomUUID), (key) =>

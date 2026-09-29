@@ -9,12 +9,15 @@ import { App } from "../support/contracts.ts";
 import { Evidence } from "../support/evidence.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { McpClient } from "../support/mcp-client.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
-const echoAppSource = (name: string) => `import { defineApp, query, object, string } from "apps";
-export default defineApp({ accounts: {} }, async () => ({ queries: {
+const echoAppSource = (
+  name: string,
+) => `import { defineApp, query, object, string, router } from "apps";
+export default defineApp({ accounts: {} }, async () => ({ tools: router({
   echo: query({ input: object({ text: string() }), description: "Echo text from the ${name} fixture" },
     async (_ctx, { text }) => ({ app: ${JSON.stringify(name)}, text })),
-} }));`;
+}) }));`;
 
 // Discovery of this app always fails, so `unavailableApps` shows whether an execution touched it.
 const brokenAppSource = `import { defineApp } from "apps";
@@ -63,7 +66,7 @@ layer(HostedLive, { excludeTestServices: true })("MCP execute reach", (it) => {
           Effect.gen(function* () {
             const response = yield* api.request(actors.owner, "POST", `${prefix}/apps/deploy`, {
               name: `${name} ${run}`,
-              files: [{ path: "index.ts", content }],
+              files: [{ path: "index.ts", content }, appsManifest],
             });
             expect(response.status).toBe(200);
             return yield* body(App, response);
@@ -100,7 +103,7 @@ layer(HostedLive, { excludeTestServices: true })("MCP execute reach", (it) => {
         // Static member access reaches only the named app.
         const direct = yield* execute(
           "Static member access",
-          `return await tools[${a}].queries.echo({ text: "static" });`,
+          `return await tools[${a}].echo({ text: "static" });`,
         );
         expect(direct.execution).toMatchObject(echoed("alpha", "static"));
         expect(direct.touchedBroken).toBe(false);
@@ -110,7 +113,7 @@ layer(HostedLive, { excludeTestServices: true })("MCP execute reach", (it) => {
           {
             label: "Computed member access",
             code: `const name = [${a}][0];
-return await tools[name].queries.echo({ text: "computed" });`,
+return await tools[name].echo({ text: "computed" });`,
             expected: echoed("alpha", "computed"),
           },
           {
@@ -121,20 +124,20 @@ return slugs.includes(${a}) && slugs.includes(${JSON.stringify(beta.slug)});`,
           },
           {
             label: "Pass tools to a function",
-            code: `const call = (all, text) => all[${a}].queries.echo({ text });
+            code: `const call = (all, text) => all[${a}].echo({ text });
 return await call(tools, "passed");`,
             expected: echoed("alpha", "passed"),
           },
           {
             label: "Alias tools",
             code: `const all = tools;
-return await all[${a}].queries.echo({ text: "aliased" });`,
+return await all[${a}].echo({ text: "aliased" });`,
             expected: echoed("alpha", "aliased"),
           },
           {
             label: "Destructure tools",
             code: `const { [${a}]: app } = tools;
-return await app.queries.echo({ text: "destructured" });`,
+return await app.echo({ text: "destructured" });`,
             // CodeMode rejects destructuring the namespace itself; discovery has already run.
             expected: { ok: false, error: { kind: "InvalidDataValue" } },
           },
@@ -163,13 +166,13 @@ return await app.queries.echo({ text: "destructured" });`,
         const namespaced = yield* execute(
           "Namespaced search",
           `const found = await tools.search({ namespace: ${JSON.stringify(beta.slug)}, query: "echo" });
-const called = await tools[${a}].queries.echo({ text: "static" });
+const called = await tools[${a}].echo({ text: "static" });
 return { paths: found.items.map((item) => item.path), called };`,
         );
         expect(namespaced.execution).toMatchObject({
           ok: true,
           value: {
-            paths: [`tools[${JSON.stringify(beta.slug)}].queries.echo`],
+            paths: [`tools[${JSON.stringify(beta.slug)}].echo`],
             called: { app: "alpha", text: "static" },
           },
         });

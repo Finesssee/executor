@@ -5,6 +5,9 @@ const milliseconds = Schema.Number.check(Schema.isFinite(), Schema.isGreaterThan
 export const CloudInvocation = Schema.Struct({
   scriptName: Schema.NullOr(Schema.String),
   scriptVersion: Schema.optional(Schema.Struct({ id: Schema.String })),
+  /** The exported class or entrypoint, such as a Durable Object class; absent for the default. */
+  entrypoint: Schema.optional(Schema.NullOr(Schema.String)),
+  executionModel: Schema.optional(Schema.NullOr(Schema.String)),
   eventTimestamp: Schema.NullOr(milliseconds),
   cpuTime: milliseconds,
   wallTime: milliseconds,
@@ -29,6 +32,9 @@ export const InvocationPhase = Schema.Struct({
   ]),
   durationMs: milliseconds,
 });
+
+/** A Worker or Durable Object RPC names only the called method. */
+export const InvocationRpc = Schema.Struct({ rpcMethod: Schema.String });
 
 /** HTTP is optional: scheduled and RPC invocations still contribute native timings. */
 export const InvocationHttp = Schema.Struct({

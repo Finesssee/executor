@@ -9,6 +9,7 @@ import {
   object,
   string,
   table,
+  router,
 } from "apps";
 import { Message } from "./schema.ts";
 
@@ -29,6 +30,8 @@ export const receiveMessage = mutation(
     await db.messages.insert({ subject: message.subject }),
 );
 export default defineApp(requirements, {
-  queries: { listMessages },
-  mutations: { receiveMessage },
+  tools: router({
+    listMessages,
+    receiveMessage,
+  }),
 });

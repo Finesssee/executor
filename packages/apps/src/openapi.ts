@@ -1,5 +1,5 @@
 /** OpenAPI helpers over normalized operation metadata; no optional dependency is needed. */
-import { protocolOperations, type OperationKinds } from "./implementation/protocol-operations.ts";
+import { protocolRouter, type OperationKinds } from "./implementation/protocol-operations.ts";
 import { Effect } from "effect";
 import type { OpenapiToolsOptions } from "./contracts/openapi.ts";
 import { openapiToolsEffect } from "./implementation/openapi.ts";
@@ -16,19 +16,17 @@ export {
   openapiMediaKind,
 } from "./contracts/openapi.ts";
 
-/** Discover operations for the selected account. Kinds override uncertain upstream read-only hints. */
-export const openapiOperations = (options: OpenapiToolsOptions, kinds: OperationKinds = {}) =>
+/**
+ * Discover a document's operations as a router for the selected account. Kinds override uncertain
+ * upstream read-only hints. Mount it under a key, or override its metadata with `router(...)`.
+ */
+export const openapiRouter = (options: OpenapiToolsOptions, kinds: OperationKinds = {}) =>
   Effect.runPromise(
-    openapiToolsEffect(options).pipe(
-      Effect.map((operations) => protocolOperations(operations, kinds)),
-    ),
+    openapiToolsEffect(options).pipe(Effect.map((operations) => protocolRouter(operations, kinds))),
     options.signal === undefined ? {} : { signal: options.signal },
   );
 
 export type { OperationKinds } from "./implementation/protocol-operations.ts";
 
 export * from "./contracts/openapi-compile.ts";
-export {
-  liveOpenapiOperations,
-  type OpenapiSourceOptions,
-} from "./implementation/openapi-source.ts";
+export { liveOpenapiRouter, type OpenapiSourceOptions } from "./implementation/openapi-source.ts";

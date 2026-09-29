@@ -13,7 +13,7 @@ const FiniteNonNegative = Schema.FiniteFromString.check(Schema.isGreaterThanOrEq
 
 /**
  * `EXECUTOR_TOOL_LISTING_FRESH_SECONDS` (default 30) and `EXECUTOR_TOOL_LISTING_MAX_AGE_SECONDS`
- * (default 60) set how long an evaluated tool listing is reused; a maximum age of 0 evaluates
+ * (default 86400) set how long an evaluated tool listing is reused; a maximum age of 0 evaluates
  * every listing, and a fresh period longer than the maximum age is capped at it.
  * `EXECUTOR_TOOL_LISTING_LOAD_SECONDS` (default 45) stops a listing that has run that long with no
  * request waiting for it; it is capped at the maximum age, past which a listing is never served.

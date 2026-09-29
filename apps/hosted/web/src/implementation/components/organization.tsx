@@ -1,4 +1,4 @@
-import { usePreload } from "@executor-js/dashboard-start/registry";
+import { usePreload } from "@executor-js/ui/dashboard/context";
 import { PageFrame, PageHeader } from "@executor-js/ui/dashboard/page";
 import { OrganizationSlug, OrganizationReference } from "@executor-js/hosted-server/organization";
 import { organizationTargetAtom } from "../../contracts/organization-reference.ts";

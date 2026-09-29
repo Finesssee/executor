@@ -3,6 +3,7 @@ import { DashboardEntryPending } from "@executor-js/hosted-web/entry";
 import { PagePending } from "@executor-js/hosted-web/page-pending";
 import { DashboardShell } from "@executor-js/hosted-web/shell";
 import { OrganizationBoundary, OrganizationContent } from "@executor-js/hosted-web/organization";
+import { NameAccountDialog } from "@executor-js/hosted-web/pages/name-account-dialog";
 import { Navigation } from "../navigation.tsx";
 
 /** The URL owns this tab's organization; all product pages inherit this boundary. */
@@ -18,6 +19,7 @@ function OrganizationLayout() {
       <DashboardShell allowCreateOrganization={false} navigation={<Navigation />}>
         <OrganizationContent>
           <Outlet />
+          <NameAccountDialog />
         </OrganizationContent>
       </DashboardShell>
     </OrganizationBoundary>

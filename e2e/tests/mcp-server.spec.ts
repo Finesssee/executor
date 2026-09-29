@@ -12,6 +12,7 @@ import { Evidence } from "../support/evidence.ts";
 import { McpOAuth } from "../support/mcp-oauth.ts";
 import { McpClient } from "../support/mcp-client.ts";
 import { deployMcpApp } from "../support/mcp-app.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const Completed = Schema.Struct({
   status: Schema.Literal("completed"),
@@ -97,10 +98,10 @@ layer(HostedLive, { excludeTestServices: true })("MCP server", (it) => {
           }),
         )(found.execution.value);
         expect(discovered.items.map((item) => item.path)).toContain(
-          `tools[${JSON.stringify(app.slug)}].mutations.echo`,
+          `tools[${JSON.stringify(app.slug)}].echo`,
         );
         yield* evidence.json("mcp-discovery.json", found);
-        const code = `return await tools[${JSON.stringify(app.slug)}].mutations.echo({message: "from MCP"})`;
+        const code = `return await tools[${JSON.stringify(app.slug)}].echo({message: "from MCP"})`;
         const call = yield* client.use("Invoke the deployed tool through MCP", (client, signal) =>
           client.callTool({ name: "execute", arguments: { code } }, undefined, { signal }),
         );
@@ -122,7 +123,7 @@ layer(HostedLive, { excludeTestServices: true })("MCP server", (it) => {
           policy: {
             kind: "tools",
             approval: "client",
-            apps: [{ app: app.id, tools: { kind: "selected", names: ["mutations.echo"] } }],
+            apps: [{ app: app.id, tools: { kind: "selected", names: ["echo"] } }],
           },
         });
         expect(narrow.status).toBe(200);
@@ -246,7 +247,7 @@ layer(HostedLive, { excludeTestServices: true })("MCP server", (it) => {
         const prefix = `/api/organizations/${actors.organization.id}`;
         const created = yield* api.request(actors.owner, "POST", `${prefix}/apps`, {
           name: `Undeployed ${randomUUID().slice(0, 8)}`,
-          files: [{ path: "index.ts", content: "export default {};" }],
+          files: [{ path: "index.ts", content: "export default {};" }, appsManifest],
         });
         expect(created).toMatchObject({ status: 200 });
         const undeployed = yield* body(App, created);
@@ -260,11 +261,12 @@ layer(HostedLive, { excludeTestServices: true })("MCP server", (it) => {
             {
               path: "index.ts",
               content: `
-import { defineApp, defineProvider, secrets, object, string } from "apps";
+import { defineApp, defineProvider, secrets, object, string, router } from "apps";
 const provider=defineProvider({name:"Skills account",auth:{key:secrets({label:"Key",fields:object({token:string()})})}});
-export default defineApp({ accounts: { service: provider.many() } }, async () => ({ queries: {} }));
+export default defineApp({ accounts: { service: provider.many() } }, async () => ({ tools: router({}) }));
 `,
             },
+            appsManifest,
           ],
         });
         expect(deployed).toMatchObject({ status: 200 });
@@ -331,7 +333,7 @@ export default defineApp({ accounts: { service: provider.many() } }, async () =>
         );
         expect(
           (yield* Schema.decodeUnknownEffect(skillDocument)(reference.structuredContent)).content,
-        ).toBe("Call mutations.echo with a message.");
+        ).toBe("Call echo with a message.");
         // Narrow the persisted grant through its public browser API. The open MCP session must obey it immediately.
         const grants = yield* body(
           Schema.Array(
@@ -346,7 +348,7 @@ export default defineApp({ accounts: { service: provider.many() } }, async () =>
           policy: {
             kind: "tools",
             approval: "client",
-            apps: [{ app: app.id, tools: { kind: "selected", names: ["mutations.echo"] } }],
+            apps: [{ app: app.id, tools: { kind: "selected", names: ["echo"] } }],
           },
         });
         expect(narrow.status).toBe(200);

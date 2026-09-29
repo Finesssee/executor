@@ -18,8 +18,10 @@ authentication from catalog hints.
 Generated source includes `package.json` with an npm-safe name derived from the
 import name. An explicit scoped name is preserved. Hosted import flows add the
 authenticated organization’s handle before saving these files:
-`@organization/app-name`. The manifest declares `@modelcontextprotocol/sdk`; the
-host supplies `apps` and Effect.
+`@organization/app-name`. The manifest declares the exact `apps` release this host
+ships (`packages/apps/package.json`) and `@modelcontextprotocol/sdk` at the version
+that release is built with. Every app declares `apps`; see
+[publishing apps](../../notes/apps-publishing.md#framework-selection).
 
 Discovery runs with the selected account during evaluation. Nothing here caches
 accounts or catalogs. Existing deployments keep their immutable source and builds.

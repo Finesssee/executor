@@ -6,6 +6,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { Api, body, type Session } from "./api.ts";
 import { Evidence } from "./evidence.ts";
 import { Target } from "./platform.ts";
+import { appsManifest } from "./apps-release.ts";
 
 const RunTarget = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("app") }),
@@ -152,11 +153,14 @@ export const readWriteAppFiles = (receipt: string) => [
   {
     path: "index.ts",
     content: `
-import { defineApp, mutation, object, query, string } from "apps";
+import { defineApp, mutation, object, query, string, router } from "apps";
 export default defineApp({ accounts: {} }, async () => ({
-  queries: { read: query({ description: "Read the receipt", input: object({}) }, async () => ({ read: ${JSON.stringify(receipt)} })) },
-  mutations: { write: mutation({ description: "Write a message", input: object({ message: string() }) }, async (_, input) => ({ wrote: input.message })) },
+  tools: router({
+    read: query({ description: "Read the receipt", input: object({}) }, async () => ({ read: ${JSON.stringify(receipt)} })),
+    write: mutation({ description: "Write a message", input: object({ message: string() }) }, async (_, input) => ({ wrote: input.message })),
+  }),
 }));
 `,
   },
+  appsManifest,
 ];

@@ -1,7 +1,7 @@
 /**
  * The API document, the Executor app generator and the authoring skills load on first use.
- * Concurrent reads get one identical document, and the installed Executor app is generated from it
- * with the authoring reference. The app reads the published skills at runtime.
+ * Concurrent reads get one identical document, and the installed Executor app is generated from it.
+ * The app reads the published skills at runtime; framework lookups come from the management API.
  */
 import { expect, layer } from "@effect/vitest";
 import { Effect, Schema } from "effect";
@@ -97,10 +97,19 @@ layer(HostedLive, { excludeTestServices: true })("Deferred server paths", (it) =
         expect(configuration.source.url).toBe(`${origin}/openapi.json`);
         expect(configuration.securitySchemes).toEqual(document.components.securitySchemes);
 
-        // The app carries the authoring reference and reads its skills from the published index.
-        expect(files.map((file) => file.path)).toEqual(
-          expect.arrayContaining(["framework.ts", "framework-reference.json"]),
+        // The app reads its skills from the published index; the server answers framework lookups.
+        expect(files.map((file) => file.path)).not.toContain("framework-reference.json");
+        const lookup = yield* api.request(
+          actors.owner,
+          "GET",
+          `${prefix}/framework/search?text=${encodeURIComponent("defineApp")}`,
         );
+        expect(lookup.status, JSON.stringify(lookup.body)).toBe(200);
+        expect(lookup.body).toMatchObject({
+          items: expect.arrayContaining([
+            expect.objectContaining({ symbol: expect.stringContaining("defineApp") }),
+          ]),
+        });
         expect(files.find((file) => file.path === "index.ts")?.content).toContain(
           `${origin}/.well-known/agent-skills/index.json`,
         );

@@ -6,12 +6,10 @@ import { AlertCircleIcon, InformationCircleIcon } from "@hugeicons/core-free-ico
 /** Center connection progress or failure content; callers own recovery actions and navigation. */
 export function ConnectionStatusPage({
   status,
-  label,
   message,
   children,
 }: {
   readonly status: "connecting" | "failed" | "cancelled";
-  readonly label?: string | undefined;
   readonly message: string;
   readonly children?: ReactNode;
 }) {
@@ -47,7 +45,6 @@ export function ConnectionStatusPage({
               />
             )}
           </div>
-          {label && <p className="mb-2 break-words text-[13px] text-muted-foreground">{label}</p>}
           <h1 id={titleId} className="text-[22px] font-semibold leading-tight tracking-[-0.035em]">
             {title}
           </h1>

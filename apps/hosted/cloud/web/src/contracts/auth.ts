@@ -6,12 +6,12 @@ import { dashboardAuthClientOptions } from "@executor-js/ui/contracts/http";
 import { emailOTPClient } from "better-auth/client/plugins";
 import { authRequest } from "@executor-js/hosted-web/contracts/auth";
 import { Effect } from "effect";
-import { signInCallback } from "@executor-js/hosted-web/contracts/navigation";
+import { keepFragment, signInCallback } from "@executor-js/hosted-web/contracts/navigation";
 import { startSsoSignIn } from "./sso.ts";
 
 /** Keep the submitting form mounted until the server selects the next document. */
 export const finishCloudSignIn = (redirect: string) =>
-  window.location.replace(signInCallback(redirect));
+  window.location.replace(keepFragment(signInCallback(redirect)));
 
 /** Cloud-only credentials; shared session queries use the same origin and cookie. */
 export const cloudAuthClient = createAuthClient({

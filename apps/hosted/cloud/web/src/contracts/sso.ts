@@ -1,7 +1,11 @@
 import { refreshOnFocus } from "@executor-js/ui/contracts/refresh";
 import { ssoClient } from "@better-auth/sso/client";
 import { createAuthClient } from "better-auth/client";
-import { dashboardAuthClientOptions } from "@executor-js/ui/contracts/http";
+import {
+  dashboardAuthClientOptions,
+  hydratedResult,
+  requestKey,
+} from "@executor-js/ui/contracts/http";
 import { authRequest, AuthFailed } from "@executor-js/hosted-web/contracts/auth";
 import { BrowserAtoms } from "@executor-js/hosted-web/contracts/telemetry";
 import { signInCallback } from "@executor-js/hosted-web/contracts/navigation";
@@ -37,7 +41,14 @@ export const ssoConnectionsAtom = Atom.family((organizationId: string) =>
           providers.filter((row) => row.organizationId === organizationId),
         ),
       ),
-    ).pipe(refreshOnFocus),
+    ).pipe(
+      hydratedResult({
+        key: `cloud:sso-connections:${requestKey({ organizationId })}`,
+        success: Schema.Array(SsoConnection),
+        error: AuthFailed,
+      }),
+      refreshOnFocus,
+    ),
   ),
 );
 

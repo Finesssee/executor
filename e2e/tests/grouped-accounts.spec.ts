@@ -8,11 +8,12 @@ import { HostedLive, withHostedCase } from "../support/case.ts";
 import { App, Resource } from "../support/contracts.ts";
 import { holdQuery } from "../support/query-transition.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
-const fixture = `import {defineApp,defineProvider,secrets,query,object,string} from "apps";
+const fixture = `import {defineApp,defineProvider,secrets,query,object,string, router} from "apps";
 const service=defineProvider({name:"Grouped fixture",auth:{key:secrets({label:"Key",fields:object({token:string()})})}});
 const identity=query({input:object({})},async ctx=>({account:ctx.accounts.service.id}));
-export default defineApp({accounts:{service}},async ctx=>({queries:ctx.accounts.service.fields.token==="work"?{identity,common:identity,labels:identity,threads:identity}:{identity,common:identity,drafts:identity}}));`;
+export default defineApp({accounts:{service}},async ctx=>({tools:router(ctx.accounts.service.fields.token==="work"?{identity,common:identity,labels:identity,threads:identity}:{identity,common:identity,drafts:identity})}));`;
 
 layer(HostedLive, { excludeTestServices: true })("Grouped accounts", (it) => {
   it.effect(scenarios.groupedAccounts.title, (context) =>
@@ -27,7 +28,7 @@ layer(HostedLive, { excludeTestServices: true })("Grouped accounts", (it) => {
           App,
           yield* api.request(actors.owner, "POST", `${prefix}/apps/deploy`, {
             name: `Grouped ${randomUUID().slice(0, 8)}`,
-            files: [{ path: "index.ts", content: fixture }],
+            files: [{ path: "index.ts", content: fixture }, appsManifest],
           }),
         );
         const path = `${prefix}/apps/${app.id}`;
@@ -85,7 +86,7 @@ layer(HostedLive, { excludeTestServices: true })("Grouped accounts", (it) => {
         yield* browser.use("Open the app summary", (page) =>
           page.goto(`/org/${actors.organization.slug}/apps/${app.id}?view=overview`),
         );
-        for (const name of ["queries.drafts", "queries.labels"])
+        for (const name of ["drafts", "labels"])
           yield* browser.use(`Summary includes ${name}`, (page) =>
             page
               .getByRole("region", { name: "App tools preview" })
@@ -117,7 +118,7 @@ layer(HostedLive, { excludeTestServices: true })("Grouped accounts", (it) => {
             page
               .getByRole("region", { name: "App tools preview" })
               .getByRole("link")
-              .filter({ has: page.getByText("queries.common", { exact: true }) })
+              .filter({ has: page.getByText("common", { exact: true }) })
               .count(),
           ),
         ).toBe(1);
@@ -146,11 +147,11 @@ layer(HostedLive, { excludeTestServices: true })("Grouped accounts", (it) => {
         );
         yield* Effect.gen(function* () {
           yield* browser.use("Personal has its own full catalog", (page) =>
-            page.getByRole("button", { name: "queries.drafts", exact: true }).waitFor(),
+            page.getByRole("button", { name: "drafts", exact: true }).waitFor(),
           );
           expect(
             yield* browser.use("Personal has its own full catalog", (page) =>
-              page.getByRole("button", { name: "queries.threads", exact: true }).count(),
+              page.getByRole("button", { name: "threads", exact: true }).count(),
             ),
           ).toBe(0);
           expect(
@@ -173,7 +174,7 @@ layer(HostedLive, { excludeTestServices: true })("Grouped accounts", (it) => {
         yield* held.requested;
         expect(
           yield* browser.use("Personal tools disappear during the switch", (page) =>
-            page.getByRole("button", { name: "queries.drafts", exact: true }).count(),
+            page.getByRole("button", { name: "drafts", exact: true }).count(),
           ),
         ).toBe(0);
         yield* held.release;
@@ -185,11 +186,11 @@ layer(HostedLive, { excludeTestServices: true })("Grouped accounts", (it) => {
         );
         yield* Effect.gen(function* () {
           yield* browser.use("Work has its own full catalog", (page) =>
-            page.getByRole("button", { name: "queries.threads", exact: true }).waitFor(),
+            page.getByRole("button", { name: "threads", exact: true }).waitFor(),
           );
           expect(
             yield* browser.use("Work has its own full catalog", (page) =>
-              page.getByRole("button", { name: "queries.drafts", exact: true }).count(),
+              page.getByRole("button", { name: "drafts", exact: true }).count(),
             ),
           ).toBe(0);
           expect(
@@ -208,7 +209,7 @@ layer(HostedLive, { excludeTestServices: true })("Grouped accounts", (it) => {
           yield* choose(label);
           yield* Effect.gen(function* () {
             yield* browser.use(`Run the same tool as ${label}`, (page) =>
-              page.getByRole("button", { name: "queries.identity", exact: true }).click(),
+              page.getByRole("button", { name: "identity", exact: true }).click(),
             );
             yield* browser.use(`Run the same tool as ${label}`, (page) =>
               page.getByRole("textbox", { name: "Input", exact: true }).fill("{}"),
@@ -263,7 +264,7 @@ layer(HostedLive, { excludeTestServices: true })("Grouped accounts", (it) => {
         expect(state.accounts.service).toBe(work.account);
         yield* choose("Personal");
         yield* browser.use("Personal stays usable", (page) =>
-          page.getByRole("button", { name: "queries.identity", exact: true }).waitFor(),
+          page.getByRole("button", { name: "identity", exact: true }).waitFor(),
         );
         yield* browser.use("Reload the disabled profile directly", (page) =>
           page.goto(
@@ -273,7 +274,10 @@ layer(HostedLive, { excludeTestServices: true })("Grouped accounts", (it) => {
         yield* Effect.gen(function* () {
           yield* browser.use("Disabled profile remains configurable", (page) =>
             page
-              .getByRole("button", { name: "Switch Grouped fixture account", exact: true })
+              .getByRole("radiogroup", { name: "Grouped fixture accounts", exact: true })
+              .getByRole("radio", { checked: false })
+              .and(page.locator(":enabled"))
+              .first()
               .waitFor(),
           );
           yield* browser.use("Disabled profile remains configurable", (page) =>

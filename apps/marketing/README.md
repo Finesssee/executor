@@ -31,3 +31,7 @@ The `cookie` dependency is explicit because Astro's prerender output imports
 its v2 ESM API. Resolving the older workspace cookie package breaks the build.
 GitHub stars are fetched at build time. Analytics remains disabled unless its
 public build configuration and proxy are deliberately supplied.
+
+`public/og-image.png` is rendered from `og/og-image.html` at a 1200x630
+viewport with a device scale factor of 2. Update the source and re-render it
+when the homepage story changes.

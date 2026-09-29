@@ -6,7 +6,7 @@ export { GraphqlError, type GraphqlToolsOptions } from "./contracts/graphql.ts";
 export type { GraphqlCatalogOptions } from "./implementation/graphql-catalog.ts";
 
 /** Lazy tools with optional persistent metadata caching for the selected account. */
-export const graphqlOperations = (options: GraphqlCatalogOptions, kinds: OperationKinds = {}) =>
+export const graphqlRouter = (options: GraphqlCatalogOptions, kinds: OperationKinds = {}) =>
   Effect.runPromise(
     graphqlCatalog(options, kinds),
     options.signal === undefined ? {} : { signal: options.signal },

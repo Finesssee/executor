@@ -9,6 +9,7 @@ import { Workspace } from "../support/app-authoring.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { App } from "../support/contracts.ts";
 import { publicTemplateUpstream } from "../support/template-upstream.ts";
+import { appsVersion } from "../support/apps-release.ts";
 
 const Package = Schema.fromJsonString(
   Schema.Struct({
@@ -62,7 +63,11 @@ layer(HostedLive, { excludeTestServices: true })("App package metadata", (it) =>
           if (manifest === undefined) return yield* Effect.die("Package manifest missing");
           const metadata = yield* Schema.decodeUnknownEffect(Package)(manifest.content);
           expect(metadata.name).toBe(fixture.package);
-          expect(metadata.dependencies).toEqual({ "@modelcontextprotocol/sdk": "1.30.0" });
+          // New apps pin the exact apps release the host ships, and the MCP SDK it is built with.
+          expect(metadata.dependencies).toEqual({
+            apps: appsVersion,
+            "@modelcontextprotocol/sdk": "1.30.0",
+          });
           const source = before.files.find((file) => file.path === "index.ts");
           expect(source?.content).not.toMatch(/\bname\s*:/);
 

@@ -11,6 +11,7 @@ import {
   CloudInvocation,
   InvocationHttp,
   InvocationPhase,
+  InvocationRpc,
 } from "../contracts/invocation-telemetry.ts";
 
 const phase = Schema.decodeUnknownOption(
@@ -68,6 +69,9 @@ export const invocationSummary = (input: unknown) =>
             attributes[phaseAttribute[timing.value.name]] = timing.value.durationMs;
             if (timing.value.name === "alchemy.runtime.initialize")
               attributes["executor.initialization_observed"] = true;
+            // The object was constructed in this invocation, after it was evicted or hibernated.
+            if (timing.value.name === "alchemy.do.initialize")
+              attributes["executor.do_initialization_observed"] = true;
           }
         }
       if (event.eventTimestamp !== null)
@@ -75,6 +79,12 @@ export const invocationSummary = (input: unknown) =>
       if (event.scriptName !== null) attributes["cloudflare.script_name"] = event.scriptName;
       if (event.scriptVersion !== undefined)
         attributes["cloudflare.script_version.id"] = event.scriptVersion.id;
+      if (typeof event.entrypoint === "string")
+        attributes["cloudflare.entrypoint"] = event.entrypoint;
+      if (typeof event.executionModel === "string")
+        attributes["cloudflare.execution_model"] = event.executionModel;
+      const rpc = Schema.decodeUnknownOption(InvocationRpc)(event.event);
+      if (Option.isSome(rpc)) attributes["cloudflare.rpc.method"] = rpc.value.rpcMethod;
       const http = Schema.decodeUnknownOption(InvocationHttp)(event.event);
       if (Option.isSome(http)) {
         attributes["http.request.method"] = http.value.request.method;

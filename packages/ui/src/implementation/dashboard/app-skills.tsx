@@ -13,13 +13,15 @@ import type { SkillBindings } from "../../contracts/app-browser.ts";
 import type { FailureProps } from "../../contracts/dashboard.ts";
 import { Option } from "effect";
 import { Atom, AsyncResult } from "effect/unstable/reactivity";
+import { useAtomMount } from "@effect/atom-react";
 import type { AppSourceView } from "@executor-js/app-management/contracts";
-import { QueryView, useQuery } from "./context.tsx";
+import { QueryView, usePreload, useQuery } from "./context.tsx";
 import { SkillBrowserLoading } from "./app-browser-loading.tsx";
 import { CopyButton } from "./code.tsx";
 import { EmptyStatePanel } from "./empty-state.tsx";
 import { Button } from "../components/button.tsx";
 import { SkillContent } from "./skill-content.tsx";
+import { SkillSize } from "./skill-size.tsx";
 import {
   SkillDeployment,
   SkillFileEditor,
@@ -48,6 +50,13 @@ export function AppSkills<E>({
 }) {
   // Outside the catalog query, so the status and its deploy survive the catalog reloading.
   const [committed, setCommitted] = useState<Committed>();
+  // Editable skills read the working source, then the deployed catalog. Neither depends on the
+  // other, so both start here instead of the catalog waiting for the source.
+  const catalog: Atom.Atom<AsyncResult.AsyncResult<AppSkillBundle | undefined, E>> =
+    app.activeDeployment === null ? undeployedCatalog : bindings.bundle;
+  const editable = editing !== undefined && canEdit;
+  usePreload(...(editable ? [editing.atoms.workspace(app.id), catalog] : [catalog]));
+  useAtomMount(catalog);
   return (
     <section aria-label="App skills" className="flex min-h-0 flex-1 flex-col overflow-hidden">
       {committed !== undefined && editing !== undefined && (
@@ -61,7 +70,7 @@ export function AppSkills<E>({
           Failure={Failure}
         />
       )}
-      {editing !== undefined && canEdit ? (
+      {editable ? (
         <QueryView
           query={editing.atoms.workspace(app.id)}
           Failure={Failure}
@@ -217,6 +226,10 @@ function SkillCatalog<E>({
             <span className="mt-1 hidden text-xs leading-5 text-muted-foreground min-[900px]:block">
               {skill.description}
             </span>
+            <SkillSize
+              contents={skill.files.map((item) => item.content)}
+              className="mt-1 hidden text-[11px] min-[900px]:block"
+            />
           </button>
         ))}
       </nav>
@@ -290,6 +303,7 @@ function SkillFiles<E>({
         <span aria-label="Current skill file" className="truncate text-foreground">
           {file === "SKILL.md" ? "Instructions" : file.split("/").at(-1)}
         </span>
+        <SkillSize contents={[resource.content]} className="shrink-0" />
       </div>
       <div className="ml-auto flex shrink-0 items-center gap-1">
         {actions}

@@ -3,7 +3,7 @@ import { SourceFile } from "@executor-js/sdk/core";
 import { Effect, FileSystem, Path } from "effect";
 import { TemplateError } from "../contracts/templates.ts";
 
-/** Include all topic references and generated framework documentation in the deployed source. */
+/** Authoring skill files and the framework reference the management API serves. */
 export const executorSkillFiles = (
   assets: Readonly<Record<string, string>>,
 ): readonly SourceFile[] =>
@@ -26,13 +26,11 @@ export const readExecutorSkills = Effect.gen(function* () {
         .readFileString(path.join(directory, name))
         .pipe(Effect.map((content) => [`skills/app-authoring/${name}`, content] as const)),
   );
-  const framework = yield* fs.readFileString(path.resolve(directory, "../../framework.ts"));
   const reference = yield* fs.readFileString(
     yield* path.fromFileUrl(new URL(import.meta.resolve("apps/framework-reference.json"))),
   );
   return executorSkillFiles({
     ...Object.fromEntries(files),
-    "framework.ts": framework,
     "framework-reference.json": reference,
   });
 }).pipe(

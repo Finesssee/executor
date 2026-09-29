@@ -1,25 +1,30 @@
 /** Pluggable Effect runtime. The caller resolves accounts; no database or owner policy lives here. */
 import { Context, Effect, Schema, type Stream } from "effect";
 import {
+  HostDeclarationInvalid,
   DeclaredRequirements,
+  type AccountCheckResult,
+  type HostAccountCheckError,
   type HostInspectError,
   type HostCallError,
   type HostDataError,
-  type HostedTool,
-  type HostedToolSummary,
+  type HostedCatalog,
+  type HostedCatalogSummary,
   type SkillCatalog,
   type HostContext,
   type WebhookCommand,
   type WorkflowCommand,
 } from "apps/contracts";
-import { SourceFiles, type BuildMemoryExceeded } from "./deployment.ts";
+import { DatabaseFieldReserved } from "@executor-js/app-data/contracts";
+import { BuildStage, SourceFiles, SourceLocation, type BuildMemoryExceeded } from "./deployment.ts";
 import { BuildId, Json } from "./shared.ts";
 
 /**
- * Runtimes report that an invocation replaced or removed the app's cached upstream data, such as
- * a refreshed MCP catalog or one invalidated after `notifications/tools/list_changed`, including
- * a refresh that finishes after the invocation. The SDK then stops reusing results it evaluated
- * for that app from the earlier data.
+ * Runtimes report that an invocation invalidated or explicitly refreshed the app's cached
+ * upstream data, such as an MCP catalog after `notifications/tools/list_changed`, including one
+ * that happens after the invocation. The SDK then stops reusing results it evaluated for that app
+ * from the earlier data. Routine refreshes are not reported; kept results pick them up when they
+ * refresh.
  */
 export const AppCacheChanges = Context.Reference<{
   readonly changed: (app: string) => Effect.Effect<void>;
@@ -44,12 +49,46 @@ export interface RuntimeAsset {
 /** Parsed successful build result. */
 export type BuiltApp = typeof BuiltApp.Type;
 
-/** A build failed; no build reference is returned and staging output is removed. */
+/** Longest build or protocol diagnostic retained on an error. */
+export const maxBuildMessageLength = 4096;
+/** Bounded diagnostic text about the deployer's own source, such as a compiler error. */
+export const BuildMessage = Schema.String.check(Schema.isMaxLength(maxBuildMessageLength));
+/** Truncate diagnostic text to its bound. */
+export const boundBuildMessage = (message: string) =>
+  message.length <= maxBuildMessageLength
+    ? message
+    : `${message.slice(0, maxBuildMessageLength - 1)}…`;
+/**
+ * Describe an underlying failure as `Name: message`, bounded. Executor's own wrappers of an
+ * underlying failure contribute only their message.
+ */
+export const describeBuildCause = (cause: unknown) =>
+  boundBuildMessage(
+    cause instanceof Error
+      ? cause.message.length > 0
+        ? Schema.is(RuntimeProtocolFailed)(cause) || Schema.is(HostDeclarationInvalid)(cause)
+          ? cause.message
+          : `${cause.name}: ${cause.message}`
+        : cause.name
+      : typeof cause === "string"
+        ? cause
+        : (JSON.stringify(cause) ?? String(cause)),
+  );
+
+/**
+ * A build failed; no build reference is returned and staging output is removed. `message`
+ * describes the underlying failure in the deployer's own source when it is known, with the
+ * first failing source location. It never contains credentials: builds bind no accounts.
+ */
 export class RuntimeBuildFailed extends Schema.TaggedError<RuntimeBuildFailed>()(
   "RuntimeBuildFailed",
   {
-    stage: Schema.Literals(["source", "dependencies", "compile", "declaration", "retain"]),
+    stage: BuildStage,
     dependency: Schema.optional(Schema.String),
+    /** A named declaration problem the author can fix, reported with the failed deploy. */
+    declaration: Schema.optional(DatabaseFieldReserved),
+    message: Schema.optional(BuildMessage),
+    location: Schema.optional(SourceLocation),
   },
 ) {}
 /** The retained build was absent, invalid or could not load in this host. */
@@ -57,13 +96,43 @@ export class RuntimeBuildUnavailable extends Schema.TaggedError<RuntimeBuildUnav
   "RuntimeBuildUnavailable",
   {},
 ) {}
-/** The framework handler returned an invalid protocol response. */
+/**
+ * The framework handler returned an invalid protocol response, or its Worker failed to load.
+ * `message` is the underlying runtime failure; tool callers never receive it.
+ */
 export class RuntimeProtocolFailed extends Schema.TaggedError<RuntimeProtocolFailed>()(
   "RuntimeProtocolFailed",
-  {},
+  { message: Schema.optional(BuildMessage) },
 ) {}
+/**
+ * The app's `apps` framework speaks a host protocol this host does not run. Builds fail before
+ * compiling, and retained builds fail before loading, rather than at module link or decode time.
+ */
+export class RuntimeProtocolUnsupported extends Schema.TaggedError<RuntimeProtocolUnsupported>()(
+  "RuntimeProtocolUnsupported",
+  { protocol: Schema.Int, supported: Schema.Array(Schema.Int) },
+) {
+  override get message() {
+    return `This app's apps framework uses host protocol ${this.protocol}. This host supports protocol ${this.supported.join(", ")}.`;
+  }
+}
+/**
+ * The app's `package.json` declares no `apps` version. Every app declares the exact release it uses;
+ * `version` is the one this host ships, which new apps pin.
+ */
+export class RuntimeAppsDependencyMissing extends Schema.TaggedError<RuntimeAppsDependencyMissing>()(
+  "RuntimeAppsDependencyMissing",
+  { version: Schema.NonEmptyString },
+) {
+  override get message() {
+    return `Add "apps": "${this.version}" to package.json dependencies. Every app declares the exact apps version it uses; ${this.version} is this host's.`;
+  }
+}
 /** Loading retained code and decoding the framework protocol are host failures. */
-export type RuntimeLoadError = RuntimeBuildUnavailable | RuntimeProtocolFailed;
+export type RuntimeLoadError =
+  | RuntimeBuildUnavailable
+  | RuntimeProtocolFailed
+  | RuntimeProtocolUnsupported;
 
 /** Framework-facing operations, independent of Node or Cloudflare bindings. */
 export interface Runtime<Requirements = never> {
@@ -71,9 +140,17 @@ export interface Runtime<Requirements = never> {
    * A revision identifies all writes before that event; unversioned hosts emit void.
    */
   readonly changes?: (app: string) => Stream.Stream<number | void, RuntimeLoadError>;
+  /** Sources build with the `apps` package they declare; sources without one are rejected. */
   readonly build: (input: {
     readonly files: SourceFiles;
-  }) => Effect.Effect<BuiltApp, RuntimeBuildFailed | BuildMemoryExceeded, Requirements>;
+  }) => Effect.Effect<
+    BuiltApp,
+    | RuntimeBuildFailed
+    | RuntimeProtocolUnsupported
+    | RuntimeAppsDependencyMissing
+    | BuildMemoryExceeded,
+    Requirements
+  >;
   readonly asset?: (input: {
     readonly build: BuildId;
     readonly path: string;
@@ -99,16 +176,12 @@ export interface Runtime<Requirements = never> {
       /** Describe only declared operations with schedules. Send only to scheduledTools builds. */
       readonly scheduled?: true;
     } & HostContext,
-  ) => Effect.Effect<
-    readonly HostedTool[],
-    RuntimeLoadError | typeof HostInspectError.Type,
-    Requirements
-  >;
+  ) => Effect.Effect<HostedCatalog, RuntimeLoadError | typeof HostInspectError.Type, Requirements>;
   /** List the current tools without their schemas. */
   readonly index: (
     input: { readonly app: string; readonly build: BuildId } & HostContext,
   ) => Effect.Effect<
-    readonly HostedToolSummary[],
+    HostedCatalogSummary,
     RuntimeLoadError | typeof HostInspectError.Type,
     Requirements
   >;
@@ -155,7 +228,24 @@ export interface Runtime<Requirements = never> {
       readonly build: BuildId;
       readonly database: boolean;
       readonly tool: string;
+      /** Decides the storage mode before the app runs; the host verifies it. */
+      readonly kind?: "query" | "mutation";
       readonly input: Json;
     } & HostContext,
   ) => Effect.Effect<Json, RuntimeLoadError | typeof HostCallError.Type, Requirements>;
+  /**
+   * Run one slot's provider check with the single account in `accounts`, without evaluating the
+   * app. Send only to builds whose requirements declare a check for that slot.
+   */
+  readonly checkAccount: (
+    input: {
+      readonly app: string;
+      readonly build: BuildId;
+      readonly requirement: string;
+    } & HostContext,
+  ) => Effect.Effect<
+    AccountCheckResult,
+    RuntimeLoadError | typeof HostAccountCheckError.Type,
+    Requirements
+  >;
 }

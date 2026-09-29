@@ -78,7 +78,8 @@ const succeed = (
       // decides the outcome.
       ChildProcess.make(command, args, { stdout, stderr: "inherit" }),
     );
-    if (code !== 0) yield* Effect.die(new Error(`${describe} failed (${command} exited ${code})`));
+    if (code !== 0)
+      return yield* Effect.die(new Error(`${describe} failed (${command} exited ${code})`));
   });
 
 /** The user search list, quoted one keychain per line by `security`. */
@@ -187,7 +188,7 @@ const importIdentity = (keychain: { readonly file: string; readonly password: st
           ),
         );
         if (exported !== 0)
-          yield* Effect.die(
+          return yield* Effect.die(
             new Error(`Reading the signing key failed (openssl exited ${exported})`),
           );
         const imported = yield* processes.exitCode(
@@ -209,7 +210,7 @@ const importIdentity = (keychain: { readonly file: string; readonly password: st
           ),
         );
         if (imported !== 0)
-          yield* Effect.die(
+          return yield* Effect.die(
             new Error(`Importing the identity failed (security exited ${imported})`),
           );
       }),
@@ -356,9 +357,9 @@ export const developerIdMac = (options: {
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     if (process.platform !== "darwin")
-      yield* Effect.die(new Error("Signing a macOS build requires macOS"));
+      return yield* Effect.die(new Error("Signing a macOS build requires macOS"));
     if (!(yield* fs.exists(options.entitlements)))
-      yield* Effect.die(new Error(`Missing entitlements file ${options.entitlements}`));
+      return yield* Effect.die(new Error(`Missing entitlements file ${options.entitlements}`));
     const keychain = yield* temporaryKeychain;
     const identity = yield* importIdentity(keychain);
     if (options.notarize) yield* storeNotaryCredentials(keychain);

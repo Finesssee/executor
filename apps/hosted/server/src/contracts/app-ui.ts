@@ -5,7 +5,7 @@ import { AppReturnPath, AppSignInCode, AppSignInId } from "apps/ui/auth/contract
 import { UiFailed, UiForbidden, UiUnauthorized } from "apps/ui/contracts";
 import { Context, type Effect, Schema } from "effect";
 import { HttpApi, HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi";
-import { Principal, RequireUser } from "./auth.ts";
+import { Principal } from "./auth.ts";
 import {
   OrganizationId,
   OrganizationReference,
@@ -13,7 +13,7 @@ import {
   RequireOrganization,
   type OrganizationAccess,
 } from "./organization.ts";
-export { AppSignInId } from "apps/ui/auth/contracts";
+export { AppSignInFailure, AppSignInId } from "apps/ui/auth/contracts";
 
 /** Immutable ownership plus the exact current browser origin. Slug reuse cannot transfer a session. */
 export const AppUiTarget = Schema.Struct({
@@ -109,13 +109,16 @@ export class HostedAppSessions extends Context.Service<
       { readonly request: AppSignInId; readonly proof: typeof AppSignInCode.Type },
       UiFailed
     >;
-    readonly authorize: (
+    /** The target of a live attempt, read without consuming it. */
+    readonly pending: (
       request: AppSignInId,
+    ) => Effect.Effect<AppUiTarget, UiUnauthorized | UiFailed>;
+    /** Issue a one-minute code after the caller has checked the principal's access to the target. */
+    readonly grant: (
+      request: AppSignInId,
+      target: AppUiTarget,
       principal: Principal,
-    ) => Effect.Effect<
-      { readonly target: AppUiTarget; readonly code: typeof AppSignInCode.Type },
-      UiUnauthorized | UiForbidden | UiFailed
-    >;
+    ) => Effect.Effect<typeof AppSignInCode.Type, UiFailed>;
     readonly complete: (
       target: AppUiTarget,
       request: AppSignInId,
@@ -143,25 +146,17 @@ export class HostedAppRuntime extends Context.Service<HostedAppRuntime, Pick<Run
 ) {}
 
 /** URL discovery uses organization grants; browser authorization still requires a user session. */
-export const HostedAppUi = HttpApiGroup.make("appUi")
-  .add(
-    HttpApiEndpoint.get("location", "/api/organizations/:organization/apps/:app/ui", {
-      params: { organization: OrganizationReference, app: AppId },
-      success: AppUiLocation,
-      error: [UiForbidden, UiFailed, AppUiAddressInvalid],
-    })
-      .annotate(
-        OpenApi.Description,
-        "Get the canonical private app URL. Returns null when the app has no UI or the host has no app domain. Open the returned URL in a browser to sign in; no separate publish step is needed.",
-      )
-      .middleware(RequireOrganization),
-  )
-  .add(
-    HttpApiEndpoint.post("authorize", "/api/app-ui/authorize", {
-      payload: Schema.Struct({ request: AppSignInId }),
-      success: Schema.Struct({ url: Schema.RedactedFromValue(HttpUrl) }),
-      error: [UiUnauthorized, UiForbidden, UiFailed, AppUiAddressInvalid],
-    }).middleware(RequireUser),
-  );
+export const HostedAppUi = HttpApiGroup.make("appUi").add(
+  HttpApiEndpoint.get("location", "/api/organizations/:organization/apps/:app/ui", {
+    params: { organization: OrganizationReference, app: AppId },
+    success: AppUiLocation,
+    error: [UiForbidden, UiFailed, AppUiAddressInvalid],
+  })
+    .annotate(
+      OpenApi.Description,
+      "Get the canonical private app URL. Returns null when the app has no UI or the host has no app domain. Open the returned URL in a browser to sign in; no separate publish step is needed.",
+    )
+    .middleware(RequireOrganization),
+);
 /** A browser client can consume the same narrow contract without importing a host's full API. */
 export const HostedAppUiApi = HttpApi.make("executor-hosted").add(HostedAppUi);

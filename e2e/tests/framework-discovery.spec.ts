@@ -43,7 +43,7 @@ layer(HostedLive, { excludeTestServices: true })("Framework discovery", (it) => 
         const [discovered, imported, current, found, guide] = yield* Effect.all(
           [
             execute('return await tools.search({query: "framework", limit: 20});'),
-            execute('return await tools.search({query: "context_get", limit: 1});').pipe(
+            execute('return await tools.search({query: "context.get", limit: 1});').pipe(
               Effect.flatMap(
                 Schema.decodeUnknownEffect(
                   Schema.Struct({
@@ -52,13 +52,13 @@ layer(HostedLive, { excludeTestServices: true })("Framework discovery", (it) => 
                 ),
               ),
             ),
-            execute(`return await ${queries}.context_get({});`).pipe(
+            execute(`return await ${queries}.context.get({});`).pipe(
               Effect.flatMap(
                 Schema.decodeUnknownEffect(Schema.Struct({ organization: Schema.String })),
               ),
             ),
             execute(
-              `return await ${queries}.framework_search({query: "withOptimisticUpdate"});`,
+              `return await ${queries}.framework.search({query: {text: "withOptimisticUpdate"}});`,
             ).pipe(
               Effect.flatMap(
                 Schema.decodeUnknownEffect(
@@ -86,15 +86,13 @@ layer(HostedLive, { excludeTestServices: true })("Framework discovery", (it) => 
           }),
         )(discovered);
         const search = tools.items.find(
-          (item) =>
-            item.path.endsWith(".queries.framework_search") && item.path.includes(profile.id),
+          (item) => item.path.endsWith(".framework.search") && item.path.includes(profile.id),
         );
         expect(search?.signature).toContain("remaining: number");
         expect(search?.signature).toContain("digest: string");
         expect(
           tools.items.some(
-            (item) =>
-              item.path.endsWith(".queries.framework_describe") && item.path.includes(profile.id),
+            (item) => item.path.endsWith(".framework.describe") && item.path.includes(profile.id),
           ),
         ).toBe(true);
         expect(imported.items[0]?.signature).toContain("organization: string");
@@ -105,7 +103,7 @@ layer(HostedLive, { excludeTestServices: true })("Framework discovery", (it) => 
         );
         const describe = (symbol: string) =>
           execute(
-            `return await ${queries}.framework_describe(${JSON.stringify({ symbol, ...found.reference })});`,
+            `return await ${queries}.framework.describe(${JSON.stringify({ query: { symbol, ...found.reference } })});`,
           ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(Description)));
         const [hook, update] = yield* Effect.all(
           [describe("apps/react.useAppQuery"), describe("AppMutation.withOptimisticUpdate")],
@@ -115,7 +113,7 @@ layer(HostedLive, { excludeTestServices: true })("Framework discovery", (it) => 
         // result names the closest symbols instead of failing without guidance.
         const lookup = (symbol: string) =>
           execute(
-            `return await ${queries}.framework_describe(${JSON.stringify({ symbol, ...found.reference })});`,
+            `return await ${queries}.framework.describe(${JSON.stringify({ query: { symbol, ...found.reference } })});`,
           ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(Lookup)));
         const [unqualified, unknown, partial] = yield* Effect.all(
           [lookup("defineApp"), lookup("defineApplication"), lookup("withOptimistic")],

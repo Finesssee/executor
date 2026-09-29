@@ -2,6 +2,7 @@
   "name": "@executor-js/app-registry",
   "private": true,
   "type": "module",
+  "sideEffects": false,
   "exports": {
     ".": "./src/index.ts",
     "./contracts": "./src/contracts/registry.ts",

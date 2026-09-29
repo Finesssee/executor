@@ -35,6 +35,7 @@ export const captureBrowserAnalytics = (page: Page) => {
   const requests: string[] = [];
   return page
     .route("**/api/0123456789abcdef/**", (route) =>
+      // oxlint-disable-next-line executor/no-manual-effect-runtime-in-tests -- Playwright route handlers must return a Promise
       Effect.runPromise(
         Effect.gen(function* () {
           const request = route.request();

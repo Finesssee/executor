@@ -184,13 +184,18 @@ export const bundleLocalRuntime = (root: string, stage: string) =>
       }).pipe(Effect.orDie);
     const sdk = path.join(root, "packages/sdk");
     const alchemy = yield* requiredPackage("@alchemy.run/cloudflare-runtime", sdk);
+    const codemode = yield* requiredPackage(
+      "@opencode-ai/codemode",
+      path.join(root, "packages/mcp"),
+    );
     for (const [name, owner] of [
       ["ws", sdk],
       ["workerd", alchemy],
       ["sharp", alchemy],
       ["@electric-sql/pglite", yield* requiredPackage("@effect/sql-pglite", sdk)],
       ["@napi-rs/keyring", root],
-      ["typescript", root],
+      // Codemode transpiles with its own TypeScript; the workspace compiler has no JS API.
+      ["typescript", codemode],
       ["dugite", root],
     ] as const) {
       yield* copyPackage(yield* requiredPackage(name, owner));

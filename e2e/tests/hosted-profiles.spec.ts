@@ -59,7 +59,8 @@ layer(HostedLive, { excludeTestServices: true })("Hosted profiles", (it) => {
           (yield* api.request(actors.member, "POST", `${path}/tools/call`, {
             profile: alice.id,
             deployment: "dpl_missing_opened_version",
-            tool: "queries.who",
+            tool: "who",
+            kind: "query",
             input: {},
           })).status,
         ).toBe(404);

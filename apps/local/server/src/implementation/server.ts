@@ -8,6 +8,8 @@ import { makeLocalMcpOAuth } from "./mcp-oauth.ts";
 import { localMcpConnectionHandlers } from "./mcp-connections.ts";
 import { hostedExecutorOrigin, remoteRegistry } from "@executor-js/app-registry";
 import { localAppManagement } from "./app-management.ts";
+import { runStartupDataSteps } from "@executor-js/app-management/data-steps";
+import { SqlClient } from "effect/unstable/sql";
 
 /** Local host composition. The SDK owns operations; this package owns local resources and access. */
 import {
@@ -25,7 +27,18 @@ import {
   webhookCallback,
 } from "@executor-js/sdk/core";
 import { filesystemBlobStore, workerdApps } from "@executor-js/sdk/node";
-import { Config, Effect, Layer, Path, Redacted, Result, Deferred, Schedule, Scope } from "effect";
+import {
+  Config,
+  Effect,
+  Layer,
+  Option,
+  Path,
+  Redacted,
+  Result,
+  Deferred,
+  Schedule,
+  Scope,
+} from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import { recordRequestRejections, requestTiming } from "@executor-js/telemetry/http";
 import { safeHttpClient } from "@executor-js/utils/safe-fetch";
@@ -44,9 +57,9 @@ import { localWebhookSetupHandlers } from "./webhook-setup.ts";
 import { accountConnectHandlers } from "./account-connections.ts";
 import { appUi } from "./app-ui.ts";
 import { appAuthentication, appRequest } from "./app-auth.ts";
-import { AppAuthenticationApi, appFromHost } from "../contracts/app-ui.ts";
+import { appFromHost } from "../contracts/app-ui.ts";
 import { AppUiApi } from "apps/ui/contracts";
-import { AppSignInApi, appSignInPage, appSignInScript } from "apps/ui/auth";
+import { appSignInCallbackPath } from "apps/ui/auth";
 import { DashboardApi, OAuthCallbackPath } from "../contracts/dashboard.ts";
 import { LocalAuthApi } from "../contracts/auth.ts";
 import { AccountConnectApi } from "../contracts/account-connections.ts";
@@ -69,7 +82,7 @@ export const localApi = (
       const auth = existingAuth ?? (yield* makeLocalAuth(crypto, config.directory));
       const path = yield* Path.Path;
       const directory = path.resolve(config.directory);
-      const storage = yield* openStorage(directory);
+      const { storage, sql } = yield* openStorage(directory);
       const credentialStore = yield* credentials(config.encryptionKey, crypto);
       // Node can hook connect, so every host-side fetch re-checks the addresses a name resolves
       // to. The agent lives for this layer's scope, which is the process.
@@ -88,6 +101,10 @@ export const localApi = (
         // The bundled Executor app calls this process on 127.0.0.1, and local development
         // routinely targets a service on the operator's own machine.
         allowPrivateAppFetch: true,
+        ...Option.match(yield* Config.String("EXECUTOR_NPM_REGISTRY").pipe(Config.option), {
+          onNone: () => ({}),
+          onSome: (registry) => ({ npmRegistry: registry }),
+        }),
       }).pipe(startupPhase("runtime"));
       const registry = remoteRegistry(
         yield* Config.String("EXECUTOR_REGISTRY_URL").pipe(
@@ -121,6 +138,11 @@ export const localApi = (
         },
       }).pipe(startupPhase("sdk"));
       yield* Deferred.succeed(ready, executor);
+      // Before background work, the Executor app's regeneration and serving; the data lock is held.
+      yield* runStartupDataSteps({ executor, repositories }, "private_local").pipe(
+        Effect.provideService(SqlClient.SqlClient, sql),
+        startupPhase("data-steps"),
+      );
       yield* Effect.forkScoped(
         recoverAppRepositories({ database: storage, sources, blobs }).pipe(
           Effect.catch(() => Effect.logWarning("App repository recovery failed")),
@@ -200,8 +222,15 @@ export const localApi = (
           ),
         ),
       ).pipe(Layer.provide(access.layer));
-      const ui = appUi(executor, storage, toEffectRuntime(runtime, blobs), config, auth);
       const signIn = yield* appAuthentication(executor, auth, config, crypto);
+      const ui = appUi(
+        executor,
+        storage,
+        toEffectRuntime(runtime, blobs),
+        config,
+        auth,
+        signIn.begin,
+      );
       const privateResponses = HttpRouter.middleware((response) =>
         response.pipe(
           Effect.map((response) =>
@@ -225,15 +254,13 @@ export const localApi = (
       const notFound = HttpServerResponse.empty({ status: 404 });
       // App-host routes: typed APIs plus explicit browser, asset and SPA handlers.
       const appRoutes = Layer.mergeAll(
-        HttpApiBuilder.layer(AppSignInApi).pipe(Layer.provide(signIn.app)),
         HttpApiBuilder.layer(AppUiApi).pipe(
           Layer.provide(ui.api),
           Layer.provide(ui.authenticated.layer),
         ),
         HttpRouter.add("POST", "/_executor/api/telemetry/traces", ui.telemetry("traces")),
         HttpRouter.add("POST", "/_executor/api/telemetry/logs", ui.telemetry("logs")),
-        HttpRouter.add("GET", "/_executor/auth/callback", appSignInPage()),
-        HttpRouter.add("GET", "/_executor/auth/browser.js", appSignInScript()),
+        HttpRouter.add("GET", appSignInCallbackPath, signIn.callback),
         HttpRouter.add("GET", "/_executor/version", ui.versions),
         HttpRouter.add("GET", "/_executor/watch.js", ui.watch),
         HttpRouter.add("GET", "/_executor/assets/:deployment/*", ui.asset),
@@ -251,14 +278,20 @@ export const localApi = (
       });
       const web = options.web ?? (yield* webFiles);
       // Dashboard-host routes never include the app-origin APIs.
-      const authoring = yield* localAppManagement(config, auth, managed.app, {
-        executor,
-        sources,
-        repositories,
-        registry,
-        blobs,
-      });
       const publicSkills = yield* readExecutorSkills;
+      const authoring = yield* localAppManagement(
+        config,
+        auth,
+        managed.app,
+        {
+          executor,
+          sources,
+          repositories,
+          registry,
+          blobs,
+        },
+        publicSkills,
+      );
       const productRoutes = Layer.mergeAll(
         publishedSkillRoutes(Effect.succeed(publicSkills)),
         HttpApiBuilder.layer(LocalWebhookSetupApi).pipe(
@@ -273,10 +306,6 @@ export const localApi = (
           browserTelemetry(config, "traces"),
         ),
         HttpRouter.add("POST", "/dashboard/api/telemetry/logs", browserTelemetry(config, "logs")),
-        HttpApiBuilder.layer(AppAuthenticationApi).pipe(
-          Layer.provide(signIn.dashboard),
-          Layer.provide(privateResponses.layer),
-        ),
         programmatic,
         HttpRouter.add("*", "/mcp", mcp.http),
         HttpRouter.add("*", "/api/auth/*", oauth.handler),
@@ -315,7 +344,7 @@ export const localApi = (
         HttpRouter.add("GET", "/apps", web.document),
         HttpRouter.add("GET", "/apps/add/custom", web.document),
         HttpRouter.add("GET", "/apps/:app", web.document),
-        HttpRouter.add("GET", "/app-auth", web.document),
+        HttpRouter.add("GET", "/app-auth", signIn.signIn(web.document)),
         HttpRouter.add("GET", "/apps/:app/setup", web.document),
         HttpRouter.add("GET", "/apps/:app/open", web.document),
         HttpRouter.add("GET", "/apps/:app/delete", web.document),

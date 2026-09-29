@@ -7,6 +7,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Effect, FileSystem } from "effect";
 import { createRemoteExecutor, OwnerId, ToolName } from "@executor-js/sdk";
+import apps from "apps/package.json" with { type: "json" };
 
 const acme = OwnerId.make("app-org-acme");
 const alice = OwnerId.make("app-user-alice");
@@ -26,7 +27,10 @@ export async function program() {
   const { app: published } = await executor.apps.deploy({
     owner: acme,
     name: "Vercel",
-    files: [{ path: "index.ts", content: source }],
+    files: [
+      { path: "index.ts", content: source },
+      { path: "package.json", content: JSON.stringify({ dependencies: { apps: apps.version } }) },
+    ],
   });
 
   const aliceApp = await executor.apps.copy({ from: published.id, owner: alice, name: "Vercel" });
@@ -76,13 +80,15 @@ export async function program() {
   const aliceProjects = await executor.tools.call({
     app: aliceOwnedApp.id,
     profile: aliceProfile.id,
-    tool: ToolName.make("queries.listProjects"),
+    tool: ToolName.make("listProjects"),
+    kind: "query",
     input: {},
   });
   const bobProjects = await executor.tools.call({
     app: bobOwnedApp.id,
     profile: bobProfile.id,
-    tool: ToolName.make("queries.listProjects"),
+    tool: ToolName.make("listProjects"),
+    kind: "query",
     input: {},
   });
   return { aliceAccounts, bobAccounts, aliceProjects, bobProjects };

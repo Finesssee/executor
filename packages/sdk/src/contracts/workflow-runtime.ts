@@ -7,6 +7,7 @@ import {
   type WorkflowDriver,
   type HostContext,
   type WorkflowRun,
+  type WorkflowRunFailure,
 } from "apps/contracts";
 import { AppId, BuildId, DeploymentId } from "./shared.ts";
 
@@ -71,7 +72,12 @@ export interface WorkflowHost {
     run: WorkflowRunId,
     result:
       | { readonly ok: true; readonly output: typeof WorkflowValue.Type }
-      | { readonly ok: false; readonly error: WorkflowFailure["reason"] },
+      | {
+          readonly ok: false;
+          readonly error: WorkflowFailure["reason"];
+          /** The failing step and the app's own error, when known. */
+          readonly detail?: WorkflowRunFailure;
+        },
   ) => Effect.Effect<void, WorkflowFailure>;
   readonly reconcile: Effect.Effect<void, WorkflowFailure>;
 }

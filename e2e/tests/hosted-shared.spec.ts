@@ -10,23 +10,25 @@ import { Browser } from "../support/browser.ts";
 import { Evidence } from "../support/evidence.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { App, Resource, Inventory } from "../support/contracts.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const files = [
   {
     path: "index.ts",
     content: `
-import { mutation, defineApp, defineProvider, secrets, object, string } from "apps";
+import { mutation, defineApp, defineProvider, secrets, object, string, router } from "apps";
 const service = defineProvider({ name: "Parity service", auth: {
   key: secrets({ label: "API key", fields: object({ token: string() }) })
 } });
 export default defineApp({ accounts: { service } }, async ({ accounts }) => ({
-   mutations: {
-    echo: mutation({ description: "Echo with the connected account", input: object({ message: string() })},
-      async (_, input) => ({ message: input.message, connected: accounts.service.fields.token === "synthetic-parity-token" }))
-  }
+   tools: router({
+     echo: mutation({ description: "Echo with the connected account", input: object({ message: string() })},
+      async (_, input) => ({ message: input.message, connected: accounts.service.fields.token === "synthetic-parity-token" })),
+   })
 }));
 `,
   },
+  appsManifest,
 ];
 
 layer(HostedLive, { excludeTestServices: true })("Hosted parity", (it) => {
@@ -175,8 +177,12 @@ layer(HostedLive, { excludeTestServices: true })("Hosted parity", (it) => {
                 Schema.Struct({ items: Schema.Array(Schema.Struct({ name: Schema.String })) }),
                 tools,
               )).items.map((tool) => tool.name),
-            ).toContain("mutations.echo");
-            const call = { tool: "mutations.echo", input: { message: "shared hosted scenario" } };
+            ).toContain("echo");
+            const call = {
+              tool: "echo",
+              kind: "mutation",
+              input: { message: "shared hosted scenario" },
+            };
             expect(
               (yield* api.request(
                 actors.member,
@@ -275,7 +281,7 @@ layer(HostedLive, { excludeTestServices: true })("Hosted parity", (it) => {
                 Schema.Struct({ items: Schema.Array(Schema.Struct({ name: Schema.String })) }),
                 tools,
               )).items.map((tool) => tool.name),
-            ).toContain("queries.search_cloudflare_documentation");
+            ).toContain("search_cloudflare_documentation");
           }),
         );
         yield* evidence.step(
@@ -285,7 +291,11 @@ layer(HostedLive, { excludeTestServices: true })("Hosted parity", (it) => {
               actors.admin,
               "POST",
               `${prefix}/apps/${created}/tools/call`,
-              { tool: "queries.search_cloudflare_documentation", input: { query: "Workers KV" } },
+              {
+                tool: "search_cloudflare_documentation",
+                kind: "query",
+                input: { query: "Workers KV" },
+              },
             );
             expect(invoked.status).toBe(200);
             const result = yield* Schema.decodeUnknownEffect(

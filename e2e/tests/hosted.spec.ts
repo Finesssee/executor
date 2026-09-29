@@ -10,16 +10,20 @@ import { Evidence, Telemetry } from "../support/evidence.ts";
 import { Target } from "../support/platform.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { App, Resource, Inventory } from "../support/contracts.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const files = [
   {
     path: "index.ts",
     content: `
-import { mutation, defineApp, defineProvider, secrets, object, string } from "apps";
+import { mutation, defineApp, defineProvider, secrets, object, string, router } from "apps";
 const service=defineProvider({name:"Evidence service",auth:{key:secrets({label:"API key",fields:object({token:string()})})}});
-export default defineApp({accounts:{service:service.many()}},async()=>({mutations:{echo:mutation({description:"Return input",input:object({message:string()})},async(_,input)=>({message:input.message}))}}));
+export default defineApp({accounts:{service:service.many()}},async()=>({tools: router({
+  echo:mutation({description:"Return input",input:object({message:string()})},async(_,input)=>({message:input.message})),
+})}));
 `,
   },
+  appsManifest,
 ];
 layer(HostedLive, { excludeTestServices: true })("Self-host", (it) => {
   it.effect(scenarios.password.title, (context) =>

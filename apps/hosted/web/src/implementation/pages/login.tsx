@@ -5,6 +5,7 @@ import { AsyncResult } from "effect/unstable/reactivity";
 import { useAtomRefresh, useAtomSet, useAtomValue } from "@effect/atom-react";
 import { Cause, Exit, Option } from "effect";
 import { useState, type ReactNode } from "react";
+import { LoginFrame } from "./login-frame.tsx";
 import { AuthFailed, sessionAtom, signInAtom } from "../../contracts/auth.ts";
 import { Button } from "@executor-js/ui/components/button";
 import { Spinner } from "@executor-js/ui/components/spinner";
@@ -77,35 +78,6 @@ function GitHubIcon() {
         d="M512 0C229.12 0 0 229.12 0 512c0 226.56 146.56 417.92 350.08 485.76 25.6 4.48 35.2-10.88 35.2-24.32 0-12.16-.64-52.48-.64-95.36-128.64 23.68-161.92-31.36-172.16-60.16-5.76-14.72-30.72-60.16-52.48-72.32-17.92-9.6-43.52-33.28-.64-33.92 40.32-.64 69.12 37.12 78.72 52.48 46.08 77.44 119.68 55.68 149.12 42.24 4.48-33.28 17.92-55.68 32.64-68.48-113.92-12.8-232.96-56.96-232.96-252.8 0-55.68 19.84-101.76 52.48-137.6-5.12-12.8-23.04-65.28 5.12-135.68 0 0 42.88-13.44 140.8 52.48 40.96-11.52 84.48-17.28 128-17.28s87.04 5.76 128 17.28c97.92-66.56 140.8-52.48 140.8-52.48 28.16 70.4 10.24 122.88 5.12 135.68 32.64 35.84 52.48 81.28 52.48 137.6 0 196.48-119.68 240-233.6 252.8 18.56 16 34.56 46.72 34.56 94.72 0 68.48-.64 123.52-.64 140.8 0 13.44 9.6 29.44 35.2 24.32C877.44 929.92 1024 737.92 1024 512 1024 229.12 794.88 0 512 0"
       />
     </svg>
-  );
-}
-
-/** Shared themed card for Cloud sign-in, SSO, and credential enrollment. */
-export function LoginFrame({
-  title,
-  children,
-  footer,
-}: {
-  readonly title: string;
-  readonly children: ReactNode;
-  readonly footer?: ReactNode;
-}) {
-  return (
-    <main className="auth-page flex min-h-dvh flex-col items-center justify-center bg-background px-4 py-12 text-foreground">
-      <div className="w-full max-w-110">
-        <h1 className="mb-6 text-center text-2xl font-semibold leading-8 tracking-tight">
-          {title}
-        </h1>
-        <section className="auth-form rounded-2xl border border-border bg-muted/50 p-12 max-[520px]:p-6 [&_form]:flex [&_form]:flex-col [&_form]:gap-6 [&_label]:flex [&_label]:flex-col [&_label]:gap-2 [&_label]:text-sm [&_label]:font-semibold [&_input]:h-10 [&_input]:bg-background [&_input]:text-base [&_input]:font-normal [&_input]:shadow-none [&_input]:placeholder:text-muted-foreground [&_form_>_button]:min-h-10">
-          {children}
-        </section>
-        {footer && (
-          <div className="mt-5 flex flex-col items-center gap-4 text-sm text-muted-foreground [&_.auth-legal]:mt-0">
-            {footer}
-          </div>
-        )}
-      </div>
-    </main>
   );
 }
 

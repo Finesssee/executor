@@ -3,9 +3,19 @@ import { Cause, Context, Effect, Exit, Schema, SchemaAST, Tracer } from "effect"
 import { HttpClient, HttpClientError } from "effect/unstable/http";
 import { TraceContext } from "./trace-context.ts";
 
-let pageId: string | undefined;
-/** A random document identity. It is never an authentication or user identifier. */
-export const browserPageId = () => (pageId ??= crypto.randomUUID());
+const pageIds = new WeakMap<Document, string>();
+/**
+ * A random identity for the current browser document. It is never an authentication or user
+ * identifier. Server renders have no document, so they get none instead of sharing one per isolate.
+ */
+export const browserPageId = (): string | undefined => {
+  if (typeof document === "undefined") return undefined;
+  const existing = pageIds.get(document);
+  if (existing !== undefined) return existing;
+  const created = crypto.randomUUID();
+  pageIds.set(document, created);
+  return created;
+};
 
 /** Safe event shared with the host's error reporter and product analytics. */
 export const BrowserOperationFailure = Schema.Struct({
@@ -32,7 +42,8 @@ const observe = <A, E, R>(effect: Effect.Effect<A, E, R>, name: string) =>
   Effect.gen(function* () {
     const result = yield* Effect.useSpan(name, (span) =>
       Effect.gen(function* () {
-        yield* Effect.annotateCurrentSpan("executor.page.id", browserPageId());
+        const pageId = browserPageId();
+        if (pageId !== undefined) yield* Effect.annotateCurrentSpan("executor.page.id", pageId);
         const exit = yield* Effect.exit(effect);
         if (Exit.isFailure(exit)) {
           const error = Cause.squash(exit.cause);
@@ -53,14 +64,14 @@ const observe = <A, E, R>(effect: Effect.Effect<A, E, R>, name: string) =>
             "executor.error.expected": expected,
           });
           // The browser's error reporter listens for this; the server records the span itself.
-          if (!interrupted && !expected && typeof window !== "undefined")
+          if (!interrupted && !expected && pageId !== undefined)
             window.dispatchEvent(
               new CustomEvent("executor:operation-failed", {
                 detail: {
                   error_type: kind,
                   trace_id: span.traceId,
                   span_id: span.spanId,
-                  page_id: browserPageId(),
+                  page_id: pageId,
                 },
               }),
             );

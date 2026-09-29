@@ -10,16 +10,17 @@ import { waitForAppUrl } from "../support/app-pages.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { App } from "../support/contracts.ts";
 import { holdQuery } from "../support/query-transition.ts";
+import { withApps } from "../support/apps-release.ts";
 
 const files = [
   {
     path: "schema.ts",
-    content: `import { object, string } from "apps";
+    content: `import { object, string, router } from "apps";
 export const Todo = object({ id: string(), title: string() });`,
   },
   {
     path: "index.ts",
-    content: `import { array, boolean, defineApp, defineDatabase, mutation, object, query, string, table } from "apps";
+    content: `import { array, boolean, defineApp, defineDatabase, mutation, object, query, string, table, router } from "apps";
 import { Todo } from "./schema.ts";
 const database = defineDatabase({ todos: table({ title: string() }) });
 export const list = query({ input: object({}), output: array(Todo) }, async ({ db }) =>
@@ -28,11 +29,16 @@ export const add = mutation({ input: object({ title: string() }), output: Todo }
   await db.todos.insert(input));
 export const remove = mutation({ input: object({ id: string() }), output: boolean() }, async ({ db }, { id }) =>
   await db.todos.delete(id));
-export default defineApp({ accounts: {}, database }, { queries: { list }, mutations: { add, remove } });`,
+export default defineApp({ accounts: {}, database }, { tools: router({
+   list,
+   add, remove,
+ }) });`,
   },
   {
     path: "package.json",
-    content: JSON.stringify({ dependencies: { react: "^19.2.0", "react-dom": "^19.2.0" } }),
+    content: JSON.stringify({
+      dependencies: withApps({ react: "^19.2.0", "react-dom": "^19.2.0" }),
+    }),
   },
   {
     path: "ui/index.html",

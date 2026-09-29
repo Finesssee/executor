@@ -1,4 +1,4 @@
-import { usePreload } from "@executor-js/dashboard-start/registry";
+import { usePreload } from "@executor-js/ui/dashboard/context";
 import { AppResources } from "./app-resources.tsx";
 import { AppAccounts } from "./app-accounts.tsx";
 import { ProfileResources } from "@executor-js/ui/dashboard/profile-resources";

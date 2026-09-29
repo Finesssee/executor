@@ -1,5 +1,12 @@
 /** Browser-safe public registry reads shared with server-side discovery. */
-import { Effect, Option, Schema } from "effect";
+import { Effect, Option, Schema, Stream } from "effect";
+import {
+  FetchHttpClient,
+  HttpClient,
+  HttpClientError,
+  HttpClientRequest,
+  type HttpClientResponse,
+} from "effect/unstable/http";
 import {
   Publication,
   PublicationSnapshot,
@@ -10,32 +17,32 @@ import {
 const maxResponseBytes = 32 * 1024 * 1024;
 
 /** Read a bounded response body; a stream failure is a network failure. */
-const readBody = async (response: Response) => {
-  const reader = response.body?.getReader();
-  if (reader === undefined) return new Uint8Array();
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  try {
-    for (;;) {
-      const part = await reader.read().catch(() => {
-        throw new RegistryError({ reason: "network" });
-      });
-      if (part.done) break;
-      size += part.value.length;
-      if (size > maxResponseBytes) throw new RegistryError({ reason: "limit" });
-      chunks.push(part.value);
-    }
-  } finally {
-    await reader.cancel().catch(() => undefined);
-  }
-  const bytes = new Uint8Array(size);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.length;
-  }
-  return bytes;
-};
+const readBody = (response: HttpClientResponse.HttpClientResponse) =>
+  response.stream.pipe(
+    Stream.catch((error) =>
+      error.reason instanceof HttpClientError.EmptyBodyError
+        ? Stream.empty
+        : Stream.fail(new RegistryError({ reason: "network" })),
+    ),
+    Stream.runFoldEffect(
+      () => ({ size: 0, chunks: [] as Array<Uint8Array> }),
+      (state, chunk) => {
+        const size = state.size + chunk.length;
+        if (size > maxResponseBytes) return Effect.fail(new RegistryError({ reason: "limit" }));
+        state.chunks.push(chunk);
+        return Effect.succeed({ size, chunks: state.chunks });
+      },
+    ),
+    Effect.map(({ size, chunks }) => {
+      const bytes = new Uint8Array(size);
+      let offset = 0;
+      for (const chunk of chunks) {
+        bytes.set(chunk, offset);
+        offset += chunk.length;
+      }
+      return bytes;
+    }),
+  );
 
 const parseJson = (bytes: Uint8Array): Option.Option<unknown> => {
   try {
@@ -50,26 +57,19 @@ export const remoteRegistry = (origin: string): Registry => {
   const read = <A>(operation: string, path: string, schema: Schema.Decoder<A>) => {
     const url = new URL(path, origin);
     return Effect.gen(function* () {
-      // Browsers, Node, Bun, and workerd all support "manual"; workerd rejects "error".
-      const response = yield* Effect.tryPromise({
-        try: (signal) => fetch(url, { signal, redirect: "manual" }),
-        catch: () => new RegistryError({ reason: "network" }),
-      });
+      const response = yield* HttpClient.execute(HttpClientRequest.get(url)).pipe(
+        Effect.mapError(() => new RegistryError({ reason: "network" })),
+      );
       yield* Effect.annotateCurrentSpan("http.response.status_code", response.status);
       // Browsers expose a manual redirect as an opaque response with status 0.
-      if (response.type === "opaqueredirect" || (response.status >= 300 && response.status < 400)) {
-        yield* Effect.promise(
-          () => response.body?.cancel().catch(() => undefined) ?? Promise.resolve(),
-        );
+      if (response.status === 0 || (response.status >= 300 && response.status < 400)) {
+        // Taking one chunk ends the stream early, which cancels the unread body.
+        yield* Stream.runDrain(Stream.take(response.stream, 1)).pipe(Effect.ignore);
         return yield* new RegistryError({ reason: "status", status: response.status });
       }
-      const body = yield* Effect.tryPromise({
-        try: () => readBody(response),
-        catch: (error) =>
-          Schema.is(RegistryError)(error) ? error : new RegistryError({ reason: "network" }),
-      });
+      const body = yield* readBody(response);
       const value = parseJson(body);
-      if (!response.ok) {
+      if (response.status < 200 || response.status >= 300) {
         const error = Option.flatMap(value, (json) =>
           Schema.decodeUnknownOption(Schema.toCodecJson(RegistryError))(json),
         );
@@ -82,6 +82,9 @@ export const remoteRegistry = (origin: string): Registry => {
         Effect.mapError(() => new RegistryError({ reason: "invalid-source" })),
       );
     }).pipe(
+      // Browsers, Node, Bun, and workerd all support "manual"; workerd rejects "error".
+      Effect.provideService(FetchHttpClient.RequestInit, { redirect: "manual" }),
+      Effect.provide(FetchHttpClient.layer),
       Effect.tapError((error) => Effect.annotateCurrentSpan("registry.error.reason", error.reason)),
       Effect.withSpan("registry.request", {
         attributes: {

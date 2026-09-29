@@ -6,9 +6,9 @@ import { Evidence } from "./evidence.ts";
 
 /** Control calls never touch a shared developer preview or production service. */
 export const serverControl = (
-  action: "start" | "stop" | "restart" | "kill" | "clock/advance",
+  action: "start" | "stop" | "restart" | "kill" | "clock/advance" | "data-steps",
   expectedStatus: 200 | 500 = 200,
-  body?: { readonly milliseconds: number },
+  body?: { readonly milliseconds: number } | { readonly mode: "report" | "apply" },
 ) =>
   Effect.gen(function* () {
     const target = yield* Target,

@@ -1,5 +1,5 @@
 import { DashboardApi } from "./dashboard.ts";
-import { LocalAppManagementApi } from "./app-management.ts";
+import { LocalAppManagementApi, LocalFrameworkApi } from "./app-management.ts";
 /** The local agent-facing API, projected from the contracts that serve its requests. */
 import { ExecutorApi } from "@executor-js/sdk/core";
 import { HttpApi, HttpApiGroup, OpenApi } from "effect/unstable/httpapi";
@@ -36,7 +36,8 @@ const api = HttpApi.make("local-management")
     ),
   )
   .add(LocalWebhookSetupApi.groups.webhookLinks)
-  .addHttpApi(LocalAppManagementApi);
+  .addHttpApi(LocalAppManagementApi)
+  .addHttpApi(LocalFrameworkApi);
 
 /** Browser secret exchange, raw delivery, subscriptions and approval protocols are not management tools. */
 export const localManagementDocument = (): OpenApi.OpenAPISpec => {

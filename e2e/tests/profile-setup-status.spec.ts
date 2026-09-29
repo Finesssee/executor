@@ -9,6 +9,7 @@ import { HostedLive, withHostedCase } from "../support/case.ts";
 import { App, Resource } from "../support/contracts.ts";
 import { webhookRegistrationFixture } from "../support/webhook-registration.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 layer(HostedLive, { excludeTestServices: true })("Account setup status", (it) => {
   it.effect(scenarios.profileSetupStatus.title, (context) =>
     withHostedCase(
@@ -24,11 +25,14 @@ layer(HostedLive, { excludeTestServices: true })("Account setup status", (it) =>
           files: [
             {
               path: "index.ts",
-              content: `import {defineApp,defineProvider,secrets,query,object,string} from "apps";
+              content: `import {defineApp,defineProvider,secrets,query,object,string, router} from "apps";
 const service=defineProvider({name:"Setup fixture",auth:{key:secrets({label:"Key",fields:object({token:string()})})}});
 const incoming={account:"service",config:object({}),state:object({}),register:async ctx=>{const response=await ctx.fetch(${JSON.stringify(provider.url)},{method:"POST"});if(!response.ok)throw new Error("Registration failed");return {};},unregister:async()=>{},handle:async()=>new Response(null,{status:204})};
-export default defineApp({accounts:{service}},{queries:{ready:query({input:object({})},async ctx=>ctx.accounts.service.id)},webhooks:{incoming}});`,
+export default defineApp({accounts:{service}},{tools: router({
+  ready:query({input:object({})},async ctx=>ctx.accounts.service.id),
+}),webhooks:{incoming}});`,
             },
+            appsManifest,
           ],
         });
         expect(deployed.status, JSON.stringify(deployed.body)).toBe(200);
@@ -99,7 +103,7 @@ export default defineApp({accounts:{service}},{queries:{ready:query({input:objec
         );
         yield* provider.requested.pipe(Effect.timeout("10 seconds"));
         yield* browser.use("Tools remain usable during setup", (page) =>
-          page.getByRole("button", { name: "queries.ready", exact: true }).waitFor(),
+          page.getByRole("button", { name: "ready", exact: true }).waitFor(),
         );
         const pending = yield* body(
           Schema.Struct({ status: Schema.String }),

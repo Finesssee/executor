@@ -22,6 +22,7 @@ import { authorizeBrowserMcp } from "../support/mcp-oauth.ts";
 import { chromium } from "playwright";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { appsManifest, withApps } from "../support/apps-release.ts";
 
 for (const mode of ["explicit", "local", "railway"] as const)
   it.live(`released image keeps login and encrypted credentials across restart (${mode})`, () =>
@@ -234,23 +235,23 @@ for (const mode of ["explicit", "local", "railway"] as const)
             files: [
               {
                 path: "index.ts",
-                content: `import { defineApp, defineDatabase, table, defineProvider, secrets, string, query, mutation, workflow, object } from "apps";
+                content: `import { defineApp, defineDatabase, table, defineProvider, secrets, string, query, mutation, workflow, object, router } from "apps";
 import isNumber from "is-number";
 const service = defineProvider({ name: "Release test", auth: { key: secrets({ label: "API key", fields: object({ token: string() }) }) } });
 const database = defineDatabase({ messages: table({ body: string() }) });
 export default defineApp({ accounts: { service }, database }, async ({ accounts }) => ({
-  queries: {
+  tools: router({
     check: query({ input: object({}) }, async () => isNumber("2") && accounts.service.fields.token === "synthetic-release-token"),
-    messages: query({ input: object({}) }, async ({ db }) => (await db.messages.withIndex("by_creation").collect()).map(row => row.body))
-  },
-  mutations: { save: mutation({ input: object({ body: string() }) }, async ({ db }, input) => { await db.messages.insert(input); return input.body; }) },
+    messages: query({ input: object({}) }, async ({ db }) => (await db.messages.withIndex("by_creation").collect()).map(row => row.body)),
+    save: mutation({ input: object({ body: string() }) }, async ({ db }, input) => { await db.messages.insert(input); return input.body; }),
+  }),
   workflows: { check: workflow({ input: object({}) }, async (ctx) =>
     ctx.step.do("credential", async (step) => step.accounts.service.fields.token === "synthetic-release-token")) }
 }));`,
               },
               {
                 path: "package.json",
-                content: JSON.stringify({ dependencies: { "is-number": "7.0.0" } }),
+                content: JSON.stringify({ dependencies: withApps({ "is-number": "7.0.0" }) }),
               },
               {
                 path: "ui/index.html",
@@ -334,7 +335,12 @@ export default defineApp({ accounts: { service }, database }, async ({ accounts 
             : undefined;
         const saved = yield* request(
           `${prefix}/apps/${app.id}/tools/call`,
-          { profile: profile.id, tool: "mutations.save", input: { body: "Retained app data" } },
+          {
+            profile: profile.id,
+            tool: "save",
+            kind: "mutation",
+            input: { body: "Retained app data" },
+          },
           cookie,
         );
         expect(saved.status, yield* driver("save app data", () => saved.clone().text())).toBe(200);
@@ -711,7 +717,7 @@ http.createServer((request, response) => {
 
           const called = yield* request(
             `${prefix}/apps/${app.id}/tools/call`,
-            { profile: profile.id, tool: "queries.check", input: {} },
+            { profile: profile.id, tool: "check", kind: "query", input: {} },
             cookie,
           );
           expect(called.status).toBe(200);
@@ -772,7 +778,7 @@ http.createServer((request, response) => {
                       {
                         name: "execute",
                         arguments: {
-                          code: `return await tools[${JSON.stringify(app.slug)}].profiles[${JSON.stringify(profile.id)}].queries.check({})`,
+                          code: `return await tools[${JSON.stringify(app.slug)}].profiles[${JSON.stringify(profile.id)}].check({})`,
                         },
                       },
                       undefined,
@@ -791,7 +797,7 @@ http.createServer((request, response) => {
           }
           const messages = yield* request(
             `${prefix}/apps/${app.id}/tools/call`,
-            { profile: profile.id, tool: "queries.messages", input: {} },
+            { profile: profile.id, tool: "messages", kind: "query", input: {} },
             cookie,
           );
           expect(messages.status).toBe(200);
@@ -1053,16 +1059,17 @@ it.live("released image serves management tools at a tailnet origin with private
           files: [
             {
               path: "index.ts",
-              content: `import { defineApp, query, object, string } from "apps";
+              content: `import { defineApp, query, object, string, router } from "apps";
 export default defineApp({ accounts: {} }, async () => ({
-  queries: {
+  tools: router({
     probe: query({ input: object({ url: string() }) }, async (_ctx, input) => {
       try { return "reached:" + (await fetch(input.url)).status; }
       catch (error) { return "refused:" + (error instanceof Error ? error.message : String(error)); }
-    })
-  }
+    }),
+  })
 }));`,
             },
+            appsManifest,
           ],
         },
         cookie,
@@ -1148,7 +1155,7 @@ export default defineApp({ accounts: {} }, async () => ({
         );
       const source = yield* execute(
         "read app source through the built-in Executor app",
-        `return await tools.executor.profiles[${JSON.stringify(executorProfile.id)}].queries.appManagement_source(${JSON.stringify({ path: { organization: organization.id, app: app.id } })})`,
+        `return await tools.executor.profiles[${JSON.stringify(executorProfile.id)}].appManagement.source(${JSON.stringify({ path: { organization: organization.id, app: app.id } })})`,
       );
       expect(
         source,
@@ -1160,7 +1167,7 @@ export default defineApp({ accounts: {} }, async () => ({
       const probe = (url: string) =>
         execute(
           `authored app fetches ${url}`,
-          `return await tools[${JSON.stringify(app.slug)}].profiles[${JSON.stringify(probeProfile.id)}].queries.probe(${JSON.stringify({ url })})`,
+          `return await tools[${JSON.stringify(app.slug)}].profiles[${JSON.stringify(probeProfile.id)}].probe(${JSON.stringify({ url })})`,
         );
       // The same listener on its private address is not the dashboard origin.
       const refused = yield* probe(`http://${address}:${containerPort}/health`);
@@ -1321,19 +1328,20 @@ it.live(
                   files: [
                     {
                       path: "index.ts",
-                      content: `import { defineApp, query, object } from "apps";
+                      content: `import { defineApp, query, object, router } from "apps";
 let isolate;
 let calls = 0;
 export default defineApp({ accounts: {} }, async () => ({
-  queries: {
+  tools: router({
     probe: query({ input: object({}) }, async () => {
       isolate ??= crypto.randomUUID();
       calls++;
       return { isolate, calls };
     }),
-  },
+  }),
 }));`,
                     },
+                    appsManifest,
                   ],
                 },
                 cookie,
@@ -1370,7 +1378,7 @@ export default defineApp({ accounts: {} }, async () => ({
               probes.push(
                 request(
                   `${prefix}/apps/${app.id}/tools/call`,
-                  { profile: profile.id, tool: "queries.probe", input: {} },
+                  { profile: profile.id, tool: "probe", input: {} },
                   cookie,
                 ).pipe(
                   Effect.tap((response) =>
@@ -1538,7 +1546,7 @@ const workflowServer = (source: string) =>
     const prefix = `/api/organizations/${organization.id}`;
     const app = yield* json(Schema.Struct({ id: Schema.String }), `${prefix}/apps/deploy`, {
       name: "Workflow engines",
-      files: [{ path: "index.ts", content: source }],
+      files: [{ path: "index.ts", content: source }, appsManifest],
     });
     const runs = `${prefix}/apps/${app.id}/workflow-runs`;
     // A loaded engine maps its database's shared-memory index into the workerd process; the

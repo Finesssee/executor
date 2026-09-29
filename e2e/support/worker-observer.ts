@@ -42,13 +42,13 @@ export const observerApp = (options: {
   readonly name: string;
   readonly database: boolean;
   readonly resource: string | null;
-}) => `import { defineApp, defineDatabase, defineProvider, secrets, table, object, string, query, workflow } from "apps";
+}) => `import { defineApp, defineDatabase, defineProvider, secrets, table, object, string, query, workflow, router } from "apps";
 const service = defineProvider({ name: ${JSON.stringify(options.name)}, auth: {
   key: secrets({ label: "Key", fields: object({ token: string() }) })
 } });
 ${observer(options.resource)}
 export default defineApp({ accounts: { service }${options.database ? ", database: defineDatabase({ marks: table({ label: string() }) })" : ""} }, {
-  queries: { probe: query({ input: object({}) }, async (ctx) => observe(ctx.accounts.service.fields.token)) },
+  tools: router({ probe: query({ input: object({}) }, async (ctx) => observe(ctx.accounts.service.fields.token)) }),
   workflows: { probe: workflow({ input: object({}) }, async (ctx) => ({
     ...(await ctx.step.do("probe", async (step) => observe(step.accounts.service.fields.token))),
     run: ctx.runId,

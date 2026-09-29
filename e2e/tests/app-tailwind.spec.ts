@@ -10,20 +10,23 @@ import { openPrivateApp, waitForAppUrl } from "../support/app-pages.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { App } from "../support/contracts.ts";
 import { saveAndDeploy } from "../support/app-authoring.ts";
+import { withApps } from "../support/apps-release.ts";
 
 const Deployed = Schema.Struct({ ...App.fields, activeDeployment: Schema.String });
 
 const files = [
   {
     path: "index.ts",
-    content: `import { defineApp, query, object } from "apps";
+    content: `import { defineApp, query, object, router } from "apps";
 export default defineApp({ accounts: {} }, {
-  queries: { serverOnly: query({ input: object({}) }, async () => "z-[987654]") }
+  tools: router({
+    serverOnly: query({ input: object({}) }, async () => "z-[987654]"),
+  })
 });`,
   },
   {
     path: "package.json",
-    content: JSON.stringify({ dependencies: { react: "19.2.0", "react-dom": "19.2.0" } }),
+    content: JSON.stringify({ dependencies: withApps({ react: "19.2.0", "react-dom": "19.2.0" }) }),
   },
   {
     path: "ui/index.html",

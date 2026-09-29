@@ -21,14 +21,12 @@ import { Route as DashboardApprovalsIndexRouteImport } from './routes/_dashboard
 import { Route as DashboardApprovalsRunIdRouteImport } from './routes/_dashboard.approvals.$runId'
 import { Route as McpApproveRequestIdRouteImport } from './routes/mcp.approve.$requestId'
 import { Route as DashboardInventoryAccountsIndexRouteImport } from './routes/_dashboard._inventory.accounts.index'
-import { Route as DashboardInventoryAccountsAccountIdRouteImport } from './routes/_dashboard._inventory.accounts.$accountId'
 import { Route as DashboardInventoryAccountsAddRouteImport } from './routes/_dashboard._inventory.accounts.add'
 import { Route as DashboardInventoryAppsIndexRouteImport } from './routes/_dashboard._inventory.apps.index'
 import { Route as DashboardInventoryAppsAppIdRouteImport } from './routes/_dashboard._inventory.apps.$appId'
 import { Route as DashboardInventoryAppsAddRouteImport } from './routes/_dashboard._inventory.apps.add'
 import { Route as DashboardWebhooksAppIdSubscriptionIdRouteImport } from './routes/_dashboard.webhooks.$appId.$subscriptionId'
 import { Route as DashboardInventoryAccountsAccountIdCredentialsRouteImport } from './routes/_dashboard._inventory.accounts.$accountId_.credentials'
-import { Route as DashboardInventoryAccountsAccountIdDisconnectRouteImport } from './routes/_dashboard._inventory.accounts.$accountId_.disconnect'
 import { Route as DashboardInventoryApiOauthCallbackRouteImport } from './routes/_dashboard._inventory.api.oauth.callback'
 import { Route as DashboardInventoryAppsAppIdDeleteRouteImport } from './routes/_dashboard._inventory.apps.$appId_.delete'
 import { Route as DashboardInventoryAppsAppIdOpenRouteImport } from './routes/_dashboard._inventory.apps.$appId_.open'
@@ -95,12 +93,6 @@ const DashboardInventoryAccountsIndexRoute =
     path: '/accounts/',
     getParentRoute: () => DashboardInventoryRoute,
   } as any)
-const DashboardInventoryAccountsAccountIdRoute =
-  DashboardInventoryAccountsAccountIdRouteImport.update({
-    id: '/accounts/$accountId',
-    path: '/accounts/$accountId',
-    getParentRoute: () => DashboardInventoryRoute,
-  } as any)
 const DashboardInventoryAccountsAddRoute =
   DashboardInventoryAccountsAddRouteImport.update({
     id: '/accounts/add',
@@ -135,12 +127,6 @@ const DashboardInventoryAccountsAccountIdCredentialsRoute =
   DashboardInventoryAccountsAccountIdCredentialsRouteImport.update({
     id: '/accounts/$accountId_/credentials',
     path: '/accounts/$accountId/credentials',
-    getParentRoute: () => DashboardInventoryRoute,
-  } as any)
-const DashboardInventoryAccountsAccountIdDisconnectRoute =
-  DashboardInventoryAccountsAccountIdDisconnectRouteImport.update({
-    id: '/accounts/$accountId_/disconnect',
-    path: '/accounts/$accountId/disconnect',
     getParentRoute: () => DashboardInventoryRoute,
   } as any)
 const DashboardInventoryApiOauthCallbackRoute =
@@ -184,7 +170,6 @@ export interface FileRoutesByFullPath {
   '/approvals/$runId': typeof DashboardApprovalsRunIdRoute
   '/mcp/approve/$requestId': typeof McpApproveRequestIdRoute
   '/approvals/': typeof DashboardApprovalsIndexRoute
-  '/accounts/$accountId': typeof DashboardInventoryAccountsAccountIdRoute
   '/accounts/add': typeof DashboardInventoryAccountsAddRoute
   '/apps/$appId': typeof DashboardInventoryAppsAppIdRoute
   '/apps/add': typeof DashboardInventoryAppsAddRoute
@@ -192,7 +177,6 @@ export interface FileRoutesByFullPath {
   '/accounts/': typeof DashboardInventoryAccountsIndexRoute
   '/apps/': typeof DashboardInventoryAppsIndexRoute
   '/accounts/$accountId/credentials': typeof DashboardInventoryAccountsAccountIdCredentialsRoute
-  '/accounts/$accountId/disconnect': typeof DashboardInventoryAccountsAccountIdDisconnectRoute
   '/api/oauth/callback': typeof DashboardInventoryApiOauthCallbackRoute
   '/apps/$appId/delete': typeof DashboardInventoryAppsAppIdDeleteRoute
   '/apps/$appId/open': typeof DashboardInventoryAppsAppIdOpenRoute
@@ -209,7 +193,6 @@ export interface FileRoutesByTo {
   '/approvals/$runId': typeof DashboardApprovalsRunIdRoute
   '/mcp/approve/$requestId': typeof McpApproveRequestIdRoute
   '/approvals': typeof DashboardApprovalsIndexRoute
-  '/accounts/$accountId': typeof DashboardInventoryAccountsAccountIdRoute
   '/accounts/add': typeof DashboardInventoryAccountsAddRoute
   '/apps/$appId': typeof DashboardInventoryAppsAppIdRoute
   '/apps/add': typeof DashboardInventoryAppsAddRoute
@@ -217,7 +200,6 @@ export interface FileRoutesByTo {
   '/accounts': typeof DashboardInventoryAccountsIndexRoute
   '/apps': typeof DashboardInventoryAppsIndexRoute
   '/accounts/$accountId/credentials': typeof DashboardInventoryAccountsAccountIdCredentialsRoute
-  '/accounts/$accountId/disconnect': typeof DashboardInventoryAccountsAccountIdDisconnectRoute
   '/api/oauth/callback': typeof DashboardInventoryApiOauthCallbackRoute
   '/apps/$appId/delete': typeof DashboardInventoryAppsAppIdDeleteRoute
   '/apps/$appId/open': typeof DashboardInventoryAppsAppIdOpenRoute
@@ -237,7 +219,6 @@ export interface FileRoutesById {
   '/mcp/approve/$requestId': typeof McpApproveRequestIdRoute
   '/_dashboard/_inventory/': typeof DashboardInventoryIndexRoute
   '/_dashboard/approvals/': typeof DashboardApprovalsIndexRoute
-  '/_dashboard/_inventory/accounts/$accountId': typeof DashboardInventoryAccountsAccountIdRoute
   '/_dashboard/_inventory/accounts/add': typeof DashboardInventoryAccountsAddRoute
   '/_dashboard/_inventory/apps/$appId': typeof DashboardInventoryAppsAppIdRoute
   '/_dashboard/_inventory/apps/add': typeof DashboardInventoryAppsAddRoute
@@ -245,7 +226,6 @@ export interface FileRoutesById {
   '/_dashboard/_inventory/accounts/': typeof DashboardInventoryAccountsIndexRoute
   '/_dashboard/_inventory/apps/': typeof DashboardInventoryAppsIndexRoute
   '/_dashboard/_inventory/accounts/$accountId_/credentials': typeof DashboardInventoryAccountsAccountIdCredentialsRoute
-  '/_dashboard/_inventory/accounts/$accountId_/disconnect': typeof DashboardInventoryAccountsAccountIdDisconnectRoute
   '/_dashboard/_inventory/api/oauth/callback': typeof DashboardInventoryApiOauthCallbackRoute
   '/_dashboard/_inventory/apps/$appId_/delete': typeof DashboardInventoryAppsAppIdDeleteRoute
   '/_dashboard/_inventory/apps/$appId_/open': typeof DashboardInventoryAppsAppIdOpenRoute
@@ -264,7 +244,6 @@ export interface FileRouteTypes {
     | '/approvals/$runId'
     | '/mcp/approve/$requestId'
     | '/approvals/'
-    | '/accounts/$accountId'
     | '/accounts/add'
     | '/apps/$appId'
     | '/apps/add'
@@ -272,7 +251,6 @@ export interface FileRouteTypes {
     | '/accounts/'
     | '/apps/'
     | '/accounts/$accountId/credentials'
-    | '/accounts/$accountId/disconnect'
     | '/api/oauth/callback'
     | '/apps/$appId/delete'
     | '/apps/$appId/open'
@@ -289,7 +267,6 @@ export interface FileRouteTypes {
     | '/approvals/$runId'
     | '/mcp/approve/$requestId'
     | '/approvals'
-    | '/accounts/$accountId'
     | '/accounts/add'
     | '/apps/$appId'
     | '/apps/add'
@@ -297,7 +274,6 @@ export interface FileRouteTypes {
     | '/accounts'
     | '/apps'
     | '/accounts/$accountId/credentials'
-    | '/accounts/$accountId/disconnect'
     | '/api/oauth/callback'
     | '/apps/$appId/delete'
     | '/apps/$appId/open'
@@ -316,7 +292,6 @@ export interface FileRouteTypes {
     | '/mcp/approve/$requestId'
     | '/_dashboard/_inventory/'
     | '/_dashboard/approvals/'
-    | '/_dashboard/_inventory/accounts/$accountId'
     | '/_dashboard/_inventory/accounts/add'
     | '/_dashboard/_inventory/apps/$appId'
     | '/_dashboard/_inventory/apps/add'
@@ -324,7 +299,6 @@ export interface FileRouteTypes {
     | '/_dashboard/_inventory/accounts/'
     | '/_dashboard/_inventory/apps/'
     | '/_dashboard/_inventory/accounts/$accountId_/credentials'
-    | '/_dashboard/_inventory/accounts/$accountId_/disconnect'
     | '/_dashboard/_inventory/api/oauth/callback'
     | '/_dashboard/_inventory/apps/$appId_/delete'
     | '/_dashboard/_inventory/apps/$appId_/open'
@@ -426,13 +400,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DashboardInventoryAccountsIndexRouteImport
       parentRoute: typeof DashboardInventoryRoute
     }
-    '/_dashboard/_inventory/accounts/$accountId': {
-      id: '/_dashboard/_inventory/accounts/$accountId'
-      path: '/accounts/$accountId'
-      fullPath: '/accounts/$accountId'
-      preLoaderRoute: typeof DashboardInventoryAccountsAccountIdRouteImport
-      parentRoute: typeof DashboardInventoryRoute
-    }
     '/_dashboard/_inventory/accounts/add': {
       id: '/_dashboard/_inventory/accounts/add'
       path: '/accounts/add'
@@ -473,13 +440,6 @@ declare module '@tanstack/react-router' {
       path: '/accounts/$accountId/credentials'
       fullPath: '/accounts/$accountId/credentials'
       preLoaderRoute: typeof DashboardInventoryAccountsAccountIdCredentialsRouteImport
-      parentRoute: typeof DashboardInventoryRoute
-    }
-    '/_dashboard/_inventory/accounts/$accountId_/disconnect': {
-      id: '/_dashboard/_inventory/accounts/$accountId_/disconnect'
-      path: '/accounts/$accountId/disconnect'
-      fullPath: '/accounts/$accountId/disconnect'
-      preLoaderRoute: typeof DashboardInventoryAccountsAccountIdDisconnectRouteImport
       parentRoute: typeof DashboardInventoryRoute
     }
     '/_dashboard/_inventory/api/oauth/callback': {
@@ -523,14 +483,12 @@ declare module '@tanstack/react-router' {
 interface DashboardInventoryRouteChildren {
   DashboardInventorySplatRoute: typeof DashboardInventorySplatRoute
   DashboardInventoryIndexRoute: typeof DashboardInventoryIndexRoute
-  DashboardInventoryAccountsAccountIdRoute: typeof DashboardInventoryAccountsAccountIdRoute
   DashboardInventoryAccountsAddRoute: typeof DashboardInventoryAccountsAddRoute
   DashboardInventoryAppsAppIdRoute: typeof DashboardInventoryAppsAppIdRoute
   DashboardInventoryAppsAddRoute: typeof DashboardInventoryAppsAddRoute
   DashboardInventoryAccountsIndexRoute: typeof DashboardInventoryAccountsIndexRoute
   DashboardInventoryAppsIndexRoute: typeof DashboardInventoryAppsIndexRoute
   DashboardInventoryAccountsAccountIdCredentialsRoute: typeof DashboardInventoryAccountsAccountIdCredentialsRoute
-  DashboardInventoryAccountsAccountIdDisconnectRoute: typeof DashboardInventoryAccountsAccountIdDisconnectRoute
   DashboardInventoryApiOauthCallbackRoute: typeof DashboardInventoryApiOauthCallbackRoute
   DashboardInventoryAppsAppIdDeleteRoute: typeof DashboardInventoryAppsAppIdDeleteRoute
   DashboardInventoryAppsAppIdOpenRoute: typeof DashboardInventoryAppsAppIdOpenRoute
@@ -541,8 +499,6 @@ interface DashboardInventoryRouteChildren {
 const DashboardInventoryRouteChildren: DashboardInventoryRouteChildren = {
   DashboardInventorySplatRoute: DashboardInventorySplatRoute,
   DashboardInventoryIndexRoute: DashboardInventoryIndexRoute,
-  DashboardInventoryAccountsAccountIdRoute:
-    DashboardInventoryAccountsAccountIdRoute,
   DashboardInventoryAccountsAddRoute: DashboardInventoryAccountsAddRoute,
   DashboardInventoryAppsAppIdRoute: DashboardInventoryAppsAppIdRoute,
   DashboardInventoryAppsAddRoute: DashboardInventoryAppsAddRoute,
@@ -550,8 +506,6 @@ const DashboardInventoryRouteChildren: DashboardInventoryRouteChildren = {
   DashboardInventoryAppsIndexRoute: DashboardInventoryAppsIndexRoute,
   DashboardInventoryAccountsAccountIdCredentialsRoute:
     DashboardInventoryAccountsAccountIdCredentialsRoute,
-  DashboardInventoryAccountsAccountIdDisconnectRoute:
-    DashboardInventoryAccountsAccountIdDisconnectRoute,
   DashboardInventoryApiOauthCallbackRoute:
     DashboardInventoryApiOauthCallbackRoute,
   DashboardInventoryAppsAppIdDeleteRoute:

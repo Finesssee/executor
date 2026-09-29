@@ -110,6 +110,19 @@ const ownProfileAs = (
     if (selected.subject !== actor.user) return yield* new OrganizationForbidden();
     return selected;
   });
+/** The caller's own profile and every account it selects, reading the caller's membership once. */
+export const selectedProfile = (
+  executor: Executor,
+  owner: OwnerId,
+  app: AppId,
+  profile: ProfileId,
+) =>
+  Effect.gen(function* () {
+    const actor = yield* currentResourceAuthority;
+    const selected = yield* ownProfileAs(actor, executor, owner, app, profile);
+    yield* checkAccountsAs(actor, executor, owner, selected.accounts);
+    return selected;
+  });
 /** App-only resources require app management; profile resources require their subject. */
 export const executionManagerOwner = (executor: Executor, app: AppId, profile?: ProfileId) =>
   Effect.gen(function* () {

@@ -1,6 +1,6 @@
 import { expect, layer } from "@effect/vitest";
 import { randomBytes } from "node:crypto";
-import { Effect, Result, Schedule } from "effect";
+import { Effect, Result, Schedule, Schema } from "effect";
 import { Actors, freshOwnerSession } from "../support/actors.ts";
 import { Browser } from "../support/browser.ts";
 import { Telemetry } from "../support/evidence.ts";
@@ -46,7 +46,7 @@ layer(HostedLive, { excludeTestServices: true })("Server-rendered dashboard", (i
           page.on("request", (request) => {
             const path = new URL(request.url()).pathname;
             // Server-rendered reads reach the browser with the page instead of being repeated.
-            if (/^\/api\/organizations\/[^/]+\/(inventory|access)$/.test(path))
+            if (/^\/api\/organizations\/[^/]+\/(inventory|access|resources)$/.test(path))
               repeatedReads.push(path);
           });
           return Promise.resolve();
@@ -118,6 +118,36 @@ layer(HostedLive, { excludeTestServices: true })("Server-rendered dashboard", (i
         expect(failures).toEqual([]);
         expect(repeatedReads).toEqual([]);
         yield* browser.checkpoint("Server-rendered apps page after hydration");
+
+        // `/` resumes the organization this browser last used at its current address, so the page
+        // never replaces its own URL while its data is still arriving.
+        const signedIn = yield* browser.use("Read the signed-in identity", (page) =>
+          page
+            .context()
+            .request.get("/api/auth/get-session")
+            .then((value) => value.json()),
+        );
+        const identity = yield* Schema.decodeUnknownEffect(
+          Schema.Struct({ user: Schema.Struct({ id: Schema.String }) }),
+        )(signedIn);
+        yield* browser.use("Remember this organization by its ID", (page) => {
+          const origin = new URL(page.url());
+          return page.context().addCookies([
+            {
+              name: `executor-org${origin.port === "" ? "" : `-${origin.port}`}`,
+              value: encodeURIComponent(
+                JSON.stringify({ user: identity.user.id, organization: actors.organization.id }),
+              ),
+              url: origin.origin,
+            },
+          ]);
+        });
+        const resumed = yield* browser.use("Request the bare root", (page) =>
+          page.context().request.get("/", { maxRedirects: 0, headers: navigation }),
+        );
+        expect(
+          new URL(resumed.headers()["location"] ?? "", "http://dashboard.invalid").pathname,
+        ).toBe(`/org/${actors.organization.slug}/apps`);
 
         const consent = yield* browser.use("Open the MCP consent page", (page) =>
           page.context().request.get("/mcp/authorize?client_id=unknown&response_type=code", {

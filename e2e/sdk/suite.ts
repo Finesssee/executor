@@ -6,6 +6,7 @@ import { patternForTarget, scenariosForSuite, type TestPlan } from "../test-plan
 import { readEvidence, combineEvidenceReports } from "../evidence-results.ts";
 import { type EvidenceReport, type RunMetadata } from "../report-model.ts";
 import { startCloudEnvironment } from "../support/cloud-environment.ts";
+import { localNpmRegistry } from "../support/npm-registry.ts";
 import { type FixtureControl, fixtureControlEnvironment } from "./fixtures.ts";
 import { RecordingPaceMs, Target } from "../support/platform.ts";
 import { prepareCloudScenarios } from "./prepare-scenarios.ts";
@@ -170,8 +171,12 @@ export const runSuite = ({
               );
               const code = yield* Effect.scoped(
                 Effect.gen(function* () {
+                  // Products this run starts build apps against the checkout's own apps release.
+                  const registry =
+                    target === "cloud" && !managedCloud ? undefined : yield* localNpmRegistry;
                   const environment = managedCloud
                     ? yield* startCloudEnvironment({
+                        ...(registry === undefined ? {} : { npmRegistry: registry.url }),
                         directory,
                         origin,
                         appPort: yield* freePort,
@@ -265,6 +270,7 @@ export const runSuite = ({
                           E2E_WORKERS: String(interactive || observeUI ? 1 : workers),
                           E2E_TARGET: target,
                           E2E_CLOUD_MODE: cloudMode,
+                          ...(registry === undefined ? {} : { E2E_NPM_REGISTRY: registry.url }),
                           EXECUTOR_E2E_RUN: directory,
                           EXECUTOR_E2E_API_KEY: Redacted.value(apiKey),
                           E2E_FIXTURES:

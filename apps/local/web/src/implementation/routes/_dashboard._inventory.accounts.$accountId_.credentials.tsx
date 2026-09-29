@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { AccountDetailPage } from "../pages/account-detail.tsx";
+import { AccountCredentialsPage } from "../pages/account-credentials.tsx";
 import { parseAccountParams } from "../route-params.ts";
 /** Generated-tree route for /_dashboard/_inventory/accounts/$accountId_/credentials. */
 export const Route = createFileRoute("/_dashboard/_inventory/accounts/$accountId_/credentials")({
@@ -10,5 +10,5 @@ export const Route = createFileRoute("/_dashboard/_inventory/accounts/$accountId
 
 function AccountRoute() {
   const { accountId } = Route.useParams();
-  return <AccountDetailPage key={accountId} id={accountId} view="credentials" />;
+  return <AccountCredentialsPage key={accountId} id={accountId} />;
 }

@@ -13,6 +13,7 @@ import { Target } from "../support/platform.ts";
 import { awaitSentryEvents, traceExceptionTypes } from "../support/sentry-events.ts";
 import { openapiAppFiles } from "../support/authored-templates.ts";
 import { staleRegistryDocument } from "../support/stale-openapi-upstream.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const Token = Schema.Struct({ key: Schema.RedactedFromValue(Schema.String), id: Schema.String });
 const kindTag = "executor.request.rejection.kind",
@@ -46,12 +47,15 @@ layer(HostedLive, { excludeTestServices: true })("Client rejection reporting", (
           files: [
             {
               path: "index.ts",
-              content: `import { defineApp, query, mutation, object, number } from "apps";
+              content: `import { defineApp, query, mutation, object, number, router } from "apps";
 export default defineApp({ accounts: {} }, async () => ({
-  queries: { strict: query({ input: object({ count: number() }) }, async (_context, input) => input) },
-  mutations: { crash: mutation({ input: object({}) }, async () => { throw new Error("private-fixture-message"); }) },
+  tools: router({
+    strict: query({ input: object({ count: number() }) }, async (_context, input) => input),
+    crash: mutation({ input: object({}) }, async () => { throw new Error("private-fixture-message"); }),
+  }),
 }));`,
             },
+            appsManifest,
           ],
         });
         expect(deployed.status, JSON.stringify(deployed.body)).toBe(200);
@@ -98,7 +102,7 @@ export default defineApp({ accounts: {} }, async () => ({
             "tool input that does not match the declared input schema",
             "POST",
             `${prefix}/apps/${app.id}/tools/call`,
-            { tool: "queries.strict", input: { count: "many-items" } },
+            { tool: "strict", kind: "query", input: { count: "many-items" } },
             422,
             undefined,
           ],
@@ -150,7 +154,11 @@ export default defineApp({ accounts: {} }, async () => ({
                 actors.owner,
                 "POST",
                 `${prefix}/apps/${staleApp.id}/tools/call`,
-                { tool: "queries.listApps", input: { query: { name: "unscoped-name" } } },
+                {
+                  tool: "registry.listApps",
+                  kind: "query",
+                  input: { query: { name: "unscoped-name" } },
+                },
               );
               expect(rest.status).toBeGreaterThanOrEqual(400);
               const restTrace = yield* latestTrace;
@@ -174,7 +182,7 @@ export default defineApp({ accounts: {} }, async () => ({
                     {
                       name: "execute",
                       arguments: {
-                        code: `return await tools[${JSON.stringify(staleApp.slug)}].queries.listApps({query:{name:"unscoped-name"}});`,
+                        code: `return await tools[${JSON.stringify(staleApp.slug)}].registry.listApps({query:{name:"unscoped-name"}});`,
                       },
                     },
                     undefined,
@@ -200,7 +208,7 @@ export default defineApp({ accounts: {} }, async () => ({
           actors.owner,
           "POST",
           `${prefix}/apps/${app.id}/tools/call`,
-          { tool: "mutations.crash", input: {} },
+          { tool: "crash", kind: "mutation", input: {} },
         );
         expect(crashed.status).toBeGreaterThanOrEqual(500);
         const crashTrace = yield* latestTrace;

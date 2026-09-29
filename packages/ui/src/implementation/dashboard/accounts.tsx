@@ -2,10 +2,12 @@ import { LocalTime, shortMoment } from "../components/local-time.tsx";
 import { PageFrame, PageHeader } from "./page.tsx";
 import { Option } from "effect";
 import { AccountRowsSkeleton } from "./loading.tsx";
-import { useState, type ReactNode } from "react";
+import { AccountCheckDot, AccountIdentity } from "./account-health.tsx";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { QueryResult, useQuery, useDashboard } from "./context.tsx";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { ArrowUpRight01Icon } from "@hugeicons/core-free-icons";
+import type { AccountId } from "@executor-js/sdk";
 import type { Inventory, AccountSummary, QueryProps } from "../../contracts/dashboard.ts";
 import { selectedIds, accountNeedsSignIn } from "../../contracts/dashboard.ts";
 
@@ -21,8 +23,10 @@ export function AccountsPage<E>({
   readonly action?: ReactNode;
   readonly filters?: ReactNode;
   readonly empty?: ReactNode;
-  readonly accountAction?: (account: AccountSummary) => ReactNode;
+  readonly accountActions?: (account: AccountSummary) => ReactNode;
   readonly accountMeta?: (account: AccountSummary) => ReactNode;
+  /** A linked account is scrolled into view and marked, since accounts have no page of their own. */
+  readonly highlight?: AccountId | undefined;
 }) {
   const { result, data, refresh } = useQuery(query);
   const [search, setSearch] = useState("");
@@ -70,8 +74,9 @@ export function AccountsPage<E>({
 function AccountsList({
   data,
   search,
-  accountAction,
+  accountActions,
   accountMeta,
+  highlight,
   empty,
   clearSearch,
 }: {
@@ -79,10 +84,15 @@ function AccountsList({
   readonly search: string;
   readonly empty: ReactNode;
   readonly clearSearch: () => void;
-  readonly accountAction?: (account: AccountSummary) => ReactNode;
+  readonly accountActions?: (account: AccountSummary) => ReactNode;
   readonly accountMeta?: (account: AccountSummary) => ReactNode;
+  readonly highlight?: AccountId | undefined;
 }) {
-  const { AppLink, AccountLink } = useDashboard();
+  const { AppLink } = useDashboard();
+  const highlighted = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    highlighted.current?.scrollIntoView({ block: "center" });
+  }, [highlight]);
   const accounts = data.accounts.filter((account) =>
     `${account.label} ${account.providerName ?? ""}`.toLowerCase().includes(search.toLowerCase()),
   );
@@ -103,10 +113,11 @@ function AccountsList({
         </Empty>
       ) : (
         <div className="inventory border border-border rounded-[8px] overflow-hidden">
-          <div className="inventory-header accounts-grid bg-muted text-muted-foreground py-[9px] px-[16px] text-[11px] grid grid-cols-[minmax(200px,_1.5fr)_minmax(130px,_0.8fr)_minmax(170px,_1fr)] gap-6.25 items-center max-[1000px]:grid-cols-[minmax(0,_1.3fr)_minmax(0,_1fr)] max-[1000px]:gap-4 max-[1000px]:[.inventory-header&_>_span:nth-child(2)]:hidden max-[740px]:hidden max-[740px]:grid-cols-1 max-[740px]:gap-3">
+          <div className="inventory-header accounts-grid bg-muted text-muted-foreground py-[9px] px-[16px] text-[11px] grid grid-cols-[minmax(200px,_1.5fr)_minmax(130px,_0.8fr)_minmax(170px,_1fr)_auto] gap-6.25 items-center max-[1000px]:grid-cols-[minmax(0,_1.3fr)_minmax(0,_1fr)_auto] max-[1000px]:gap-4 max-[1000px]:[.inventory-header&_>_span:nth-child(2)]:hidden max-[740px]:hidden max-[740px]:grid-cols-[minmax(0,_1fr)_auto] max-[740px]:gap-3">
             <span>Account</span>
             <span>Added</span>
             <span>Apps</span>
+            <span className="sr-only">Actions</span>
           </div>
           {accounts.map((account) => {
             const apps = data.apps.filter((app) =>
@@ -117,8 +128,11 @@ function AccountsList({
             );
             return (
               <div
-                className="inventory-row accounts-grid grid grid-cols-[minmax(200px,_1.5fr)_minmax(130px,_0.8fr)_minmax(170px,_1fr)] gap-6.25 items-center py-[12px] px-[16px] border-t border-t-border min-h-16 [a&:hover]:bg-muted max-[1000px]:grid-cols-[minmax(0,_1.3fr)_minmax(0,_1fr)] max-[1000px]:gap-4 max-[1000px]:[.inventory-header&_>_span:nth-child(2)]:hidden max-[740px]:grid-cols-1 max-[740px]:gap-3 max-[740px]:py-[12px] max-[740px]:px-[16px] max-[740px]:[&:first-of-type]:border-t-0 max-[740px]:[.inventory-header_+_&]:border-t-0"
+                className="inventory-row accounts-grid grid grid-cols-[minmax(200px,_1.5fr)_minmax(130px,_0.8fr)_minmax(170px,_1fr)_auto] gap-6.25 items-center py-[12px] px-[16px] border-t border-t-border min-h-16 [a&:hover]:bg-muted max-[1000px]:grid-cols-[minmax(0,_1.3fr)_minmax(0,_1fr)_auto] max-[1000px]:gap-4 max-[1000px]:[.inventory-header&_>_span:nth-child(2)]:hidden max-[740px]:grid-cols-[minmax(0,_1fr)_auto] max-[740px]:gap-3 max-[740px]:py-[12px] data-[highlighted]:bg-accent data-[highlighted]:shadow-[inset_3px_0_0_var(--color-ring)] max-[740px]:px-[16px] max-[740px]:[&:first-of-type]:border-t-0 max-[740px]:[.inventory-header_+_&]:border-t-0"
                 key={account.id}
+                {...(account.id === highlight
+                  ? { ref: highlighted, "data-highlighted": "", "aria-current": "true" as const }
+                  : {})}
               >
                 <div className="app-cell [.app-card_&_strong]:text-[14px] [.app-card_&_strong]:overflow-hidden [.app-card_&_strong]:text-ellipsis [.app-card_&_strong]:whitespace-nowrap flex items-center gap-3 min-w-0 [&_>_div]:min-w-0 [&_strong]:text-[13px] [&_strong]:font-medium [&_strong]:block [&_strong]:wrap-anywhere max-[740px]:[&_strong]:text-[14px]">
                   <ProviderIcon
@@ -126,9 +140,7 @@ function AccountsList({
                     url={account.providerUrl}
                   />
                   <div>
-                    <AccountLink account={account.id}>
-                      <strong>{account.label || "Unnamed account"}</strong>
-                    </AccountLink>
+                    <strong>{account.label || "Unnamed account"}</strong>
                     <div className="row-meta flex flex-wrap gap-1.5 items-center mt-0.75 text-[11px] text-muted-foreground">
                       {account.providerName && (
                         <>
@@ -137,6 +149,12 @@ function AccountsList({
                         </>
                       )}
                       <span>{account.method}</span>
+                      {account.health?.info && (
+                        <>
+                          <span aria-hidden>·</span>
+                          <AccountIdentity info={account.health.info} />
+                        </>
+                      )}
                       {accountMeta?.(account)}
                       {accountNeedsSignIn(account) && (
                         <span className="sign-in-status text-sign-in-warning text-[11px] font-medium whitespace-nowrap [.app-account-setup_h2_&]:ml-2">
@@ -154,12 +172,15 @@ function AccountsList({
                 <div className="account-date text-[12px] text-muted-foreground wrap-anywhere max-[1000px]:hidden max-[740px]:hidden">
                   <LocalTime value={account.createdAt} options={shortMoment} />
                 </div>
-                <div className="app-references flex flex-wrap gap-1.75 text-[12px] [&_>_a]:inline-flex [&_>_a]:items-center [&_>_a]:gap-1.25 [&_>_a]:border [&_>_a]:border-border [&_>_a]:rounded-[5px] [&_>_a]:py-[3px] [&_>_a]:px-[7px] [&_>_a:hover]:bg-accent max-[740px]:[.inventory-row_&]:pl-11.5 max-[740px]:[&_>_a]:min-h-11 max-[740px]:[&_>_a]:wrap-anywhere max-[740px]:[&_>_a_svg]:shrink-0">
+                <div className="app-references max-[740px]:col-span-2 flex flex-wrap gap-1.75 text-[12px] [&_>_a]:inline-flex [&_>_a]:items-center [&_>_a]:gap-1.25 [&_>_a]:border [&_>_a]:border-border [&_>_a]:rounded-[5px] [&_>_a]:py-[3px] [&_>_a]:px-[7px] [&_>_a:hover]:bg-accent max-[740px]:[.inventory-row_&]:pl-11.5 max-[740px]:[&_>_a]:min-h-11 max-[740px]:[&_>_a]:wrap-anywhere max-[740px]:[&_>_a_svg]:shrink-0">
                   {apps.length === 0 ? (
                     <span className="muted text-muted-foreground">No apps</span>
                   ) : (
                     apps.map((app) => (
                       <AppLink app={app.id} view="accounts" key={app.id}>
+                        <AccountCheckDot
+                          health={account.health?.apps.find((entry) => entry.app === app.id)}
+                        />
                         {app.name}
                         <HugeiconsIcon
                           icon={ArrowUpRight01Icon}
@@ -170,7 +191,9 @@ function AccountsList({
                       </AppLink>
                     ))
                   )}
-                  {accountAction?.(account)}
+                </div>
+                <div className="flex items-center justify-end gap-2 max-[740px]:col-start-2 max-[740px]:row-start-1">
+                  {accountActions?.(account)}
                 </div>
               </div>
             );

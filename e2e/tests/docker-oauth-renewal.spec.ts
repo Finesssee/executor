@@ -13,6 +13,7 @@ import { Clock, Config, Console, Effect, Exit, Fiber, Schedule, Schema } from "e
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { oauthSetupIssuer } from "../support/oauth-setup-issuer.ts";
 import { driver } from "../support/platform.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const Read = Schema.Struct({
   service: Schema.Struct({
@@ -155,14 +156,15 @@ it.live(
           files: [
             {
               path: "index.ts",
-              content: `import { defineApp, defineProvider, oauth2, query, object } from "apps";
+              content: `import { defineApp, defineProvider, oauth2, query, object, router } from "apps";
 const service = defineProvider({ name: ${JSON.stringify(name)}, auth: { oauth: oauth2({ discover: ${JSON.stringify(`${issuer.origin}/mcp`)} }) } });
 export default defineApp({ accounts: { service } }, async ({ accounts }) => ({
-  queries: {
+  tools: router({
     read: query({ input: object({}) }, async ({ fetch }) => ({ service: await (await fetch(${JSON.stringify(`${issuer.origin}/resource`)}, { headers: { authorization: "Bearer " + accounts.service.fields.access_token } })).json() })),
-  },
+  }),
 }));`,
             },
+            appsManifest,
           ],
         });
         expect(deployed.status, deployed.text).toBe(200);
@@ -207,7 +209,7 @@ export default defineApp({ accounts: { service } }, async ({ accounts }) => ({
           Effect.retry({ schedule: Schedule.spaced("200 millis"), times: 150 }),
         );
 
-        const call = { profile: profile.id, tool: "queries.read", input: {} };
+        const call = { profile: profile.id, tool: "read", input: {} };
         const read = (signal?: AbortSignal) => request(`${appPath}/tools/call`, call, signal);
         const renewed =
           (context: string) => (response: { readonly status: number; readonly text: string }) =>

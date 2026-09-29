@@ -79,6 +79,13 @@ export const resourceDirectory = (view: "available" | "managed" = "available") =
       (account) => policy.tools.kind === "all" || selected.has(account.id),
     );
     const providers = new Map<ProviderId, Provider>();
+    const listed = new Set(appEntries.flat().map(({ app }) => app.id));
+    const health = new Map(
+      (accounts.length === 0 ? [] : yield* executor.accounts.listHealth({ owner })).map((entry) => [
+        entry.account,
+        { ...entry, apps: entry.apps.filter((check) => listed.has(check.app)) },
+      ]),
+    );
     const accountEntries = yield* Effect.forEach(accounts, (account) =>
       accountAccess(account.id, actor).pipe(
         Effect.flatMap((access) =>
@@ -89,7 +96,12 @@ export const resourceDirectory = (view: "available" | "managed" = "available") =
               provider = yield* executor.accounts.provider({ owner, account: account.id });
               providers.set(account.provider, provider);
             }
-            return [{ account, access, provider }];
+            const checks = health.get(account.id);
+            return [
+              checks === undefined
+                ? { account, access, provider }
+                : { account, access, provider, health: checks },
+            ];
           }),
         ),
         Effect.catchTag("OrganizationForbidden", () => Effect.succeed([])),

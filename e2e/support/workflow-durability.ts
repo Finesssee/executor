@@ -1,8 +1,9 @@
+import { appsManifest } from "./apps-release.ts";
 /** Authored app used through public HTTP to observe durable sleep and confirmed timeout writes. */
 export const durabilityFiles = [
   {
     path: "index.ts",
-    content: `import { defineApp, defineDatabase, table, workflow, query, mutation, object, string, number } from "apps";
+    content: `import { defineApp, defineDatabase, table, workflow, query, mutation, object, string, number, router } from "apps";
 const requirements = { accounts: {}, database: defineDatabase({ events: table({ label: string() }) }) };
 const rows = query({ input: object({}) }, async (ctx) => ctx.db.events.withIndex("by_creation").collect());
 const save = mutation({ input: object({ label: string() }) }, async (ctx, input) => ctx.db.events.insert(input));
@@ -26,6 +27,10 @@ const sleep = workflow({ input: object({ hold: number() }) }, async (ctx, input)
   const after = await ctx.step.runMutation("after", save, { label: "after" });
   return { before: before.id, after: after.id, deadline };
 });
-export default defineApp(requirements, {  queries: { rows }, mutations: { save, writeAndWait }, workflows: { inserted, write, sleep } });`,
+export default defineApp(requirements, {  tools: router({
+    rows,
+    save, writeAndWait,
+  }), workflows: { inserted, write, sleep } });`,
   },
+  appsManifest,
 ];

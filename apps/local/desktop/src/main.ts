@@ -16,6 +16,7 @@ import {
   Option,
   Path,
   Redacted,
+  Ref,
   Schema,
   Stream,
 } from "effect";
@@ -41,8 +42,6 @@ else
       : resolve(root, ".local/desktop-shell"),
   );
 
-let installUpdate: (() => void) | undefined;
-
 const desktop = Effect.gen(function* () {
   const quit = yield* Deferred.make<void, DesktopFailed>();
   const path = yield* Path.Path;
@@ -67,6 +66,8 @@ const desktop = Effect.gen(function* () {
     yield* Effect.addFinalizer(() =>
       Effect.sync(() => process.removeListener("uncaughtExceptionMonitor", onException)),
     );
+    // An update installs after every window and the local server have shut down.
+    const update = yield* Ref.make(Option.none<() => void>());
     const stop = () => {
       Effect.runSync(Deferred.succeed(quit, undefined));
     };
@@ -238,7 +239,7 @@ const desktop = Effect.gen(function* () {
           }),
         );
         const checkForUpdates = yield* makeUpdateAction((install) => {
-          installUpdate = install;
+          Effect.runSync(Ref.set(update, Option.some(install)));
           stop();
         });
         const openBrowser = yield* makeOpenBrowserAction(browserSession, backend.origin);
@@ -299,10 +300,11 @@ const desktop = Effect.gen(function* () {
         yield* Effect.logInfo("Executor desktop ready").pipe(
           Effect.annotateLogs({ origin: backend.origin }),
         );
-        yield* backend.exited;
+        return yield* backend.exited;
       }),
       Deferred.await(quit),
     );
+    return yield* Ref.get(update);
   }).pipe(
     Effect.tapCause((cause) => Effect.logError("Desktop stopped", cause)),
     Effect.provide(Logger.layer([Logger.withConsoleError(Logger.formatJson), file])),
@@ -327,7 +329,7 @@ else
             : "The desktop window or its local server stopped. Check the configured keys and restart with bun run desktop:dev.",
         );
       }
-      if (Exit.isSuccess(result) && installUpdate !== undefined) installUpdate();
+      if (Exit.isSuccess(result) && Option.isSome(result.value)) result.value.value();
       else app.exit(Exit.isFailure(result) ? 1 : 0);
     },
   );

@@ -12,6 +12,7 @@ import { Effect } from "effect";
 import {
   permitsApp,
   permitsTarget,
+  permitsRouter,
   permitsTool,
   permittedAppIds,
   requiresToolMetadata,
@@ -110,6 +111,13 @@ export const restrictMcpBackend = <E extends Error, G extends Error>(
           ...page,
           items: page.items.filter((tool) =>
             permitsTool(policy, { app: input.app, profile: input.profile, tool }, "discover"),
+          ),
+          routers: page.routers.filter((router) =>
+            permitsRouter(
+              policy,
+              { app: input.app, profile: input.profile, path: router.path },
+              page.items,
+            ),
           ),
         };
       }),

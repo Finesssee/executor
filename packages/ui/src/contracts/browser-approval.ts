@@ -1,5 +1,5 @@
 /** Shared browser approval data access. Products provide the route and their page-owned Atom runtime. */
-import { dashboardHttpClient } from "./http.ts";
+import { dashboardHttpClient, hydratedResult, requestKey } from "./http.ts";
 import {
   BrowserApprovalAcknowledgement,
   BrowserApprovalView,
@@ -63,7 +63,13 @@ export const browserApproval = (
   endpoint: string,
   onAnswer?: (get: Atom.FnContext) => void,
 ) => ({
-  view: runtime.atom(request(endpoint, BrowserApprovalView)),
+  view: runtime.atom(request(endpoint, BrowserApprovalView)).pipe(
+    hydratedResult({
+      key: `browser-approval:${requestKey(endpoint)}`,
+      success: BrowserApprovalView,
+      error: BrowserApprovalFailed,
+    }),
+  ),
   answer: runtime.fn((response: ElicitationResponse, get) =>
     request(endpoint, BrowserApprovalAcknowledgement, response).pipe(
       Effect.tap(() => Effect.sync(() => onAnswer?.(get))),

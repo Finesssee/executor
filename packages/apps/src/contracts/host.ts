@@ -1,5 +1,5 @@
 export * from "./skills.ts";
-import { AppSkills, SkillLoadFailed, type SkillFile } from "./skills.ts";
+import { SkillLoadFailed, type SkillFile } from "./skills.ts";
 import { ProviderError } from "./provider-error.ts";
 import { McpError } from "./mcp.ts";
 import { OpenapiResponseError } from "./api-response-error.ts";
@@ -7,22 +7,21 @@ export { ApiErrorResponse, OpenapiResponseError } from "./api-response-error.ts"
 export { ProviderError } from "./provider-error.ts";
 export { McpError } from "./mcp.ts";
 import {
-  WorkflowCommand,
   WorkflowFailure,
   type WorkflowExecution,
   type WorkflowReplay,
   type WorkflowHostControls,
 } from "./workflows.ts";
 export * from "./workflows.ts";
-import { OperationSchedule } from "./schedules.ts";
-import { DatabaseSchema } from "@executor-js/app-data/contracts";
+export * from "./failure.ts";
+import { DatabaseFieldReserved, DatabaseLimitExceeded } from "@executor-js/app-data/contracts";
+export { DatabaseFieldReserved, DatabaseLimitExceeded } from "@executor-js/app-data/contracts";
 /** Portable framework dispatch contracts. Requests never carry account bindings. */
 import { Context, Schema, type Effect, type Redacted } from "effect";
-import { AccountId, JsonObject, JsonValue } from "./schema.ts";
 import type { AppStorage } from "./storage.ts";
 import type { InvocationTelemetry } from "@executor-js/telemetry";
 export { AppStorageError, AppStorageUnavailable, StorageName, type AppStorage } from "./storage.ts";
-import { ApprovalElicitation, ElicitationFailed, type ElicitationHandler } from "./elicitation.ts";
+import { ElicitationFailed, type ElicitationHandler } from "./elicitation.ts";
 export {
   ElicitationLimits,
   defaultElicitationLimits,
@@ -36,101 +35,79 @@ export {
   approvalElicitation,
 } from "./elicitation.ts";
 export { McpClientLimits, defaultMcpClientLimits } from "./mcp.ts";
-import { WebhookCommand } from "./webhook-protocol.ts";
 export * from "./webhook-protocol.ts";
-import { ToolAnnotations } from "./tools.ts";
 
 export { AccountId, HttpUrl } from "./schema.ts";
-import { OAuth2Config } from "./provider.ts";
 export { OAuthClientAuth, OAuthSecretClientAuth } from "./provider.ts";
 
-/** Serializable auth methods shared with SDK hosts; protocol configuration has one schema. */
-export const DeclaredAuthMethod = Schema.Union([
-  Schema.Struct({ type: Schema.Literal("secrets"), label: Schema.String, fields: JsonObject }),
-  Schema.Struct({
-    type: Schema.Literal("oauth2"),
-    ...OAuth2Config.members[0].fields,
-    response: JsonObject,
-  }),
-  Schema.Struct({
-    type: Schema.Literal("oauth2"),
-    ...OAuth2Config.members[1].fields,
-    response: JsonObject,
-  }),
-  Schema.Struct({
-    type: Schema.Literal("oauth2"),
-    ...OAuth2Config.members[2].fields,
-    response: JsonObject,
-  }),
-  Schema.Struct({
-    type: Schema.Literal("oauth2"),
-    ...OAuth2Config.members[3].fields,
-    response: JsonObject,
-  }),
-]);
-
-/** Serializable declaration of a provider's named authentication methods. */
-export const DeclaredProvider = Schema.Struct({
-  name: Schema.NonEmptyString,
-  auth: Schema.Record(Schema.NonEmptyString, DeclaredAuthMethod),
-});
-/** Credential-free provider declaration; content matching remains host policy. */
-export type DeclaredProvider = typeof DeclaredProvider.Type;
-
-/** Account slots available without binding accounts or evaluating the app factory. */
-export const DeclaredRequirements = Schema.Struct({
-  /** Protocol support of this retained framework build, not an author-declared requirement. */
-  capabilities: Schema.optionalKey(
-    Schema.Struct({
-      skills: Schema.Literal(true),
-      /** Accepts inspect detail and tools. Earlier builds reject both as excess fields. */
-      toolIndex: Schema.optionalKey(Schema.Literal(true)),
-      /** Accepts skills sources and reports whether the catalog includes a live loader. */
-      skillSources: Schema.optionalKey(Schema.Literal(true)),
-      /** Accepts scheduled inspection. Earlier builds reject it as an excess field. */
-      scheduledTools: Schema.optionalKey(Schema.Literal(true)),
-    }),
-  ),
-  database: Schema.optionalKey(DatabaseSchema),
-  accounts: Schema.Record(
-    Schema.NonEmptyString,
-    Schema.Struct({
-      definition: DeclaredProvider,
-      cardinality: Schema.Literals(["one", "many"]),
-    }),
-  ),
-});
-/** Parsed declared account requirements. */
-export type DeclaredRequirements = typeof DeclaredRequirements.Type;
-
-/** Host-resolved credentials for one stable saved account. Never a request DTO. */
-export const ResolvedAccount = Schema.Struct({
-  id: AccountId,
-  provider: DeclaredProvider,
-  method: Schema.NonEmptyString,
-  /** Changes when the account is reconnected or its credentials replaced, not on renewal. */
-  generation: Schema.Int,
-  fields: JsonObject,
-});
-/** Parsed host account binding. */
-export type ResolvedAccount = typeof ResolvedAccount.Type;
-
-/** Full saved selection resolved by the trusted caller; [] differs from a missing slot. */
-export const ResolvedAccounts = Schema.Record(
-  Schema.NonEmptyString,
-  Schema.Union([ResolvedAccount, Schema.Array(ResolvedAccount)]),
-);
+/**
+ * The host protocol this framework speaks and its wire schemas. A later protocol replaces this
+ * re-export; released protocol modules stay unchanged for host adapters.
+ */
+export { frameworkProtocol } from "./protocol-version.ts";
+export { protocol1 } from "./protocols/1.ts";
+export { protocol2 } from "./protocols/2.ts";
+export { protocol3 } from "./protocols/3.ts";
+export { protocol4 } from "./protocols/4.ts";
+export { protocol5, AccountCheckCommand } from "./protocols/5.ts";
+export { AccountCheckResult, AccountInfo } from "./provider.ts";
+import {
+  HostAccountsInvalid,
+  HostDeclarationInvalid,
+  HostEvaluationFailed,
+  HostInputInvalid,
+  HostKindMismatch,
+  HostOperationFailed,
+  HostOperationNotFound,
+  HostOutputInvalid,
+  HostRequestInvalid,
+  HostToolApprovalRequired,
+  HostToolBlocked,
+  HostToolNotFound,
+  HostToolPolicyFailed,
+  SkillSources,
+  type InvocationDeadline,
+  ResolvedAccounts,
+  type SkillCatalogResponse,
+  type TrustedToolApproval,
+} from "./protocols/5.ts";
+export { DeclaredRequirements, HostRequest } from "./protocols/5.ts";
+export {
+  DeclaredAuthMethod,
+  DeclaredProvider,
+  ResolvedAccount,
+  ResolvedAccounts,
+  TrustedToolApproval,
+  InvocationDeadline,
+  HostedTool,
+  HostedToolSummary,
+  HostRouterError,
+  HostedRouter,
+  HostedCatalog,
+  HostedCatalogSummary,
+  SkillSources,
+  SkillCatalogResponse,
+  HostRequestInvalid,
+  HostAccountsInvalid,
+  HostDeclarationInvalid,
+  HostEvaluationFailed,
+  HostOperationNotFound,
+  HostOperationFailed,
+  HostToolNotFound,
+  HostKindMismatch,
+  InputProblem,
+  maxInputProblems,
+  HostInputInvalid,
+  HostToolBlocked,
+  HostToolApprovalRequired,
+  HostToolPolicyFailed,
+  HostOutputInvalid,
+  HostError,
+  HostResponse,
+  HostInvocation,
+} from "./protocols/5.ts";
 /** Raw host inputs; the host boundary parses and redacts these immediately. */
 export type ResolvedAccountsInput = typeof ResolvedAccounts.Encoded;
-/** Parsed host selections, kept redacted until native account binding. */
-export type ResolvedAccounts = typeof ResolvedAccounts.Type;
-
-/** Trusted approval for one decoded call. Never accepted in public command JSON. */
-export const TrustedToolApproval = Schema.Struct({ tool: Schema.NonEmptyString, input: JsonValue });
-export type TrustedToolApproval = typeof TrustedToolApproval.Type;
-
-/** Absolute Unix time in milliseconds; remote hosts enforce it inside the operation transaction. */
-export const InvocationDeadline = Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0));
 
 /** Trusted invocation context, supplied separately from the Request. */
 export interface HostContext {
@@ -152,41 +129,13 @@ export interface HostContext {
   readonly accounts: Redacted.Redacted<ResolvedAccounts>;
 }
 
-/** Serializable live tool metadata; executable callbacks never cross this boundary. */
-export const HostedTool = Schema.Struct({
-  schedules: Schema.optionalKey(Schema.Array(OperationSchedule)),
-  name: Schema.NonEmptyString,
-  description: Schema.String,
-  inputSchema: JsonObject,
-  readOnly: Schema.optionalKey(Schema.Boolean),
-  title: Schema.optionalKey(Schema.String),
-  outputSchema: Schema.optionalKey(JsonObject),
-  annotations: Schema.optionalKey(ToolAnnotations),
-  _meta: Schema.optionalKey(JsonObject),
-});
-/** Parsed live tool description. */
-export type HostedTool = typeof HostedTool.Type;
-
-/** Catalog entry without schemas. Browsing lists these and reads one full tool on selection. */
-export const HostedToolSummary = HostedTool.mapFields(
-  ({ inputSchema: _input, outputSchema: _output, _meta, ...fields }) => fields,
-);
-export type HostedToolSummary = typeof HostedToolSummary.Type;
-
-/**
- * A skill catalog and whether any of it came from `dynamicSkills`. Without a live loader the
- * catalog is determined by the build and its evaluation inputs; with one it reflects a publisher.
- */
-export const SkillSources = Schema.Struct({ skills: AppSkills, dynamic: Schema.Boolean });
-export type SkillSources = typeof SkillSources.Type;
 /** Skill commands. Send sources only to builds that declare skillSources. */
 export const skillsCommand = (sources: boolean) =>
   sources ? ({ operation: "skills", sources: true } as const) : ({ operation: "skills" } as const);
-/** Either response shape; `dynamic` is unknown for builds that predate skillSources. */
-export const SkillCatalogResponse = Schema.Union([SkillSources, AppSkills]);
 export interface SkillCatalog {
   readonly skills: SkillSources["skills"];
   readonly dynamic?: boolean;
+  readonly cached?: boolean;
 }
 export const skillCatalog = (response: typeof SkillCatalogResponse.Type): SkillCatalog =>
   Schema.is(SkillSources)(response) ? response : { skills: response };
@@ -204,115 +153,18 @@ export const indexCommand = { operation: "inspect", detail: "summary" } as const
 /** Keep only the requested tools from an inspection that may have described every tool. */
 export const selectTools =
   (tools?: readonly string[]) =>
-  <A extends { readonly name: string }>(all: readonly A[]): readonly A[] =>
-    tools === undefined ? all : all.filter((tool) => tools.includes(tool.name));
+  <A extends { readonly tools: readonly { readonly name: string }[] }>(catalog: A): A =>
+    tools === undefined
+      ? catalog
+      : { ...catalog, tools: catalog.tools.filter((tool) => tools.includes(tool.name)) };
 
-/** Framework-owned dispatch, independent of app-authored HTTP routing. */
-export const HostRequest = Schema.Union([
-  WorkflowCommand,
-  WebhookCommand,
-  Schema.Struct({ operation: Schema.Literal("requirements") }),
-  Schema.Struct({
-    operation: Schema.Literal("inspect"),
-    /** Omit schemas. Only builds that declare the toolIndex capability accept this. */
-    detail: Schema.optionalKey(Schema.Literal("summary")),
-    /** Describe only these tools. Only builds that declare the toolIndex capability accept this. */
-    tools: Schema.optionalKey(Schema.Array(Schema.NonEmptyString)),
-    /**
-     * Describe only declared operations that have schedules, without dynamic tool discovery.
-     * Only builds that declare the scheduledTools capability accept this.
-     */
-    scheduled: Schema.optionalKey(Schema.Literal(true)),
-  }),
-  Schema.Struct({
-    operation: Schema.Literal("skills"),
-    /** Answer with SkillSources. Only builds that declare the skillSources capability accept this. */
-    sources: Schema.optionalKey(Schema.Literal(true)),
-  }),
-  Schema.Struct({
-    operation: Schema.Literal("query"),
-    name: Schema.NonEmptyString,
-    input: JsonValue,
-  }),
-  Schema.Struct({
-    operation: Schema.Literal("mutate"),
-    name: Schema.NonEmptyString,
-    input: JsonValue,
-  }),
-  Schema.Struct({
-    operation: Schema.Literal("call"),
-    tool: Schema.NonEmptyString,
-    input: JsonValue,
-  }),
+/** Declaration reads do not bind accounts or evaluate the app factory. A named declaration
+ * problem, such as a reserved database field, is reported so the deploy can explain it. */
+export const HostRequirementsError = Schema.Union([
+  HostRequestInvalid,
+  HostDeclarationInvalid,
+  DatabaseFieldReserved,
 ]);
-/** Parsed portable dispatch request. */
-export type HostRequest = typeof HostRequest.Type;
-
-/** The dispatch request did not match the protocol. */
-export class HostRequestInvalid extends Schema.TaggedError<HostRequestInvalid>()(
-  "HostRequestInvalid",
-  {},
-) {}
-/** Host-supplied accounts did not satisfy the declared slots or native method schemas. */
-export class HostAccountsInvalid extends Schema.TaggedError<HostAccountsInvalid>()(
-  "HostAccountsInvalid",
-  {},
-) {}
-/** The module or declared capability shape could not be hosted. */
-export class HostDeclarationInvalid extends Schema.TaggedError<HostDeclarationInvalid>()(
-  "HostDeclarationInvalid",
-  {},
-) {}
-/** Fresh app evaluation failed before calling a tool. */
-export class HostEvaluationFailed extends Schema.TaggedError<HostEvaluationFailed>()(
-  "HostEvaluationFailed",
-  {},
-) {}
-/** No query or mutation matched the requested name. */
-export class HostOperationNotFound extends Schema.TaggedError<HostOperationNotFound>()(
-  "HostOperationNotFound",
-  {},
-) {}
-/** An app operation failed. Raw author failures remain private. */
-export class HostOperationFailed extends Schema.TaggedError<HostOperationFailed>()(
-  "HostOperationFailed",
-  {},
-) {}
-/** The freshly evaluated catalog did not contain the requested tool. */
-export class HostToolNotFound extends Schema.TaggedError<HostToolNotFound>()(
-  "HostToolNotFound",
-  {},
-) {}
-/** One failing input location and its expected shape; never the supplied value. */
-export const InputProblem = Schema.String.check(Schema.isMaxLength(512));
-/** Input decoding reports at most this many problems. */
-export const maxInputProblems = 10;
-/** Native input decoding failed; supplied values are omitted. Builds before problems were reported send none. */
-export class HostInputInvalid extends Schema.TaggedError<HostInputInvalid>()("HostInputInvalid", {
-  problems: Schema.optionalKey(
-    Schema.Array(InputProblem).check(Schema.isMaxLength(maxInputProblems)),
-  ),
-}) {}
-/** The tool's approval policy blocked this call before its tool body ran. */
-export class HostToolBlocked extends Schema.TaggedError<HostToolBlocked>()("HostToolBlocked", {}) {}
-/** Policy elicitation plus decoded input. No tool body ran; the host owns delivery and resumption. */
-export class HostToolApprovalRequired extends Schema.TaggedError<HostToolApprovalRequired>()(
-  "HostToolApprovalRequired",
-  { input: JsonValue, elicitation: ApprovalElicitation },
-) {}
-/** The tool's approval policy failed or returned an invalid decision. Author failures remain private. */
-export class HostToolPolicyFailed extends Schema.TaggedError<HostToolPolicyFailed>()(
-  "HostToolPolicyFailed",
-  {},
-) {}
-/** A tool result was not JSON; the result is never included in the error. */
-export class HostOutputInvalid extends Schema.TaggedError<HostOutputInvalid>()(
-  "HostOutputInvalid",
-  {},
-) {}
-
-/** Declaration reads do not bind accounts or evaluate the app factory. */
-export const HostRequirementsError = Schema.Union([HostRequestInvalid, HostDeclarationInvalid]);
 /** Inspection can fail while binding accounts or evaluating the live definition. */
 export const HostInspectError = Schema.Union([
   ProviderError,
@@ -330,40 +182,32 @@ export const HostCallError = Schema.Union([
   HostInspectError,
   HostToolNotFound,
   HostOperationNotFound,
+  HostKindMismatch,
   HostOperationFailed,
+  DatabaseLimitExceeded,
   HostInputInvalid,
   HostOutputInvalid,
   HostToolBlocked,
   HostToolApprovalRequired,
   HostToolPolicyFailed,
   ElicitationFailed,
+]);
+/**
+ * An account check binds one account and runs the provider's check without evaluating the app.
+ * Timeouts arrive as WorkflowFailure from the shared deadline guard.
+ */
+export const HostAccountCheckError = Schema.Union([
+  ProviderError,
+  WorkflowFailure,
+  HostRequestInvalid,
+  HostDeclarationInvalid,
+  HostAccountsInvalid,
+  HostOperationNotFound,
+  HostOperationFailed,
+  HostOutputInvalid,
 ]);
 /** Queries, mutations and agent calls use the same operation failures. */
 export const HostDataError = HostCallError;
-
-/** Safe error envelope; no author exception, source, account fields or stack is serialized. */
-export const HostError = Schema.Union([
-  OpenapiResponseError,
-  ProviderError,
-  McpError,
-  SkillLoadFailed,
-  WorkflowFailure,
-  HostRequestInvalid,
-  HostAccountsInvalid,
-  HostDeclarationInvalid,
-  HostEvaluationFailed,
-  HostOperationNotFound,
-  HostOperationFailed,
-  HostToolNotFound,
-  HostInputInvalid,
-  HostOutputInvalid,
-  HostToolBlocked,
-  HostToolApprovalRequired,
-  HostToolPolicyFailed,
-  ElicitationFailed,
-]);
-/** Expected host failures. */
-export type HostError = typeof HostError.Type;
 
 /** Invocation-owned outcome sink. Framework adapters report semantic failures
  * independently of successful JSON transport; customer output is never inspected. */
@@ -372,21 +216,17 @@ export const ToolResultObservation = Context.Reference<{ readonly failed: () => 
   { defaultValue: () => ({ failed: () => {} }) },
 );
 
-/** Portable response envelope; callers parse the success value for their operation. */
-export const HostResponse = Schema.Union([
-  Schema.Struct({
-    ok: Schema.Literal(true),
-    value: JsonValue,
-    toolError: Schema.optionalKey(Schema.Literal(true)),
-  }),
-  Schema.Struct({ ok: Schema.Literal(false), error: HostError }),
-]);
-/** Parsed response envelope. */
-export type HostResponse = typeof HostResponse.Type;
-
 /** Native handler; context comes from host authority, never from request content. */
 export type AppHandler = (request: Request, context: HostContext) => Effect.Effect<Response>;
 
-export { OperationToolPrefixes, type AppOperation, type OperationContext } from "./operations.ts";
+export { type AppOperation, type OperationContext } from "./operations.ts";
+export {
+  RouterIcon,
+  RouterKey,
+  RouterMeta,
+  type AppNode,
+  type AppRouter,
+  type DynamicRouter,
+} from "./router.ts";
 
 export * from "./schedules.ts";

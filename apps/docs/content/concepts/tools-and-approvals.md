@@ -13,14 +13,20 @@ become tools automatically:
 - **Mutations** write. Their stored-data writes run in a transaction and roll
   back if the operation fails. External effects cannot be rolled back.
 
-There is no separate catalog to maintain. Writing a query is what publishes the
-tool.
+Queries and mutations live in the app's `tools` router. Writing one there is
+what publishes the tool. Nested routers group related tools, like folders:
+`router({ issues: router({ list, close }, { description: "Issue triage" }) })`
+publishes `issues.list` and `issues.close`. A router's description is shown to
+agents beside its tools, and its instructions become a skill. Imported MCP
+servers and OpenAPI documents are routers too. Remote MCP servers and live
+OpenAPI documents are described by their own metadata.
 
 An agent reaches a tool by its path:
 
 ```js
-await tools.vercel.queries.listProjects({});
-await tools["support-inbox"].mutations.archive({ id: "msg_1" });
+await tools.vercel.listProjects({});
+await tools["support-inbox"].archive({ id: "msg_1" });
+await tools.acme.issues.close({ id: "123" });
 ```
 
 `tools.search` returns that exact expression along with the input schema, so an

@@ -51,12 +51,13 @@ layer(HostedLive, { excludeTestServices: true })("Testing SDK", (it) => {
             actors.owner,
             "POST",
             `/api/organizations/${actors.organization.id}/apps/${app.id}/tools/call`,
-            { tool, profile: app.profile, input: {} },
+            // Both seeded tools are queries.
+            { tool, kind: "query", profile: app.profile, input: {} },
           );
         const [rows, repository, foreign, secondRows] = yield* Effect.all(
           [
-            call("queries.summary").pipe(Effect.flatMap((response) => body(Summary, response))),
-            call("queries.repository").pipe(
+            call("summary").pipe(Effect.flatMap((response) => body(Summary, response))),
+            call("repository").pipe(
               Effect.flatMap((response) =>
                 body(
                   Schema.Struct({
@@ -78,7 +79,7 @@ layer(HostedLive, { excludeTestServices: true })("Testing SDK", (it) => {
                 other.actors.owner,
                 "POST",
                 `/api/organizations/${other.actors.organization.id}/apps/${otherApp.id}/tools/call`,
-                { tool: "queries.summary", profile: otherApp.profile, input: {} },
+                { tool: "summary", kind: "query", profile: otherApp.profile, input: {} },
               )
               .pipe(Effect.flatMap((response) => body(Summary, response))),
           ],
@@ -94,7 +95,7 @@ layer(HostedLive, { excludeTestServices: true })("Testing SDK", (it) => {
         expect(secondRows.count).toBe(20);
         // A failed scenario must release its resources without touching the survivor.
         yield* Scope.close(child, Exit.fail(new Error("Deliberate scenario failure")));
-        expect((yield* body(Summary, yield* call("queries.summary"))).count).toBe(1000);
+        expect((yield* body(Summary, yield* call("summary"))).count).toBe(1000);
         if (target.metadata.target === "cloud") {
           expect([403, 404]).toContain(
             (yield* api.request(

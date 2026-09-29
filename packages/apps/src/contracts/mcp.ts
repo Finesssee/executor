@@ -4,6 +4,7 @@ import { type Effect, type Redacted, Schema } from "effect";
 import type { Elicit, ElicitationFailed } from "./elicitation.ts";
 import { AccountId, HttpUrl } from "./schema.ts";
 import { JsonObject, type JsonValue } from "./schema.ts";
+import { RouterIcon } from "./router.ts";
 
 /** Upstream MCP resource bounds, independent of the outer codemode execution budget. */
 export const McpClientLimits = Schema.Struct({
@@ -70,6 +71,18 @@ export const McpToolMetadata = Schema.Struct({
   _meta: Schema.optional(JsonObject),
 });
 export type McpToolMetadata = typeof McpToolMetadata.Type;
+
+/** What a server reports about itself when a session initializes. Icons are for display only. */
+export const McpServerHeader = Schema.Struct({
+  name: Schema.optionalKey(Schema.String),
+  title: Schema.optionalKey(Schema.String),
+  version: Schema.optionalKey(Schema.String),
+  description: Schema.optionalKey(Schema.String),
+  websiteUrl: Schema.optionalKey(Schema.String),
+  icons: Schema.optionalKey(Schema.Array(RouterIcon)),
+  instructions: Schema.optionalKey(Schema.String),
+});
+export type McpServerHeader = typeof McpServerHeader.Type;
 
 /** Direct callers can omit interaction capabilities. A server that asks for input then fails explicitly. */
 export interface McpToolContext {

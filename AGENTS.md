@@ -76,6 +76,14 @@ Run `bun run format` before committing. `bun run check` runs the format check,
 `oxlint`, and the typecheck; CI-style verification should use it. Lint rules
 live in `.oxlintrc.jsonc`, formatter settings in `.oxfmtrc.json`.
 
+The typecheck uses TypeScript 7 (`tsc` is the native Go compiler). `bun install`
+patches it with `@effect/tsgo` in `prepare`, so it also reports the Effect
+language service diagnostics configured in `tsconfig.json`. Effect errors fail
+the typecheck; warnings mark rules with too many existing sites to fix at once.
+TypeScript 7 has no JavaScript compiler API. The `packages/apps` build scripts
+and `e2e/check-boundary.ts` import TypeScript 5.9 as `typescript-5` for it;
+do not use that package to typecheck.
+
 ## CI
 
 `.github/workflows/ci.yml` runs on pull requests, pushes to `main` and manual

@@ -10,6 +10,7 @@ import { authorizeBrowserMcp } from "../support/mcp-oauth.ts";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { Collector, SpanQuery } from "../support/contracts.ts";
+import { withApps } from "../support/apps-release.ts";
 
 it.live("packaged desktop starts without the workspace and retains apps after restart", () =>
   Effect.scoped(
@@ -172,7 +173,7 @@ it.live("packaged desktop starts without the workspace and retains apps after re
                     files: [
                       {
                         path: "index.ts",
-                        content: `import { defineApp, defineProvider, secrets, query, object, string } from "apps";
+                        content: `import { defineApp, defineProvider, secrets, query, object, string, router } from "apps";
 import isNumber from "is-number";
 const service = defineProvider({ name: "Desktop test service", auth: {
   key: secrets({ label: "API key", fields: object({ token: string() }) }),
@@ -181,17 +182,17 @@ export const check = (token: string) => query({ input: object({}) }, async () =>
   numeric: isNumber("2"), connected: token === "synthetic-desktop-token",
 }));
 export default defineApp({ accounts: { service } }, async ({ accounts }) => ({
-  queries: { check: check(accounts.service.fields.token) },
+  tools: router({ check: check(accounts.service.fields.token) }),
 }));`,
                       },
                       {
                         path: "package.json",
                         content: JSON.stringify({
-                          dependencies: {
+                          dependencies: withApps({
                             "is-number": "7.0.0",
                             react: "19.2.0",
                             "react-dom": "19.2.0",
-                          },
+                          }),
                         }),
                       },
                       {
@@ -322,7 +323,7 @@ createRoot(root).render(<App />);`,
                 {
                   name: "execute",
                   arguments: {
-                    code: `return await tools[${JSON.stringify(appSlug)}].profiles[${JSON.stringify(profileId)}].queries.check({})`,
+                    code: `return await tools[${JSON.stringify(appSlug)}].profiles[${JSON.stringify(profileId)}].check({})`,
                   },
                 },
                 undefined,
@@ -344,7 +345,7 @@ createRoot(root).render(<App />);`,
                   authorization: `Bearer ${apiKey}`,
                   traceparent: `00-${traceId}-${randomBytes(8).toString("hex")}-01`,
                 },
-                data: { app: appId, profile: profileId, tool: "queries.check", input: {} },
+                data: { app: appId, profile: profileId, tool: "check", kind: "query", input: {} },
               }),
             );
             expect(called.status()).toBe(200);

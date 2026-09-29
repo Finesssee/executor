@@ -11,8 +11,8 @@ Use the app namespace returned with this skill. Several installed copies can sha
 these instructions while keeping separate messages and account selections.
 
 1. Discover this app's operations with `tools.search({ namespace: app.slug })`.
-2. Call `queries.listMessages({})` to read up to 100 recent messages.
-3. Call `mutations.receiveMessage({ subject })` only when the user asks to save a
+2. Call `listMessages({})` to read up to 100 recent messages.
+3. Call `receiveMessage({ subject })` only when the user asks to save a
    message. The mutation inserts a new record; repeating it inserts another one.
 
 Read [examples](references/examples.md) for the call shapes. Read that reference

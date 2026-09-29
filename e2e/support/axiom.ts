@@ -26,7 +26,23 @@ const Row = Schema.Struct({
   links: Schema.NullOr(
     Schema.Array(Schema.Struct({ trace_id: Schema.String, span_id: Schema.String })),
   ),
+  events: Schema.NullOr(
+    Schema.Array(
+      Schema.Struct({
+        name: Schema.String,
+        attributes: Schema.optionalKey(Schema.NullOr(Schema.Record(Schema.String, Schema.Json))),
+      }),
+    ),
+  ),
+  statusMessage: Schema.NullOr(Schema.String),
 });
+/** Delivered values keep their text; structured values are serialized so checks still see them. */
+const text = (values: Readonly<Record<string, Schema.Json>>) =>
+  Object.fromEntries(
+    Object.entries(values)
+      .filter(([, value]) => value !== null)
+      .map(([key, value]) => [key, typeof value === "string" ? value : JSON.stringify(value)]),
+  );
 
 /** Queries remain limited to one validated trace and the current run's time window. */
 export const axiomTraceQuery = Effect.gen(function* () {
@@ -53,7 +69,7 @@ export const axiomTraceQuery = Effect.gen(function* () {
           Option.isSome(organization) ? { "x-axiom-org-id": organization.value } : {},
         ),
         HttpClientRequest.bodyJson({
-          apl: `['${dataset}'] | where trace_id == '${id}' | project traceId=trace_id, spanId=span_id, parentSpanId=parent_span_id, operationName=name, serviceName=['service.name'], durationMs=duration/1ms, status=['status.code'], tags=['attributes.custom'], build=['resource.custom']['executor.build.id'], links, standard=pack('exception.type', column_ifexists('attributes.exception.type', dynamic(null)), 'code.file.path', column_ifexists('attributes.code.file.path', dynamic(null)), 'code.line.number', column_ifexists('attributes.code.line.number', dynamic(null)), 'code.column.number', column_ifexists('attributes.code.column.number', dynamic(null))) | take 5000`,
+          apl: `['${dataset}'] | where trace_id == '${id}' | project traceId=trace_id, spanId=span_id, parentSpanId=parent_span_id, operationName=name, serviceName=['service.name'], durationMs=duration/1ms, status=['status.code'], tags=['attributes.custom'], build=['resource.custom']['executor.build.id'], links, events=column_ifexists('events', dynamic(null)), statusMessage=column_ifexists('status.message', ''), standard=pack('exception.type', column_ifexists('attributes.exception.type', dynamic(null)), 'code.file.path', column_ifexists('attributes.code.file.path', dynamic(null)), 'code.line.number', column_ifexists('attributes.code.line.number', dynamic(null)), 'code.column.number', column_ifexists('attributes.code.column.number', dynamic(null))) | take 5000`,
           startTime: new Date(start - 60_000).toISOString(),
           endTime: new Date(now + 60_000).toISOString(),
         }),
@@ -92,15 +108,15 @@ export const axiomTraceQuery = Effect.gen(function* () {
               traceId: link.trace_id,
               spanId: link.span_id,
             })),
+            events: (row.events ?? []).map((event) => ({
+              name: event.name,
+              attributes: text(event.attributes ?? {}),
+            })),
+            ...(row.statusMessage === null || row.statusMessage === ""
+              ? {}
+              : { statusMessage: row.statusMessage }),
             tags: {
-              ...Object.fromEntries(
-                Object.entries({ ...row.tags, ...row.standard })
-                  .filter(([, value]) => value !== null)
-                  .map(([key, value]) => [
-                    key,
-                    typeof value === "string" ? value : JSON.stringify(value),
-                  ]),
-              ),
+              ...text({ ...row.tags, ...row.standard }),
               ...(row.build === null ? {} : { "executor.build.id": row.build }),
             },
           },

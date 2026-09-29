@@ -2,11 +2,12 @@
 import { cacheKey } from "@executor-js/app-cache";
 import { Effect, Schema } from "effect";
 import { GraphqlError, GraphqlToolsOptions, GraphqlToolDefinition } from "../contracts/graphql.ts";
-import type { DynamicTools } from "../contracts/dynamic-tools.ts";
+import type { DynamicRouter } from "../contracts/router.ts";
 import { catalogCache, type CatalogCacheOptions } from "./catalog-cache.ts";
 import { graphqlClientEffect, graphqlDefinitions, adaptGraphqlTool } from "./graphql.ts";
 import { protocolOperations, type OperationKinds } from "./protocol-operations.ts";
 import { nativeOperation } from "./operations.ts";
+import { routerDeclaration } from "./router.ts";
 
 /** Browsing metadata; schemas are read per tool. */
 const GraphqlToolSummary = GraphqlToolDefinition.mapFields(({ name, kind, description }) => ({
@@ -44,14 +45,13 @@ export const graphqlCatalog = (options: GraphqlCatalogOptions, kinds: OperationK
         ).pipe(
           Effect.flatMap((source) => source.discover),
           Effect.flatMap(graphqlDefinitions),
+          Effect.map((tools) => ({ tools })),
         ),
     });
     const kindOf = (tool: GraphqlToolSummary) =>
       Object.hasOwn(kinds, tool.name) ? (kinds[tool.name] ?? "mutation") : tool.kind;
-    const qualified = (tool: GraphqlToolSummary) =>
-      `${kindOf(tool) === "query" ? "queries" : "mutations"}.${tool.name}`;
     const summarize = (tool: GraphqlToolSummary) => ({
-      name: qualified(tool),
+      name: tool.name,
       description: tool.description,
       readOnly: kindOf(tool) === "query",
     });
@@ -59,27 +59,22 @@ export const graphqlCatalog = (options: GraphqlCatalogOptions, kinds: OperationK
       ...summarize(tool),
       inputSchema: tool.inputSchema,
     });
-    const selected = (name: string) =>
-      Effect.gen(function* () {
-        if (!name.startsWith("queries.") && !name.startsWith("mutations.")) return undefined;
-        const tool = yield* catalog.resolve(name.slice(name.indexOf(".") + 1));
-        return tool === undefined || qualified(tool) !== name ? undefined : tool;
-      });
-    const dynamicTools: DynamicTools = {
+    const router: DynamicRouter = {
+      kind: "dynamic",
       list: () => catalog.list().pipe(Effect.map((tools) => tools.map(describe))),
       summaries: () => catalog.summaries().pipe(Effect.map((tools) => tools.map(summarize))),
       describe: (name) =>
-        selected(name).pipe(
-          Effect.map((tool) => (tool === undefined ? undefined : describe(tool))),
-        ),
+        catalog
+          .resolve(name)
+          .pipe(Effect.map((tool) => (tool === undefined ? undefined : describe(tool)))),
       resolve: (name) =>
         Effect.gen(function* () {
-          const tool = yield* selected(name);
+          const tool = yield* catalog.resolve(name);
           if (tool === undefined) return undefined;
           const adapted = yield* adaptGraphqlTool(client, tool);
           const operations = protocolOperations({ selected: adapted }, { selected: kindOf(tool) });
-          return nativeOperation(operations.queries.selected ?? operations.mutations.selected);
+          return nativeOperation(operations.selected);
         }),
     };
-    return { dynamicTools };
+    return routerDeclaration(router);
   });

@@ -15,7 +15,7 @@ const development = Effect.gen(function* () {
   yield* Console.log(
     `Executor dev: ${settings.browserOrigin ?? server.url}\nUI hot reload is enabled.\nConnect (one use, expires in 5 minutes):\n${Redacted.value(link.url)}`,
   );
-  yield* Effect.never;
+  return yield* Effect.never;
 });
 
 NodeRuntime.runMain(Effect.scoped(development).pipe(Effect.provide(NodeServices.layer)));

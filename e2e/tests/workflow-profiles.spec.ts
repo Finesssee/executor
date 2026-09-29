@@ -8,8 +8,9 @@ import { Actors } from "../support/actors.ts";
 import { McpClient } from "../support/mcp-client.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { App } from "../support/contracts.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
-const source = `import { defineApp, mutation, query, workflow, object, string } from "apps";
+const source = `import { defineApp, mutation, query, workflow, object, string, router } from "apps";
 import { always } from "apps/operations/approval";
 const record = workflow({ input: object({ label: string() }) }, async (_ctx, input) => input.label);
 const launch = mutation({ input: object({ label: string() }), approval: always() }, async (ctx, input) => {
@@ -22,7 +23,10 @@ const runs = query({ input: object({}) }, async (ctx) =>
 const peek = query({ input: object({ run: string() }) }, async (ctx, input) => {
   try { return (await ctx.workflows.get({ run: input.run })).id; } catch { return null; }
 });
-export default defineApp({ accounts: {} }, { queries: { runs, peek }, mutations: { launch }, workflows: { record } });`;
+export default defineApp({ accounts: {} }, { tools: router({
+   runs, peek,
+   launch,
+ }), workflows: { record } });`;
 
 const Profile = Schema.Struct({ id: Schema.String });
 const Token = Schema.Struct({ key: Schema.RedactedFromValue(Schema.String), id: Schema.String });
@@ -50,7 +54,7 @@ layer(HostedLive, { excludeTestServices: true })("Workflow profiles", (it) => {
           prefix = `/api/organizations/${organization}`;
         const deployed = yield* api.request(actors.owner, "POST", `${prefix}/apps/deploy`, {
           name: `Workflow profiles ${randomUUID().slice(0, 8)}`,
-          files: [{ path: "index.ts", content: source }],
+          files: [{ path: "index.ts", content: source }, appsManifest],
         });
         expect(deployed.status, JSON.stringify(deployed.body)).toBe(200);
         const app = yield* body(App, deployed),
@@ -119,7 +123,7 @@ layer(HostedLive, { excludeTestServices: true })("Workflow profiles", (it) => {
                   client.callTool(
                     {
                       name: "execute",
-                      arguments: { code: tool("mutations.launch", { label }) },
+                      arguments: { code: tool("launch", { label }) },
                     },
                     undefined,
                     { signal },
@@ -164,14 +168,12 @@ layer(HostedLive, { excludeTestServices: true })("Workflow profiles", (it) => {
         expect((yield* runOf(bob.actor, first.run)).status).toBe(403);
 
         // Non-approval queries read through the same profile boundary.
-        expect(yield* bob.execute("Bob lists runs", "queries.runs", {})).toEqual([second.run]);
-        expect(
-          yield* bob.execute("Bob reads Alice's run", "queries.peek", { run: first.run }),
-        ).toBe(null);
-        expect(yield* alice.execute("Alice lists runs", "queries.runs", {})).toEqual([first.run]);
-        expect(
-          yield* alice.execute("Alice reads her run", "queries.peek", { run: first.run }),
-        ).toBe(first.run);
+        expect(yield* bob.execute("Bob lists runs", "runs", {})).toEqual([second.run]);
+        expect(yield* bob.execute("Bob reads Alice's run", "peek", { run: first.run })).toBe(null);
+        expect(yield* alice.execute("Alice lists runs", "runs", {})).toEqual([first.run]);
+        expect(yield* alice.execute("Alice reads her run", "peek", { run: first.run })).toBe(
+          first.run,
+        );
       }).pipe(Effect.provide(McpClient.layer)),
     ),
   );

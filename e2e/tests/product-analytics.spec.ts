@@ -10,6 +10,7 @@ import { Browser } from "../support/browser.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { Target } from "../support/platform.ts";
 import { captureBrowserAnalytics, renderBrowserReplay } from "../support/product-analytics.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const Event = Schema.Struct({
   event: Schema.String,
@@ -198,14 +199,15 @@ layer(HostedLive, { excludeTestServices: true })("Product analytics", (it) => {
               {
                 path: "index.ts",
                 content: `
-import { defineApp, query, object, string } from "apps";
-export default defineApp({ accounts: {} }, async () => ({ queries: {
-  echo: query({ input: object({ message: string() }) }, async (_, input) => {
+import { defineApp, query, object, string, router } from "apps";
+export default defineApp({ accounts: {} }, async () => ({ tools: router({
+   echo: query({ input: object({ message: string() }) }, async (_, input) => {
     if (input.message === "PRIVATE_TOOL_FAILURE") throw new Error("PRIVATE_TOOL_ERROR");
     return { message: input.message, result: "PRIVATE_TOOL_RESULT" };
-  })
-} }));`,
+  }),
+ }) }));`,
               },
+              appsManifest,
             ],
           },
         );

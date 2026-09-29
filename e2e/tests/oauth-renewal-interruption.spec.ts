@@ -20,6 +20,7 @@ import { oauthSetupIssuer } from "../support/oauth-setup-issuer.ts";
 import { createProfile } from "../support/profiles.ts";
 import { serverControl } from "../support/server-control.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const AppProvider = Schema.Struct({ id: Schema.String });
 const SetupStatus = Schema.Struct({ status: Schema.String });
@@ -96,14 +97,15 @@ const rotatingAccount = (replacedRefreshTokens: "refused" | "accepted") =>
       files: [
         {
           path: "index.ts",
-          content: `import { defineApp, defineProvider, oauth2, query, object } from "apps";
+          content: `import { defineApp, defineProvider, oauth2, query, object, router } from "apps";
 const service = defineProvider({ name: ${JSON.stringify(name)}, auth: { oauth: oauth2({ discover: ${JSON.stringify(`${issuer.origin}/mcp`)} }) } });
 export default defineApp({ accounts: { service } }, async ({ accounts }) => ({
-  queries: {
+  tools: router({
     read: query({ input: object({}) }, async ({ fetch }) => ({ service: await (await fetch(${JSON.stringify(`${issuer.origin}/resource`)}, { headers: { authorization: "Bearer " + accounts.service.fields.access_token } })).json() })),
-  },
+  }),
 }));`,
         },
+        appsManifest,
       ],
     });
     expect(deployed.status, JSON.stringify(deployed.body)).toBe(200);
@@ -157,7 +159,7 @@ export default defineApp({ accounts: { service } }, async ({ accounts }) => ({
 
     const read = api.request(actors.owner, "POST", `${appPath}/tools/call`, {
       profile: profile.id,
-      tool: "queries.read",
+      tool: "read",
       input: {},
     });
     const metrics = issuer.metrics;

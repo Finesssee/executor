@@ -15,7 +15,9 @@ import { Target } from "../support/platform.ts";
 import { oauthSetupIssuer } from "../support/oauth-setup-issuer.ts";
 import { oauthMcpAppFiles } from "../support/authored-templates.ts";
 import { createProfile } from "../support/profiles.ts";
+import { nameConnectedAccount } from "../support/name-account.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const AppProvider = Schema.Struct({ id: Schema.String });
 const Redirect = Schema.Struct({
@@ -48,15 +50,16 @@ layer(HostedLive, { excludeTestServices: true })("OAuth completion reasons", (it
           files: [
             {
               path: "index.ts",
-              content: `import { defineApp, defineProvider, oauth2 } from "apps";
+              content: `import { defineApp, defineProvider, oauth2, router } from "apps";
 const service=defineProvider({name:"Declared issuer",auth:{oauth:oauth2(${JSON.stringify({
                 authorizationUrl: `${signInOrigin}/authorize`,
                 tokenUrl: `${issuer.origin}/token`,
                 issuer: signInOrigin,
                 scopes: ["read"],
               })})}});
-export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
+export default defineApp({accounts:{service}},async()=>({tools: router({})}));`,
             },
+            appsManifest,
           ],
         });
         expect(deployed.status).toBe(200);
@@ -210,9 +213,8 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
         yield* browser.use("Connect with a client the service accepts", (page) => {
           const dialog = page.getByRole("dialog");
           return page
-            .getByRole("button", { name: "Add Declared issuer account", exact: true })
+            .getByRole("button", { name: "Connect new account", exact: true })
             .click()
-            .then(() => dialog.getByLabel("Account name", { exact: true }).fill("Issuer account"))
             .then(() => dialog.getByLabel("Client ID", { exact: true }).fill(client.clientId))
             .then(() => dialog.getByLabel(/^Client secret/).fill(client.clientSecret))
             .then(() =>
@@ -259,17 +261,16 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
             page.goto(`/org/${actors.organization.slug}/apps/${registeredApp.id}?view=accounts`),
           );
         const connectInDialog = (registeredApp: { readonly name: string }, label: string) =>
-          browser.use(`Connect ${label}`, (page) => {
-            const dialog = page.getByRole("dialog");
-            return dialog
-              .getByLabel("Account name", { exact: true })
-              .fill(label)
-              .then(() =>
-                dialog
-                  .getByRole("button", { name: `Connect ${registeredApp.name}`, exact: true })
-                  .click(),
-              );
-          });
+          browser.use(`Connect ${label}`, (page) =>
+            page
+              .getByRole("dialog")
+              .getByRole("button", { name: `Connect ${registeredApp.name}`, exact: true })
+              .click(),
+          );
+        const nameAccount = (label: string) =>
+          browser.use(`Name the ${label} account after it connects`, (page) =>
+            nameConnectedAccount(page, label),
+          );
         const addAccount = (
           registeredApp: { readonly id: string; readonly name: string },
           label: string,
@@ -277,9 +278,7 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
           Effect.gen(function* () {
             yield* openAccounts(registeredApp);
             yield* browser.use("Add an account", (page) =>
-              page
-                .getByRole("button", { name: `Add ${registeredApp.name} account`, exact: true })
-                .click(),
+              page.getByRole("button", { name: "Connect new account", exact: true }).click(),
             );
             yield* connectInDialog(registeredApp, label);
           });
@@ -300,6 +299,7 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
         yield* issuer.configure({ callbackIssuer: null, tokenError: null });
         const reusedApp = yield* deployRegistered;
         yield* addAccount(reusedApp, "First");
+        yield* nameAccount("First");
         yield* accounts("1 account");
         // The next sign-in reuses the saved registration, which the service now refuses.
         yield* issuer.configure({ tokenError: { status: 401, body: { error: "invalid_client" } } });
@@ -321,6 +321,7 @@ export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
           page.getByRole("link", { name: "Try again", exact: true }).click(),
         );
         yield* connectInDialog(reusedApp, "Second");
+        yield* nameAccount("Second");
         yield* accounts("2 accounts");
         // The rejected registration was discarded, so the retry registered a new client.
         expect((yield* issuer.metrics).registrations).toBe(registrations + 1);

@@ -21,6 +21,7 @@ import {
   revokeClientGrants,
 } from "../support/mcp-connections.ts";
 import { Target } from "../support/platform.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const Search = Schema.Struct({
   items: Schema.Array(Schema.Struct({ path: Schema.String })),
@@ -136,8 +137,8 @@ layer(HostedLive, { excludeTestServices: true })("Scoped MCP connections", (it) 
             const paths = (yield* Schema.decodeUnknownEffect(Search)(
               found.execution.value,
             )).items.map((item) => item.path);
-            expect(paths).toContain(`${appPath}.queries.read`);
-            expect(paths).not.toContain(`${appPath}.mutations.write`);
+            expect(paths).toContain(`${appPath}.read`);
+            expect(paths).not.toContain(`${appPath}.write`);
             const hiddenSearch = yield* scoped(
               "Search for an excluded app",
               `return await tools.search({query: ${JSON.stringify(hidden.name)}, limit: 20})`,
@@ -147,14 +148,11 @@ layer(HostedLive, { excludeTestServices: true })("Scoped MCP connections", (it) 
             ).toEqual([]);
             const [read, write, excluded] = yield* Effect.all(
               [
-                scoped("Call the read tool", `return await ${appPath}.queries.read({})`),
-                scoped(
-                  "Call the write tool",
-                  `return await ${appPath}.mutations.write({message: "denied"})`,
-                ),
+                scoped("Call the read tool", `return await ${appPath}.read({})`),
+                scoped("Call the write tool", `return await ${appPath}.write({message: "denied"})`),
                 scoped(
                   "Call an excluded app",
-                  `return await ${hiddenPath}.mutations.echo({message: "denied"})`,
+                  `return await ${hiddenPath}.echo({message: "denied"})`,
                 ),
               ],
               { concurrency: 3 },
@@ -172,13 +170,10 @@ layer(HostedLive, { excludeTestServices: true })("Scoped MCP connections", (it) 
             );
             const [write, other] = yield* Effect.all(
               [
-                unscoped(
-                  "Full access writes",
-                  `return await ${appPath}.mutations.write({message: "ok"})`,
-                ),
+                unscoped("Full access writes", `return await ${appPath}.write({message: "ok"})`),
                 unscoped(
                   "Full access uses other apps",
-                  `return await ${hiddenPath}.mutations.echo({message: "ok"})`,
+                  `return await ${hiddenPath}.echo({message: "ok"})`,
                 ),
               ],
               { concurrency: 2 },
@@ -208,7 +203,7 @@ layer(HostedLive, { excludeTestServices: true })("Scoped MCP connections", (it) 
                   {
                     app: app.id,
                     runsAs: [{ kind: "app" }],
-                    tools: { kind: "selected", names: ["mutations.write"] },
+                    tools: { kind: "selected", names: ["write"] },
                   },
                 ],
               },
@@ -216,10 +211,10 @@ layer(HostedLive, { excludeTestServices: true })("Scoped MCP connections", (it) 
             expect(updated.status, JSON.stringify(updated.body)).toBe(200);
             const [read, write] = yield* Effect.all(
               [
-                scoped("Read is no longer selected", `return await ${appPath}.queries.read({})`),
+                scoped("Read is no longer selected", `return await ${appPath}.read({})`),
                 scoped(
                   "The selected write tool runs",
-                  `return await ${appPath}.mutations.write({message: "selected"})`,
+                  `return await ${appPath}.write({message: "selected"})`,
                 ),
               ],
               { concurrency: 2 },
@@ -239,10 +234,7 @@ layer(HostedLive, { excludeTestServices: true })("Scoped MCP connections", (it) 
               )).status,
             ).toBe(200);
             const after = yield* Effect.exit(
-              scoped(
-                "Call after revocation",
-                `return await ${appPath}.mutations.write({message: "x"})`,
-              ),
+              scoped("Call after revocation", `return await ${appPath}.write({message: "x"})`),
             );
             expect(Exit.isFailure(after)).toBe(true);
             expect(yield* oauth.refreshStatus(grant)).not.toBe(200);
@@ -272,10 +264,11 @@ layer(HostedLive, { excludeTestServices: true })("Scoped MCP connections", (it) 
           files: [
             {
               path: "index.ts",
-              content: `import { defineApp, defineProvider, secrets, query, object, string } from "apps";
+              content: `import { defineApp, defineProvider, secrets, query, object, string, router } from "apps";
 const service = defineProvider({ name: "Connection profile fixture", auth: { key: secrets({ label: "Key", fields: object({ token: string() }) }) } });
-export default defineApp({ accounts: { service } }, async () => ({ queries: { who: query({ input: object({}) }, async ctx => ctx.accounts.service.fields.token) } }));`,
+export default defineApp({ accounts: { service } }, async () => ({ tools: router({ who: query({ input: object({}) }, async ctx => ctx.accounts.service.fields.token) }) }));`,
             },
+            appsManifest,
           ],
         });
         expect(deployed.status, JSON.stringify(deployed.body)).toBe(200);
@@ -341,7 +334,7 @@ export default defineApp({ accounts: { service } }, async () => ({ queries: { wh
         expect(listed.execution).toEqual({ ok: true, value: 1 });
         const called = yield* run(
           "The selected profile runs",
-          `const [only] = Object.keys(${appPath}.profiles); return await ${appPath}.profiles[only].queries.who({})`,
+          `const [only] = Object.keys(${appPath}.profiles); return await ${appPath}.profiles[only].who({})`,
         );
         expect(called.execution).toEqual({ ok: true, value: "work" });
         // Choosing a bare account saves a profile for that account, then references it.
@@ -371,7 +364,7 @@ export default defineApp({ accounts: { service } }, async () => ({ queries: { wh
         );
         const personalCall = yield* bareRun(
           "The new profile runs as the chosen account",
-          `const [only] = Object.keys(${appPath}.profiles); return await ${appPath}.profiles[only].queries.who({})`,
+          `const [only] = Object.keys(${appPath}.profiles); return await ${appPath}.profiles[only].who({})`,
         );
         expect(personalCall.execution).toEqual({ ok: true, value: "personal" });
       }).pipe(Effect.provide(McpClient.layer)),

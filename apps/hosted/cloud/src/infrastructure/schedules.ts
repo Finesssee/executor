@@ -14,14 +14,17 @@ import { Config, Clock, Effect, Layer, Schema, Semaphore } from "effect";
 import { HostedExecutor, ScheduledAuthority, ScheduleWakeup } from "@executor-js/hosted-server";
 import { defaultScheduleWorkerOptions } from "@executor-js/sdk/scheduling";
 import { cloudExecutor } from "./executor.ts";
-import { AppDataSupervisor, AppDataSupervisorLive } from "./app-data.ts";
+import { appDataSupervisors } from "./app-data.ts";
 import { cloudAuthDatabase } from "./auth-database.ts";
 import { cloudTelemetry } from "./telemetry.ts";
 
 const makeScheduleCoordinator = Effect.gen(function* () {
   const analytics = yield* cloudAnalytics;
   const report = yield* cloudSentry;
-  const resources = yield* cloudExecutor(yield* AppDataSupervisor, yield* cloudArtifactsTokensLive);
+  const resources = yield* cloudExecutor(
+    yield* appDataSupervisors,
+    yield* cloudArtifactsTokensLive,
+  );
   const concurrency = yield* Config.Number("EXECUTOR_SCHEDULE_CONCURRENCY").pipe(
     Config.withDefault(defaultScheduleWorkerOptions.concurrency),
     Effect.flatMap(Schema.decodeUnknownEffect(Schema.Int.check(Schema.isGreaterThan(0)))),
@@ -153,10 +156,7 @@ const makeScheduleCoordinator = Effect.gen(function* () {
         }),
     };
   });
-}).pipe(
-  Effect.provide(Layer.mergeAll(AppDataSupervisorLive, cloudAuthDatabase, cloudTelemetry)),
-  Effect.orDie,
-);
+}).pipe(Effect.provide(Layer.mergeAll(cloudAuthDatabase, cloudTelemetry)), Effect.orDie);
 
 /** Only this object owns the cloud runner identity; restart recovery never claims another live runner. */
 export class ScheduleCoordinator extends Cloudflare.DurableObject<

@@ -1,5 +1,6 @@
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
-import { LoginFrame, LoginLegalFooter, type LoginProps } from "@executor-js/hosted-web/pages/login";
+import { LoginFrame } from "@executor-js/hosted-web/pages/login-frame";
+import { LoginLegalFooter, type LoginProps } from "@executor-js/hosted-web/pages/login";
 import { AuthFailed } from "@executor-js/hosted-web/contracts/auth";
 import { Button } from "@executor-js/ui/components/button";
 import { Input } from "@executor-js/ui/components/input";

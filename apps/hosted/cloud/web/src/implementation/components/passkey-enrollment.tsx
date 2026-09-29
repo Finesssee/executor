@@ -1,4 +1,4 @@
-import { LoginFrame } from "@executor-js/hosted-web/pages/login";
+import { LoginFrame } from "@executor-js/hosted-web/pages/login-frame";
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { Button } from "@executor-js/ui/components/button";
 import { Exit } from "effect";

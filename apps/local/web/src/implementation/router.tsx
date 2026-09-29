@@ -12,12 +12,13 @@ import { serverDocument } from "./document.ts";
 /**
  * Browser entry credentials live in the URL fragment or query. Consume and erase them before the
  * router reads the location. They are applied after hydration, because the server rendered the
- * page without them; see `BrowserEntry`.
+ * page without them; see `BrowserEntry`. A connection link's OAuth return also arrives at the
+ * dashboard callback path, so the connection reader claims its own attempt first.
  */
 const readBrowserEntry = () => ({
   pairingToken: Effect.runSync(readPairingToken),
-  oauthCallback: Effect.runSync(readOAuthCallback),
   connection: Effect.runSync(readAccountConnection),
+  oauthCallback: Effect.runSync(readOAuthCallback),
 });
 export type BrowserEntryValues = ReturnType<typeof readBrowserEntry>;
 

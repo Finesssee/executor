@@ -6,10 +6,12 @@ import {
   WorkflowFailure,
   WorkflowRun,
   WorkflowRunId,
+  WorkflowRunFailure,
   WorkflowRunPage,
   WorkflowValue,
   type WorkflowHostControls,
 } from "apps/contracts";
+import { workflowFailureDetail } from "../contracts/workflow-errors.ts";
 import { WorkflowHost, type WorkflowRuntime } from "../contracts/workflow-runtime.ts";
 import {
   StartWorkflow,
@@ -52,6 +54,8 @@ const Payload = Schema.Struct({
   input: WorkflowValue,
   request: WorkflowValue,
   output: Schema.optionalKey(WorkflowValue),
+  /** The failing step and app error; encrypted with the run's other authored values. */
+  failure: Schema.optionalKey(WorkflowRunFailure),
 });
 const terminal = (row: typeof StoredRun.Type) =>
   row.status === "complete" || row.status === "errored" || row.status === "terminated";
@@ -123,7 +127,12 @@ export const makeWorkflowRuns = (
         createdAt: row.createdAt.toISOString(),
         status: row.status,
         ...(row.status === "complete" ? { output: payload.output } : {}),
-        ...(row.status === "errored" ? { error: row.failure } : {}),
+        ...(row.status === "errored"
+          ? {
+              error: row.failure,
+              ...(payload.failure === undefined ? {} : { failure: payload.failure }),
+            }
+          : {}),
       }).pipe(Effect.mapError(() => failure("engine")));
     });
   const finish: WorkflowHost["finish"] = (run, result) =>
@@ -139,6 +148,7 @@ export const makeWorkflowRuns = (
               input: payload.input,
               request: payload.request,
               ...(result.ok ? { output: result.output } : {}),
+              ...(!result.ok && result.detail !== undefined ? { failure: result.detail } : {}),
             }),
           );
           yield* query(() =>
@@ -228,7 +238,8 @@ export const makeWorkflowRuns = (
             build: current.build,
             ...bound,
             deadline,
-            tool: `${input.kind === "query" ? "queries" : "mutations"}.${input.name}`,
+            tool: input.name,
+            kind: input.kind,
             input: input.input,
             ...(input.kind === "mutation"
               ? {
@@ -256,6 +267,26 @@ export const makeWorkflowRuns = (
               HostToolBlocked: () => Effect.fail(failure("approval")),
               HostInputInvalid: () => Effect.fail(failure("input")),
               HostToolNotFound: () => Effect.fail(failure("operation")),
+              HostKindMismatch: () => Effect.fail(failure("operation")),
+              HostOperationFailed: ({ errorName, message }) =>
+                Effect.fail(
+                  new WorkflowFailure({
+                    reason: "execution",
+                    retryable: true,
+                    ...(errorName === undefined ? {} : { errorName }),
+                    ...(message.length === 0 ? {} : { message }),
+                  }),
+                ),
+              // The same step exceeds the same budget again, so retrying it cannot succeed.
+              DatabaseLimitExceeded: (error) =>
+                Effect.fail(
+                  new WorkflowFailure({
+                    reason: "execution",
+                    retryable: false,
+                    errorName: error._tag,
+                    message: error.message,
+                  }),
+                ),
             }),
           );
         return yield* Schema.decodeUnknownEffect(WorkflowValue)(result).pipe(
@@ -301,7 +332,12 @@ export const makeWorkflowRuns = (
       if (Result.isFailure(result)) {
         if (result.failure.reason === "engine" && result.failure.retryable)
           return yield* result.failure;
-        yield* finish(run, { ok: false, error: result.failure.reason });
+        const detail = workflowFailureDetail(result.failure);
+        yield* finish(run, {
+          ok: false,
+          error: result.failure.reason,
+          ...(detail === undefined ? {} : { detail }),
+        });
         return yield* result.failure;
       }
       yield* finish(run, { ok: true, output: result.success });

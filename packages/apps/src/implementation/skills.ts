@@ -325,9 +325,10 @@ const cachedCatalog = (
         schema: AppSkillSource,
         summary: { schema: AppSkillMetadata, of: ({ files: _files, ...metadata }) => metadata },
         load: (context) =>
-          context === undefined
+          (context === undefined
             ? load(options, options.cache)
-            : load({ fetch: options.fetch, signal: context.signal }, context.cache),
+            : load({ fetch: options.fetch, signal: context.signal }, context.cache)
+          ).pipe(Effect.map((tools) => ({ tools }))),
       }).pipe(
         Effect.flatMap((catalog) => catalog.list()),
         Effect.mapError((error) =>

@@ -1,6 +1,6 @@
 /** The modal renders precise server-owned readiness without offering another app's controls. */
 import { expect, layer } from "@effect/vitest";
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import { randomUUID } from "node:crypto";
 import { Actors } from "../support/actors.ts";
 import { Api, body } from "../support/api.ts";
@@ -11,6 +11,12 @@ import { publishingPreview } from "../support/publishing-preview.ts";
 import { openThroughBrowser } from "../support/in-app-navigation.ts";
 import { holdQuery } from "../support/query-transition.ts";
 import { scenarios } from "../test-plan.ts";
+import { withApps } from "../support/apps-release.ts";
+
+const WorkingSource = Schema.Struct({
+  revision: Schema.Struct({ commit: Schema.String }),
+  files: Schema.Array(Schema.Struct({ path: Schema.String, content: Schema.String })),
+});
 
 layer(HostedLive, { excludeTestServices: true })("Publishing dialog", (it) => {
   it.effect(scenarios.publishingDialog.title, (context) =>
@@ -29,7 +35,10 @@ layer(HostedLive, { excludeTestServices: true })("Publishing dialog", (it) => {
               content:
                 'import {defineApp} from "apps"; export default defineApp({accounts:{}},{});',
             },
-            { path: "package.json", content: '{"name":"axiom"}' },
+            {
+              path: "package.json",
+              content: JSON.stringify({ name: "axiom", dependencies: withApps() }),
+            },
           ],
         });
         expect(response.status).toBe(200);
@@ -40,6 +49,9 @@ layer(HostedLive, { excludeTestServices: true })("Publishing dialog", (it) => {
             .pipe(Effect.asVoid, Effect.orDie),
         );
         yield* browser.login(actors.owner);
+        yield* browser.use("Allow clipboard access in the isolated browser", (page) =>
+          page.context().grantPermissions(["clipboard-read", "clipboard-write"]),
+        );
         const suggestedName = `@${actors.organization.slug}/axiom`;
         for (const fixture of [
           { reason: "unscoped-name", name: "axiom", title: "Add your publishing handle" },
@@ -49,7 +61,7 @@ layer(HostedLive, { excludeTestServices: true })("Publishing dialog", (it) => {
           {
             reason: "forbidden-scope",
             name: "@original/axiom",
-            title: "Use your own publishing handle",
+            title: "This name uses another publishing handle",
           },
           { reason: "name-taken", name: suggestedName, title: "Choose a different public name" },
         ] as const) {
@@ -135,12 +147,107 @@ layer(HostedLive, { excludeTestServices: true })("Publishing dialog", (it) => {
                   page.setViewportSize({ width: 1440, height: 960 }),
                 );
               }
+              if (fixture.reason === "invalid-json")
+                expect(
+                  yield* browser.use("A name change cannot repair invalid JSON", (page) =>
+                    page.getByRole("button", { name: "Rename and continue", exact: true }).count(),
+                  ),
+                ).toBe(0);
+              else
+                yield* browser.use("Offer the suggested rename", (page) =>
+                  page
+                    .getByRole("button", { name: "Rename and continue", exact: true })
+                    .and(page.locator(":enabled"))
+                    .waitFor(),
+                );
+              if (fixture.reason === "forbidden-scope" || fixture.reason === "invalid-json") {
+                yield* browser.use("Copy the prompt for an agent", (page) =>
+                  page.getByRole("button", { name: "Copy prompt for your agent" }).click(),
+                );
+                const prompt = yield* browser.use("Read the copied prompt", (page) =>
+                  page.evaluate(() => navigator.clipboard.readText()),
+                );
+                expect(prompt).toContain(`The Executor app "${app.name}" (${app.id})`);
+                expect(prompt).toContain(
+                  fixture.reason === "invalid-json"
+                    ? "Repair package.json so it is a valid JSON object"
+                    : `Set "name" in package.json to "${suggestedName}"`,
+                );
+                expect(prompt).toContain("Don't deploy or publish the app.");
+              }
+              if (fixture.reason === "forbidden-scope") {
+                yield* browser.use("Name both handles", (page) =>
+                  page
+                    .getByRole("alert")
+                    .getByText(
+                      `Apps from this organization are published under @${actors.organization.slug}. The name in package.json starts with @original, which this organization cannot publish under.`,
+                      { exact: true },
+                    )
+                    .waitFor(),
+                );
+                yield* browser.checkpoint("Another handle names both handles and offers a rename");
+              }
               yield* browser.use("Close the repair message", (page) =>
-                page.getByRole("button", { name: "Done", exact: true }).click(),
+                page
+                  .getByRole("button", {
+                    name: fixture.reason === "invalid-json" ? "OK" : "Cancel",
+                    exact: true,
+                  })
+                  .click(),
               );
             }),
           );
         }
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const opened = yield* api.request(
+              actors.owner,
+              "GET",
+              `${prefix}/apps/${app.id}/workspace`,
+            );
+            expect(opened.status).toBe(200);
+            const initial = yield* body(WorkingSource, opened);
+            yield* publishingPreview(app.id, (display) =>
+              display.revision.commit === initial.revision.commit
+                ? {
+                    status: "blocked",
+                    issue: { _tag: "PublicationIssue", reason: "unscoped-name", name: "axiom" },
+                    suggestedName,
+                  }
+                : { status: "ready", manifest: { name: suggestedName } },
+            );
+            yield* openThroughBrowser(
+              "Open the app whose package needs a handle",
+              `/org/${actors.organization.slug}/apps/${app.id}`,
+            );
+            yield* browser.use("Open Publish for the saved package", (page) =>
+              page.getByRole("button", { name: "Publish", exact: true }).click(),
+            );
+            yield* browser.use("Rename from the dialog", (page) =>
+              page.getByRole("button", { name: "Rename and continue", exact: true }).click(),
+            );
+            yield* browser.use("The dialog reviews the renamed package", (page) =>
+              page.getByRole("button", { name: "Publish app", exact: true }).waitFor(),
+            );
+            yield* browser.use("The listing shows the new name", (page) =>
+              page.getByRole("dialog").getByText(suggestedName, { exact: true }).waitFor(),
+            );
+            yield* browser.checkpoint("Renamed package is ready to publish");
+            const saved = yield* body(
+              WorkingSource,
+              yield* api.request(actors.owner, "GET", `${prefix}/apps/${app.id}/workspace`),
+            );
+            expect(saved.revision.commit).not.toBe(initial.revision.commit);
+            expect(
+              Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json))(
+                saved.files.find((file) => file.path === "package.json")?.content,
+              ),
+            ).toEqual({ name: suggestedName, dependencies: withApps() });
+            yield* browser.use("Leave the renamed package unpublished", (page) =>
+              page.getByRole("button", { name: "Cancel", exact: true }).click(),
+            );
+          }),
+        );
         yield* Effect.scoped(
           Effect.gen(function* () {
             yield* publishingPreview(app.id, {

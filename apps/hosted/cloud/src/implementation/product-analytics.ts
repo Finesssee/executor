@@ -17,7 +17,9 @@ import {
 import { CurrentRuntimeContext } from "alchemy/RuntimeContext";
 import { Clock, Context, Effect, Exit, Option, Redacted, Schema } from "effect";
 import {
+  Cookies,
   FetchHttpClient,
+  HttpBody,
   HttpClient,
   HttpClientRequest,
   HttpServerRequest,
@@ -361,10 +363,10 @@ export const withExecutorAnalytics = (executor: Executor): Executor => ({
 
 /** Fixed upstreams and an explicit header allowlist prevent forwarding product credentials. */
 export const postHogUpstream = (
-  request: Request,
+  request: HttpServerRequest.HttpServerRequest,
   config: Pick<Settings, "host" | "path">,
-): Request | undefined => {
-  const url = new URL(request.url);
+): HttpClientRequest.HttpClientRequest | undefined => {
+  const url = new URL(request.url, "https://posthog.internal");
   if (!url.pathname.startsWith(`${config.path}/`)) return undefined;
   const path = url.pathname.slice(config.path.length);
   if (
@@ -378,16 +380,16 @@ export const postHogUpstream = (
     upstream.hostname = upstream.hostname.replace(".i.posthog.com", "-assets.i.posthog.com");
   upstream.pathname = path === "/push" ? "/e/" : path;
   upstream.search = path === "/push" ? "?ip=0" : url.search;
-  const headers = new Headers();
+  const headers: Record<string, string> = {};
   for (const name of ["content-type", "content-encoding", "accept", "user-agent"]) {
-    const value = request.headers.get(name);
-    if (value !== null) headers.set(name, value);
+    const value = request.headers[name];
+    if (value !== undefined) headers[name] = value;
   }
-  return new Request(upstream, {
-    method: request.method,
+  return HttpClientRequest.make(request.method)(upstream, {
     headers,
-    ...(request.body ? { body: request.body, duplex: "half" } : {}),
-    redirect: "manual",
+    ...(request.method === "POST"
+      ? { body: HttpBody.stream(request.stream, headers["content-type"]) }
+      : {}),
   });
 };
 
@@ -399,18 +401,20 @@ const postHogProxy = (settings: Effect.Effect<Settings | undefined>) =>
     const request = yield* HttpServerRequest.HttpServerRequest;
     if (request.method !== "GET" && request.method !== "POST" && request.method !== "OPTIONS")
       return HttpServerResponse.empty({ status: 405 });
-    const web = yield* HttpServerRequest.toWeb(request).pipe(Effect.orDie);
-    const upstream = postHogUpstream(web, config);
+    const upstream = postHogUpstream(request, config);
     if (!upstream) return HttpServerResponse.empty({ status: 404 });
-    const response = yield* Effect.tryPromise({
-      try: (signal) => fetch(upstream, { signal }),
-      catch: () => new Error("PostHog proxy failed"),
-    }).pipe(Effect.timeout("10 seconds"), Effect.option);
+    const response = yield* HttpClient.execute(upstream).pipe(
+      // PostHog is a third party: no client span or trace headers leave with the request.
+      Effect.provideService(HttpClient.TracerDisabledWhen, () => true),
+      Effect.provideService(HttpClient.TracerPropagationEnabled, false),
+      Effect.provideService(FetchHttpClient.RequestInit, { redirect: "manual" }),
+      Effect.provide(FetchHttpClient.layer),
+      Effect.timeout("10 seconds"),
+      Effect.option,
+    );
     if (Option.isNone(response)) return HttpServerResponse.empty({ status: 502 });
-    const headers = new Headers(response.value.headers);
-    headers.delete("set-cookie");
-    return HttpServerResponse.fromWeb(
-      new Response(response.value.body, { status: response.value.status, headers }),
+    return HttpServerResponse.fromClientResponse(response.value).pipe(
+      HttpServerResponse.replaceCookies(Cookies.empty),
     );
   });
 

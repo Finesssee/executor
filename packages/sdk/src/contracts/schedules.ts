@@ -14,6 +14,7 @@ import {
 } from "./shared.ts";
 import { AppNotDeployed, AppNotFound, AccountRequired, AccountSelectionInvalid } from "./apps.ts";
 import { AccountNotFound } from "./account.ts";
+import { AccountId } from "./shared.ts";
 import { DeploymentNotFound } from "./deployment.ts";
 import { OAuthReconnectRequired, OAuthRenewalFailed } from "./oauth.ts";
 import { CredentialsError } from "./shared.ts";
@@ -53,6 +54,12 @@ export const ScheduleSettings = Schema.Struct({
   nextAt: Schema.NullOr(Schema.Date),
   activeRun: Schema.NullOr(ScheduledRunId),
   revision: Schema.String,
+  /**
+   * Read-only state, never stored: an account this profile selects must reconnect before the
+   * schedule can run. Its occurrences are skipped without running until the account reconnects,
+   * then the schedule resumes on its own.
+   */
+  reconnectAccount: Schema.optionalKey(AccountId),
 }).check(Schema.makeFilter((value) => !value.enabled || value.nextAt !== null));
 export type ScheduleSettings = typeof ScheduleSettings.Type;
 /** Discovery remains account-dependent; a missing settings row means paused. */

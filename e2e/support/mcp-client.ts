@@ -42,6 +42,7 @@ const make = Effect.gen(function* () {
           });
         // Record methods, revisions and timing only. OAuth headers and tool arguments are excluded.
         const observedFetch: typeof fetch = (input, init) =>
+          // oxlint-disable-next-line executor/no-manual-effect-runtime-in-tests -- the MCP SDK transport takes a Promise-returning fetch
           Effect.runPromise(
             Effect.gen(function* () {
               const request = new Request(input, init);

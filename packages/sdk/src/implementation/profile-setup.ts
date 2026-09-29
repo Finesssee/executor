@@ -13,6 +13,7 @@ import { query, transaction, type Query } from "./database.ts";
 import { lockApp } from "./apps.ts";
 import { storedProfile } from "./profiles.ts";
 import type { makeProfiles } from "./profiles.ts";
+import type { makeTools } from "./tools.ts";
 
 const canonical = (value: Json): string =>
   Array.isArray(value)
@@ -33,6 +34,8 @@ export const makeProfileSetup = (
     readonly runs: Executor["apps"]["workflowRuns"];
     /** Evaluated now, never reused: reconciliation changes upstream registrations. */
     readonly webhookDefinitions: Executor["webhooks"]["definitions"];
+    /** Stored-state check for a selected account whose sign-in must reconnect. */
+    readonly accountNeedingReconnect: ReturnType<typeof makeTools>["accountNeedingReconnect"];
   },
 ) => {
   const now = Clock.currentTimeMillis;
@@ -362,8 +365,34 @@ export const makeProfileSetup = (
                   limit: limit - intent.length,
                 }),
               );
+        // Setup that failed on its accounts cannot succeed while one of them must reconnect: every
+        // attempt would evaluate the app and repeat its webhook registrations only to fail again.
+        // Wait for the reconnect instead, checking stored state once per retry delay. Any other
+        // problem is left to reconciliation, which records it.
+        const ready = yield* Effect.filter(retries, (row) =>
+          row.failure !== "accounts" || row.lease !== null
+            ? Effect.succeed(true)
+            : resources.accountNeedingReconnect({ app: row.app, profile: row.id }).pipe(
+                Effect.catch(() => Effect.succeed(undefined)),
+                Effect.flatMap((account) =>
+                  account === undefined
+                    ? Effect.succeed(true)
+                    : query(() =>
+                        db.updateMany("profiles", {
+                          where: (b) =>
+                            b.and(
+                              b("id", "=", row.id),
+                              b("lease", "is", null),
+                              b("leaseUntil", "=", row.leaseUntil),
+                            ),
+                          set: { leaseUntil: new Date(time.getTime() + 30_000) },
+                        }),
+                      ).pipe(Effect.as(false)),
+                ),
+              ),
+        );
         const reconciled = yield* Effect.forEach(
-          [...intent, ...retries],
+          [...intent, ...ready],
           (row) =>
             reconcile({ app: row.app, profile: row.id }, true).pipe(
               Effect.as(true),

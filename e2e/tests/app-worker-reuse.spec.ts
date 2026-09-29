@@ -13,6 +13,7 @@ import { HostedLive, withHostedCase } from "../support/case.ts";
 import { Resource } from "../support/contracts.ts";
 import { oauthSetupIssuer } from "../support/oauth-setup-issuer.ts";
 import { appBuildLoads, latestRequestBuildLoads, unreadableBuild } from "../support/build-loads.ts";
+import { Telemetry } from "../support/evidence.ts";
 import { Target } from "../support/platform.ts";
 import { createProfile, selectProfileAccounts } from "../support/profiles.ts";
 import {
@@ -27,6 +28,7 @@ import {
   RunObservation,
 } from "../support/worker-observer.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 /** Token renewals and workflow runs, each a single request to the product. */
 const rounds = 50;
@@ -35,6 +37,7 @@ const rotations = 25;
 /** Serial, alternating tool calls and workflow runs per account; two accounts run concurrently. */
 const interleaved = 16;
 const App = Schema.Struct({ id: Schema.String });
+const Viewer = Schema.Struct({ userId: Schema.String });
 const SetupStatus = Schema.Struct({ status: Schema.String });
 const SignIn = Schema.Struct({ authorizationUrl: Schema.String });
 const Run = Schema.Struct({
@@ -79,7 +82,7 @@ const scenario = Effect.gen(function* () {
         `${prefix}/apps/${app}/tools/call`,
         {
           profile,
-          tool: "queries.probe",
+          tool: "probe",
           input: {},
         },
       );
@@ -100,6 +103,7 @@ const keyApp = (options: { readonly database: boolean; readonly resource: string
     const name = `Worker reuse ${randomUUID().slice(0, 8)}`;
     const app = yield* deploy(name, [
       { path: "index.ts", content: observerApp({ name, ...options }) },
+      appsManifest,
     ]);
     const path = `${prefix}/apps/${app.id}`;
     const submit = (connection: string, token: string) =>
@@ -319,13 +323,14 @@ layer(HostedLive, { excludeTestServices: true })("App worker reuse", (it) => {
         const app = yield* deploy(name, [
           {
             path: "index.ts",
-            content: `import { defineApp, defineProvider, oauth2, query, object } from "apps";
+            content: `import { defineApp, defineProvider, oauth2, query, object, router } from "apps";
 const service = defineProvider({ name: ${JSON.stringify(name)}, auth: { oauth: oauth2({ discover: ${JSON.stringify(`${issuer.origin}/mcp`)} }) } });
 ${observer(null)}
 export default defineApp({ accounts: { service } }, {
-  queries: { probe: query({ input: object({}) }, async (ctx) => observe(ctx.accounts.service.fields.access_token)) },
+  tools: router({ probe: query({ input: object({}) }, async (ctx) => observe(ctx.accounts.service.fields.access_token)) }),
 });`,
           },
+          appsManifest,
         ]);
         const path = `${prefix}/apps/${app.id}`;
         const connect = (label: string) =>
@@ -514,6 +519,47 @@ export default defineApp({ accounts: { service } }, {
               expect(loads, "one build load per runtime").toEqual(
                 Object.fromEntries(Object.keys(loads).map((runtime) => [runtime, 1])),
               );
+          }
+        }),
+      ),
+    { timeout: 120_000 },
+  );
+
+  it.effect(
+    scenarios.appWorkerAttribution.title,
+    (context) =>
+      withHostedCase(
+        context,
+        Effect.gen(function* () {
+          const { api, actors } = yield* scenario;
+          const telemetry = yield* Telemetry;
+          const viewer = yield* api
+            .request(actors.owner, "GET", "/api/viewer")
+            .pipe(Effect.flatMap((response) => body(Viewer, response)));
+          for (const database of [true, false]) {
+            const { app, connect, observe } = yield* keyApp({ database, resource: null });
+            const { profile } = yield* connect("synthetic-attribution");
+            yield* observe(app.id, profile);
+            // Each call's invocation names the Worker it ran in and the caller it ran for.
+            const identities = yield* telemetry
+              .spans("runtime.app.invoke", {
+                "executor.organization.id": actors.organization.id,
+                "executor.user.id": viewer.userId,
+              })
+              .pipe(
+                Effect.map((spans) =>
+                  spans
+                    .map((tags) => tags["executor.worker.identity"])
+                    .filter((identity) => identity?.startsWith(`${app.id}:`)),
+                ),
+                Effect.flatMap((matched) =>
+                  matched.length > 0
+                    ? Effect.succeed(matched)
+                    : Effect.fail(new Error("No attributed invocation has arrived")),
+                ),
+                Effect.retry({ schedule: Schedule.spaced("500 millis"), times: 60 }),
+              );
+            expect(identities.length).toBeGreaterThan(0);
           }
         }),
       ),

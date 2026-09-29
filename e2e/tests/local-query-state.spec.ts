@@ -7,6 +7,7 @@ import { TestLive, withCase } from "../support/case.ts";
 import { Resource } from "../support/contracts.ts";
 import { Target } from "../support/platform.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 layer(TestLive, { excludeTestServices: true })("Local query state", (it) => {
   it.effect(scenarios.localQueryState.title, (context) =>
@@ -35,6 +36,7 @@ const service = defineProvider({ name: "Draft test service", auth: {
 export default defineApp({ accounts: { service } }, async () => ({  }));
 `,
               },
+              appsManifest,
             ],
           },
           headers,
@@ -80,7 +82,7 @@ export default defineApp({ accounts: { service } }, async () => ({  }));
             return account;
           });
         const first = yield* addAccount("First draft account");
-        const second = yield* addAccount("Second draft account");
+        yield* addAccount("Second draft account");
         const pairing = yield* session.send("POST", "/auth/pair", undefined, headers);
         expect(pairing.status).toBe(200);
         const { url } = yield* body(Schema.Struct({ url: Schema.String }), pairing);
@@ -88,73 +90,105 @@ export default defineApp({ accounts: { service } }, async () => ({  }));
         yield* browser.use("The paired inventory is visible", (page) =>
           page.getByRole("heading", { name: /^Apps/ }).waitFor({ state: "visible" }),
         );
-        yield* browser.use("Open the first account", (page) => page.goto(`/accounts/${first.id}`));
+        const rename = (label: string) =>
+          browser.use(`Rename ${label}`, (page) =>
+            page
+              .getByRole("button", { name: `Manage ${label}`, exact: true })
+              .click()
+              .then(() => page.getByRole("menuitem", { name: "Rename", exact: true }).click())
+              .then(() => page.getByRole("dialog").waitFor({ state: "visible" })),
+          );
+        yield* browser.use("Open the account list", (page) => page.goto("/accounts"));
+        yield* rename("First draft account");
         const draft = "Keep this unsaved account name";
         yield* browser.use("Edit the account name without saving", (page) =>
-          page.getByRole("textbox", { name: "Account name", exact: true }).fill(draft),
+          page
+            .getByRole("dialog")
+            .getByRole("textbox", { name: "Account name", exact: true })
+            .fill(draft),
         );
         expect(
           (yield* session.send("DELETE", `/v1/accounts/${first.id}`, undefined, headers)).status,
         ).toBe(200);
         yield* browser.use("The live account query reports removal", (page) =>
           page
-            .locator(".setup-page")
+            .getByRole("dialog")
             .getByRole("alert", { name: "Account no longer available", exact: true })
             .waitFor({ state: "visible" }),
         );
         expect(
           yield* browser.use("The failed live read keeps the editor", (page) =>
-            page.getByRole("textbox", { name: "Account name", exact: true }).count(),
+            page
+              .getByRole("dialog")
+              .getByRole("textbox", { name: "Account name", exact: true })
+              .count(),
           ),
         ).toBe(1);
         expect(
           yield* browser.use("The unsaved name remains available", (page) =>
-            page.getByRole("textbox", { name: "Account name", exact: true }).inputValue(),
+            page
+              .getByRole("dialog")
+              .getByRole("textbox", { name: "Account name", exact: true })
+              .inputValue(),
           ),
         ).toBe(draft);
         yield* browser.checkpoint("Local account draft survives a live read failure");
-        yield* browser.use("Return to the account list", (page) =>
-          page.locator(".back-link").click(),
+        yield* browser.use("Close the rename dialog", (page) =>
+          page.keyboard
+            .press("Escape")
+            .then(() => page.getByRole("dialog").waitFor({ state: "hidden" })),
         );
-        yield* browser.use("Choose a different account", (page) =>
-          page.getByRole("link", { name: "Second draft account", exact: true }).click(),
-        );
-        yield* browser.use("The second resource is selected", (page) =>
-          page.waitForURL((url) => url.pathname === `/accounts/${second.id}`),
-        );
+        yield* rename("Second draft account");
         expect(
           yield* browser.use("A different account starts with its own name", (page) =>
-            page.getByRole("textbox", { name: "Account name", exact: true }).inputValue(),
+            page
+              .getByRole("dialog")
+              .getByRole("textbox", { name: "Account name", exact: true })
+              .inputValue(),
           ),
         ).toBe("Second draft account");
-        yield* browser.use("Open account selection", (page) => page.goto(`/apps/${app.id}/setup`));
-        yield* browser.use("Choose a saved account", (page) => page.getByRole("combobox").click());
-        yield* browser.use("Make an unsaved account selection", (page) =>
-          page.getByRole("option", { name: "Second draft account", exact: true }).click(),
+        yield* browser.use("Close the second rename dialog", (page) =>
+          page.keyboard.press("Escape"),
         );
-        yield* browser.use("The account picker has closed", (page) =>
-          page.getByRole("listbox").waitFor({ state: "hidden" }),
+        yield* browser.use("Open the app's accounts", (page) =>
+          page.goto(`/apps/${app.id}?view=accounts`),
+        );
+        yield* browser.use("Start connecting another account", (page) =>
+          page.getByRole("button", { name: "Connect new account", exact: true }).click(),
+        );
+        const connectionDraft = "keep-this-unsaved-connection-token";
+        yield* browser.use("Enter a credential without saving", (page) =>
+          page
+            .getByRole("dialog", { name: "Connect Draft test service", exact: true })
+            .getByLabel("Token", { exact: true })
+            .fill(connectionDraft),
         );
         expect(
           (yield* session.send("DELETE", `/v1/apps/${app.id}`, undefined, headers)).status,
         ).toBe(200);
         yield* browser.use("The live app query reports removal", (page) =>
           page
-            .getByRole("dialog", { name: "Choose accounts", exact: true })
-            .getByRole("alert", { name: "App no longer available", exact: true })
+            .getByRole("alert", {
+              name: "App no longer available",
+              exact: true,
+              includeHidden: true,
+            })
             .waitFor({ state: "visible" }),
         );
         expect(
-          yield* browser.use("The failed live read keeps account selection", (page) =>
-            page.getByRole("dialog").getByRole("combobox").count(),
+          yield* browser.use("The failed live read keeps the connection dialog", (page) =>
+            page.getByRole("dialog", { name: "Connect Draft test service", exact: true }).count(),
           ),
         ).toBe(1);
         expect(
-          yield* browser.use("The unsaved selection remains available", (page) =>
-            page.getByRole("dialog").getByRole("combobox").textContent(),
+          yield* browser.use("The unsaved credential remains available", (page) =>
+            page
+              .getByRole("dialog", { name: "Connect Draft test service", exact: true })
+              .getByLabel("Token", { exact: true })
+              .inputValue(),
           ),
-        ).toContain("Second draft account");
-        yield* browser.checkpoint("Local account selection survives a live read failure");
+        ).toBe(connectionDraft);
+        yield* browser.checkpoint("Local account connection draft survives a live read failure");
       }),
     ),
   );

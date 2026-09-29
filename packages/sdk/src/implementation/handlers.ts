@@ -64,6 +64,11 @@ export const executorHandlers = (executor: Executor) =>
         )
         .handle("remove", ({ params, query }) => executor.accounts.remove({ ...params, ...query }))
         .handle("get", ({ params, query }) => executor.accounts.get({ ...params, ...query }))
+        .handle("health", ({ params, query }) => executor.accounts.health({ ...params, ...query }))
+        .handle("listHealth", ({ query }) => executor.accounts.listHealth(query))
+        .handle("check", ({ params, query, payload }) =>
+          executor.accounts.check({ ...params, ...query, ...payload }),
+        )
         .handle("list", ({ query }) => executor.accounts.list(query)),
     ),
     HttpApiBuilder.group(ExecutorApi, "accountConnections", (handlers) =>
@@ -93,6 +98,9 @@ export const executorHandlers = (executor: Executor) =>
         .handle("deploy", ({ payload }) => executor.apps.deploy(payload))
         .handle("get", ({ params, query }) => executor.apps.get({ ...params, ...query }))
         .handle("list", ({ query }) => executor.apps.list(query))
+        .handle("checkCredentials", ({ params, query, payload }) =>
+          executor.apps.checkCredentials({ ...params, ...query, ...payload }),
+        )
         .handle("remove", ({ params, query }) => executor.apps.remove({ ...params, ...query }))
         .handle("rename", ({ params, query, payload }) =>
           executor.apps.rename({ ...params, ...query, ...payload }),

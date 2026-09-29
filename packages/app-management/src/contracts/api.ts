@@ -21,6 +21,7 @@ import {
   StorageError,
 } from "@executor-js/sdk/core";
 import { PublicationReadiness, RegistryError } from "@executor-js/app-registry/contracts";
+export * from "./framework.ts";
 
 /** Authentication failures never expose whether another owner's app exists. */
 export class AppAccessDenied extends Schema.TaggedError<AppAccessDenied>()(

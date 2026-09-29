@@ -43,12 +43,12 @@ try {
     consumer,
   );
   const example = `import assert from "node:assert/strict";
-import { defineApp, object, query, string, defineDatabase, table } from "apps";
+import { defineApp, object, query, router, string, defineDatabase, table } from "apps";
 import { createAppHandler, hostContext } from "apps/host";
 const greet = query({ input: object({ name: string() }) }, async (_ctx, input) => ({ message: "Hello " + input.name }));
-const app = defineApp({ accounts: {} }, { queries: { greet } });
+const app = defineApp({ accounts: {} }, { tools: router({ greet }) });
 const handler = createAppHandler(app);
-const response = await handler(new Request("https://fixture.test", { method: "POST", body: JSON.stringify({ operation: "call", tool: "queries.greet", input: { name: "Ada" } }) }), hostContext({}));
+const response = await handler(new Request("https://fixture.test", { method: "POST", body: JSON.stringify({ operation: "call", tool: "greet", kind: "query", input: { name: "Ada" } }) }), hostContext({}));
 assert.equal(response.status, 200);
 assert.deepEqual(await response.json(), { ok: true, value: { message: "Hello Ada" } });
 assert(defineDatabase({ notes: table({ text: string() }) }));
@@ -95,7 +95,7 @@ assert(defineDatabase({ notes: table({ text: string() }) }));
   run("node", ["exports.mjs"], consumer);
   await writeFile(
     join(consumer, "example.ts"),
-    `import { defineApp, object, query, string, defineDatabase, table, type QueryContext } from "apps";
+    `import { defineApp, object, query, router, string, defineDatabase, table, type QueryContext } from "apps";
 const requirements = { accounts: {}, database: defineDatabase({ notes: table({ text: string() }) }) };
 const greet = query({ input: object({ name: string() }) }, async (_ctx: QueryContext<typeof requirements>, input) => {
   const name: string = input.name;
@@ -103,7 +103,7 @@ const greet = query({ input: object({ name: string() }) }, async (_ctx: QueryCon
   const wrong: number = input.name;
   return { message: name };
 });
-export default defineApp(requirements, { queries: { greet } });
+export default defineApp(requirements, { tools: router({ greet }) });
 ${imports.map((specifier, i) => `import type * as Api${i} from ${JSON.stringify(specifier)}; export type Export${i} = typeof Api${i};`).join("\n")}
 `,
   );

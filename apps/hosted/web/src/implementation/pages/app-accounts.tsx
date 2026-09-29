@@ -1,8 +1,8 @@
-import { useContext, useState, type ReactNode } from "react";
+import { useContext, useState } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Add01Icon } from "@hugeicons/core-free-icons";
 import { RegistryContext, useAtomSet, useAtomMount } from "@effect/atom-react";
-import { Option, Exit, Effect } from "effect";
+import { Option, Exit, Effect, type Cause } from "effect";
 import { useQuery } from "@executor-js/ui/dashboard/context";
 import { appAccessAtom } from "../../contracts/resource-access.ts";
 import type {
@@ -15,13 +15,9 @@ import type {
 } from "@executor-js/sdk";
 import {
   AppAccounts as SharedAccounts,
-  AccountSelectionTrigger,
   RemoveAccountBinding,
+  useUnusedAccountPrompt,
 } from "@executor-js/ui/dashboard/app-accounts";
-import {
-  SavedAccountPicker,
-  type SavedAccountEdit,
-} from "@executor-js/ui/dashboard/saved-account-picker";
 import type { AccountSummary } from "@executor-js/ui/contracts/dashboard";
 import { Button } from "@executor-js/ui/components/button";
 import { ConnectionDialogHeader, ConnectionModal } from "./connection-dialog.tsx";
@@ -32,11 +28,62 @@ import { HostedAccountForm, openAccountOAuth } from "./connect-account.tsx";
 import type { HostedOAuthSignIn } from "@executor-js/hosted-server";
 import type { AccountConnectionId } from "@executor-js/sdk";
 import type { HostedError } from "../../contracts/errors.ts";
-import { accountSelectionAtom, profilesAtom, profileMutations } from "../../contracts/profiles.ts";
-import { AsyncResult, AtomRegistry } from "effect/unstable/reactivity";
-import { ProfileNotFound } from "@executor-js/sdk";
+import { accountSelectionAtom, profileMutations } from "../../contracts/profiles.ts";
+import { accountUsageAtom, disconnectAccountAtom } from "../../contracts/accounts.ts";
+import { AtomRegistry } from "effect/unstable/reactivity";
 
-/** Account actions stay on the app; the host still authorizes every selection and connection. */
+/** A new profile starts with every multiple-account slot bound to no accounts. */
+function emptySelection(app: App): SelectedAccounts {
+  return Object.fromEntries(
+    Object.entries(app.requirements.accounts)
+      .filter(([, requirement]) => requirement.cardinality === "many")
+      .map(([name]) => [name, []]),
+  );
+}
+
+/** Save one slot of the shown profile, creating the profile on its first binding. */
+function useAccountChooser({
+  app,
+  profile,
+  onSelected,
+}: {
+  readonly app: App;
+  readonly profile: Profile | undefined;
+  readonly onSelected: (id: ProfileId) => void;
+}) {
+  const { organization } = useOrganizationRoute();
+  const registry = useContext(RegistryContext);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<Cause.Cause<HostedError>>();
+  const choose = async (slot: string, value: SelectedAccounts[string]) => {
+    const mutation = accountSelectionAtom({
+      organization,
+      app: app.id,
+      target:
+        profile === undefined
+          ? { kind: "new", request: crypto.randomUUID() }
+          : { kind: "saved", id: profile.id, revision: profile.revision },
+    });
+    setPending(true);
+    setError(undefined);
+    registry.set(mutation, {
+      app: app.id,
+      accounts: { ...(profile?.accounts ?? emptySelection(app)), [slot]: value },
+    });
+    const exit = await Effect.runPromiseExit(
+      AtomRegistry.getResult(registry, mutation, { suspendOnWaiting: true }),
+    );
+    setPending(false);
+    if (Exit.isFailure(exit)) setError(exit.cause);
+    else if (exit.value.id !== profile?.id) onSelected(exit.value.id);
+  };
+  return { choose, pending, error };
+}
+
+/**
+ * Choose saved accounts in place and connect new ones without leaving the Accounts tab.
+ * The host still authorizes every selection and connection.
+ */
 export function AppAccounts({
   app,
   accounts,
@@ -55,132 +102,118 @@ export function AppAccounts({
   const { organization } = useOrganizationRoute();
   const { data } = useQuery(appAccessAtom({ organization, app: app.id }));
   const canUse = Option.isSome(data) && data.value.canUse;
+  const editable = canUse && app.activeDeployment !== null;
+  const chooser = useAccountChooser({ app, profile, onSelected });
+  const unused = useUnusedAccountPrompt({
+    usage: accountUsageAtom(organization),
+    remove: (account) => disconnectAccountAtom({ organization, account }),
+    Failure: HostedFailure,
+  });
+  const [connection, setConnection] = useState<{
+    readonly slot: string;
+    readonly requirement: AccountRequirement;
+    readonly method: string;
+  }>();
+  const [connecting, setConnecting] = useState(false);
+  const pending = chooser.pending || connecting;
   return (
-    <SharedAccounts
-      app={app}
-      selection={profile?.accounts ?? {}}
-      accounts={accounts}
-      onCreateProfile={canUse ? onCreateProfile : undefined}
-      removeAccountAction={(slot, account, label) =>
-        canUse &&
-        profile !== undefined && (
-          <RemoveAccountBinding
-            profile={profile}
-            slot={slot}
-            account={account}
-            label={label}
-            update={profileMutations({ organization, app: app.id, profile: profile.id }).update}
-            Failure={HostedFailure}
+    <>
+      <SharedAccounts
+        app={app}
+        selection={profile?.accounts ?? {}}
+        accounts={accounts}
+        onCreateProfile={canUse ? onCreateProfile : undefined}
+        chooser={
+          editable
+            ? { pending, choose: (slot, value) => void chooser.choose(slot, value) }
+            : undefined
+        }
+        removeAccountAction={(slot, account, label) =>
+          canUse &&
+          profile !== undefined && (
+            <RemoveAccountBinding
+              profile={profile}
+              slot={slot}
+              account={account}
+              label={label}
+              update={profileMutations({ organization, app: app.id, profile: profile.id }).update}
+              Failure={HostedFailure}
+              onRemoved={(removed) => void unused.check(removed)}
+            />
+          )
+        }
+        {...(editable
+          ? {
+              accountActions: (slot: string, requirement: AccountRequirement) => (
+                <ConnectNewAccount
+                  requirement={requirement}
+                  disabled={pending}
+                  onConnect={(method) => setConnection({ slot, requirement, method })}
+                />
+              ),
+            }
+          : {})}
+      />
+      {chooser.error && <HostedFailure cause={chooser.error} />}
+      {unused.prompt}
+      <ConnectionModal
+        open={connection !== undefined}
+        busy={connecting}
+        onClose={() => setConnection(undefined)}
+      >
+        {connection && (
+          <AppConnectionDialogContent
+            app={app}
+            selection={profile?.accounts ?? emptySelection(app)}
+            slot={connection.slot}
+            requirement={connection.requirement}
+            accounts={accounts}
+            method={connection.method}
+            redirectUri={redirectUri}
+            profile={profile?.id}
+            onSelected={onSelected}
+            onPendingChange={setConnecting}
+            onSaved={() => setConnection(undefined)}
           />
-        )
-      }
-      {...(canUse
-        ? {
-            accountActions: (slot: string, requirement: AccountRequirement) => (
-              <AppAccountActions
-                key={slot}
-                app={app}
-                slot={slot}
-                requirement={requirement}
-                accounts={accounts}
-                redirectUri={redirectUri}
-                profile={profile}
-                onSelected={onSelected}
-                trigger={
-                  <AccountSelectionTrigger
-                    requirement={requirement}
-                    selection={profile?.accounts[slot]}
-                  />
-                }
-              />
-            ),
-          }
-        : {})}
-    />
+        )}
+      </ConnectionModal>
+    </>
   );
 }
 
-/** Reuse authorized connection and selection controls on the overview and Accounts tab. */
-export function AppAccountActions({
-  app,
-  slot,
+/** The last row of a requirement opens the connection form for its preferred sign-in method. */
+function ConnectNewAccount({
   requirement,
-  accounts,
-  connectLabel,
-  redirectUri,
-  profile,
-  onSelected,
-  trigger,
+  disabled,
+  onConnect,
 }: {
-  readonly trigger?: ReactNode;
-  readonly profile?: Profile | undefined;
-  readonly onSelected: (id: ProfileId) => void;
-  readonly app: App;
-  readonly slot: string;
   readonly requirement: AccountRequirement;
-  readonly accounts: readonly AccountSummary[];
-  readonly connectLabel?: string;
-  readonly redirectUri: string;
+  readonly disabled: boolean;
+  readonly onConnect: (method: string) => void;
 }) {
-  const { organization } = useOrganizationRoute();
-  const { data } = useQuery(appAccessAtom({ organization, app: app.id }));
-  const canUse = Option.isSome(data) && data.value.canUse;
-  const registry = useContext(RegistryContext);
-  if (app.activeDeployment === null || !canUse) return null;
-  const defaults = Object.fromEntries(
-    Object.entries(app.requirements.accounts)
-      .filter(([, value]) => value.cardinality === "many")
-      .map(([name]) => [name, []]),
+  const methods = Object.entries(requirement.definition.auth).sort(
+    ([, a], [, b]) => Number(b.type === "oauth2") - Number(a.type === "oauth2"),
   );
-  const selection = profile?.accounts ?? defaults;
+  const preferred = methods[0];
   return (
     <>
-      {Object.entries(requirement.definition.auth)
+      {methods
         .filter(([, auth]) => auth.type === "oauth2")
         .map(([method]) => (
           <PrefetchOAuthSetup key={method} provider={requirement.provider} method={method} />
         ))}
-      <ConnectAppAccount
-        app={app}
-        selection={selection}
-        profile={profile?.id}
-        onSelected={onSelected}
-        slot={slot}
-        requirement={requirement}
-        accounts={accounts}
-        prepare={() => {
-          const current = AsyncResult.value(
-            registry.get(profilesAtom({ organization, app: app.id })),
-          );
-          const saved = Option.isSome(current)
-            ? current.value.find((item) => item.id === profile?.id)
-            : undefined;
-          if (profile !== undefined && saved === undefined)
-            return Exit.fail(new ProfileNotFound({ app: app.id, profile: profile.id }));
-          const target =
-            saved === undefined
-              ? { kind: "new" as const, request: crypto.randomUUID() }
-              : { kind: "saved" as const, id: saved.id, revision: saved.revision };
-          const mutation = accountSelectionAtom({ organization, app: app.id, target });
-          return Exit.succeed({
-            accounts: saved?.accounts ?? defaults,
-            save: (accounts: SelectedAccounts) => {
-              registry.set(mutation, { app: app.id, accounts });
-              return Effect.runPromiseExit(
-                AtomRegistry.getResult(registry, mutation, { suspendOnWaiting: true }),
-              ).then((exit) =>
-                Exit.map(exit, (result) => {
-                  onSelected(result.id);
-                  return result;
-                }),
-              );
-            },
-          });
+      <Button
+        variant="ghost"
+        size="sm"
+        className="h-10 w-full justify-start rounded-none px-3.5 text-[13px] text-muted-foreground hover:text-foreground"
+        disabled={disabled || preferred === undefined}
+        onClick={() => {
+          if (preferred) onConnect(preferred[0]);
         }}
-        connectLabel={connectLabel}
-        trigger={trigger}
-        redirectUri={redirectUri}
-      />
+      >
+        <HugeiconsIcon icon={Add01Icon} size={14} aria-hidden />
+        Connect new account
+      </Button>
     </>
   );
 }
@@ -201,119 +234,7 @@ type ConnectionDialog = {
   readonly provider: Provider;
   readonly redirectUri: string;
   readonly method: string;
-  readonly label: string;
 };
-
-function ConnectAppAccount({
-  app,
-  selection,
-  slot,
-  requirement,
-  accounts,
-  prepare,
-  connectLabel,
-  redirectUri,
-  profile,
-  onSelected,
-  trigger,
-}: {
-  readonly trigger?: ReactNode;
-  readonly profile?: ProfileId | undefined;
-  readonly onSelected: (id: ProfileId) => void;
-  readonly app: App;
-  readonly selection: SelectedAccounts;
-  readonly slot: string;
-  readonly requirement: AccountRequirement;
-  readonly accounts: readonly AccountSummary[];
-  readonly prepare: () => Exit.Exit<SavedAccountEdit<Profile, HostedError>, HostedError>;
-  readonly connectLabel?: string | undefined;
-  readonly redirectUri: string;
-}) {
-  const [pending, setPending] = useState(false);
-  const [connecting, setConnecting] = useState(false);
-  const methods = Object.entries(requirement.definition.auth).sort(
-    ([, a], [, b]) => Number(b.type === "oauth2") - Number(a.type === "oauth2"),
-  );
-  const preferred = methods[0];
-  const selected = selection[slot];
-  const inUse = typeof selected === "string" || (selected !== undefined && selected.length > 0);
-  const buttons = (close?: () => void, appearance: "button" | "row" = "button") => (
-    <Button
-      size="sm"
-      aria-label={
-        appearance === "row" ? "Connect new account" : `Connect ${requirement.definition.name}`
-      }
-      variant={appearance === "row" ? "ghost" : "default"}
-      className={
-        appearance === "row"
-          ? "min-h-12 w-full justify-start gap-3 px-3 text-sm font-normal text-muted-foreground hover:text-foreground"
-          : undefined
-      }
-      disabled={!preferred || pending}
-      onClick={() => {
-        if (!preferred) return;
-        close?.();
-        setConnecting(true);
-      }}
-    >
-      {appearance === "row" ? (
-        <>
-          <HugeiconsIcon icon={Add01Icon} size={16} aria-hidden />
-          Connect new account
-        </>
-      ) : (
-        (connectLabel ?? `Connect ${requirement.definition.name}`)
-      )}
-    </Button>
-  );
-  const form = (close: () => void) =>
-    preferred && (
-      <AppConnectionDialogContent
-        app={app}
-        selection={selection}
-        slot={slot}
-        requirement={requirement}
-        accounts={accounts}
-        method={preferred[0]}
-        redirectUri={redirectUri}
-        profile={profile}
-        onSelected={onSelected}
-        onPendingChange={setPending}
-        onSaved={close}
-      />
-    );
-  const picker = (
-    <SavedAccountPicker<HostedError, Profile>
-      selectedAccounts={selection}
-      slot={slot}
-      requirement={requirement}
-      accounts={accounts}
-      prepare={prepare}
-      Failure={HostedFailure}
-      connectAction={buttons}
-      connectForm={preferred ? form : undefined}
-      busy={pending}
-      trigger={trigger}
-    />
-  );
-  return (
-    <>
-      {trigger !== undefined || inUse || selected !== undefined ? (
-        picker
-      ) : (
-        <>
-          {buttons()}
-          {(accounts.some((account) => account.provider === requirement.provider) ||
-            requirement.cardinality === "many") &&
-            picker}
-        </>
-      )}
-      <ConnectionModal open={connecting} busy={pending} onClose={() => setConnecting(false)}>
-        {connecting && form(() => setConnecting(false))}
-      </ConnectionModal>
-    </>
-  );
-}
 
 /** Keep one provider snapshot and draft from the first dialog through submission. */
 function AppConnectionDialogContent({
@@ -341,21 +262,11 @@ function AppConnectionDialogContent({
   readonly onPendingChange: (pending: boolean) => void;
   readonly onSaved: () => void;
 }) {
-  const [form] = useState<ConnectionDialog>(() => {
-    const labels = new Set(
-      accounts
-        .filter((account) => account.provider === requirement.provider)
-        .map((account) => account.label),
-    );
-    let label = "Default";
-    for (let number = 2; labels.has(label); number++) label = `Default ${number}`;
-    return {
-      method,
-      label,
-      provider: { id: requirement.provider, definition: requirement.definition },
-      redirectUri,
-    };
-  });
+  const [form] = useState<ConnectionDialog>(() => ({
+    method,
+    provider: { id: requirement.provider, definition: requirement.definition },
+    redirectUri,
+  }));
   const selected = selection[slot];
   const currentAccount =
     typeof selected === "string" ? accounts.find((account) => account.id === selected) : undefined;
@@ -373,6 +284,7 @@ function AppConnectionDialogContent({
         onSelected={onSelected}
         slot={slot}
         form={form}
+        checks={requirement.health === true}
         onPendingChange={onPendingChange}
         onSaved={onSaved}
       />
@@ -390,10 +302,13 @@ function AppConnectionFields({
   accounts,
   profile,
   onSelected,
+  checks,
 }: {
   readonly accounts: SelectedAccounts;
   readonly profile?: ProfileId | undefined;
   readonly onSelected: (id: ProfileId) => void;
+  /** The slot's provider defines a check, so entered credentials can be validated. */
+  readonly checks: boolean;
   readonly app: App["id"];
   readonly slot: string;
   readonly form: ConnectionDialog;
@@ -423,9 +338,9 @@ function AppConnectionFields({
       }
     >
       provider={form.provider}
+      app={checks ? app : undefined}
       redirectUri={form.redirectUri}
       initialMethod={form.method}
-      initialLabel={form.label}
       submit={(input) =>
         submit(input).then((exit) =>
           Exit.map(exit, (saved) => {
@@ -453,7 +368,6 @@ function AppConnectionFields({
             connection: value.connection,
             profile: value.profile,
             redirectUri: value.redirectUri,
-            label: value.label,
             manualClient: value.manualClient,
           },
           value.authorizationUrl,

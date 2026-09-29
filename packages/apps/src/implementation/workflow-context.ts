@@ -15,34 +15,61 @@ import {
 } from "../contracts/workflows.ts";
 import { JsonValue } from "../contracts/schema.ts";
 import { nativeOperation } from "./operations.ts";
+import { declaredOperations } from "./router.ts";
 import { toPromise } from "./authoring.ts";
+import { failureDetail } from "./failure-detail.ts";
 
-/** Preserve typed failures and cancellation; authored exception text never leaves the app. */
+/**
+ * Preserve typed failures and cancellation. Other errors keep their name and bounded message,
+ * with the given account secrets replaced.
+ */
 export const workflowSafe = <A>(
   work: Effect.Effect<A, unknown>,
+  secrets: readonly string[],
 ): Effect.Effect<A, WorkflowFailure> =>
   work.pipe(
     Effect.catchCause((cause) => {
       if (Cause.hasInterrupts(cause)) return Effect.interrupt;
       const error = Cause.squash(cause);
       if (Schema.is(WorkflowFailure)(error)) return Effect.fail(error);
+      const { errorName, message } = failureDetail(error, secrets);
       return Effect.fail(
         new WorkflowFailure({
           reason: "execution",
           retryable: !(error instanceof NonRetryableError),
+          ...(errorName === undefined ? {} : { errorName }),
+          ...(message === undefined ? {} : { message }),
         }),
       );
     }),
   );
 
+/** Name the step a failure came from, unless a nested step already did. */
+const inStep =
+  (step: string) =>
+  (failure: WorkflowFailure): WorkflowFailure =>
+    failure.step === undefined
+      ? new WorkflowFailure({
+          reason: failure.reason,
+          retryable: failure.retryable,
+          step: step.slice(0, 200),
+          ...(failure.errorName === undefined ? {} : { errorName: failure.errorName }),
+          ...(failure.message.length === 0 ? {} : { message: failure.message }),
+        })
+      : failure;
+
 /** Construct one replay's Promise context. Step callbacks acquire fresh capabilities per actual attempt. */
 export const makeWorkflowContext = (
   execution: WorkflowExecution,
-  definition: Pick<AppDefinition<never>, "queries" | "mutations">,
+  definition: Pick<AppDefinition<never>, "tools">,
+  /** A step attempt's context, and the raw account secrets its failures must not reveal. */
   fresh: (
     stepId: string,
     signal: AbortSignal,
-  ) => Effect.Effect<WorkflowStepContext, WorkflowFailure>,
+  ) => Effect.Effect<
+    { readonly context: WorkflowStepContext; readonly secrets: readonly string[] },
+    WorkflowFailure
+  >,
   signal: AbortSignal,
 ): Effect.Effect<WorkflowContext> =>
   Effect.gen(function* () {
@@ -92,28 +119,40 @@ export const makeWorkflowContext = (
         const parsed = yield* Schema.decodeUnknownEffect(WorkflowStepOptions)(options).pipe(
           Effect.mapError(() => new WorkflowFailure({ reason: "input", retryable: false })),
         );
-        return yield* execution.driver.do(`do:${name.slice(0, 100)}:${stepId}`, parsed, () =>
-          attempt(
-            parsed,
-            Effect.scoped(
-              Effect.gen(function* () {
-                const controller = yield* Effect.acquireRelease(
-                  Effect.sync(() => new AbortController()),
-                  (controller) => Effect.sync(() => controller.abort()),
-                );
-                const ctx = yield* fresh(stepId, AbortSignal.any([signal, controller.signal]));
-                const result = yield* workflowSafe(
-                  Effect.tryPromise({ try: () => callback(ctx), catch: (error) => error }),
-                );
-                return yield* Schema.decodeUnknownEffect(WorkflowValue)(result).pipe(
-                  Effect.mapError(
-                    () => new WorkflowFailure({ reason: "output", retryable: false }),
-                  ),
-                );
-              }),
-            ).pipe(Effect.provideContext(services)),
-          ),
-        );
+        return yield* execution.driver
+          .do(`do:${name.slice(0, 100)}:${stepId}`, parsed, () =>
+            attempt(
+              parsed,
+              Effect.scoped(
+                Effect.gen(function* () {
+                  const controller = yield* Effect.acquireRelease(
+                    Effect.sync(() => new AbortController()),
+                    (controller) => Effect.sync(() => controller.abort()),
+                  );
+                  const step = yield* fresh(stepId, AbortSignal.any([signal, controller.signal]));
+                  const result = yield* workflowSafe(
+                    Effect.tryPromise({
+                      try: () => callback(step.context),
+                      catch: (error) => error,
+                    }),
+                    step.secrets,
+                  );
+                  return yield* Schema.decodeUnknownEffect(WorkflowValue)(result).pipe(
+                    Effect.mapError(
+                      () =>
+                        new WorkflowFailure({
+                          reason: "output",
+                          retryable: false,
+                          message:
+                            "The step returned a value that is not JSON, such as undefined, or is larger than 1 MiB. Return null for no result.",
+                        }),
+                    ),
+                  );
+                }),
+              ).pipe(Effect.provideContext(services)),
+            ),
+          )
+          .pipe(Effect.mapError(inStep(name)));
       });
     const operationStep = (
       kind: "query" | "mutation",
@@ -124,9 +163,9 @@ export const makeWorkflowContext = (
     ) =>
       Effect.gen(function* () {
         const target = nativeOperation(operation);
-        const catalog = kind === "query" ? definition.queries : definition.mutations;
-        const match = Object.entries(catalog ?? {}).find(
-          ([, value]) => value === target && value.kind === kind,
+        const root = definition.tools?.kind === "router" ? definition.tools : undefined;
+        const match = declaredOperations(root).find(
+          (entry) => entry.operation === target && entry.operation.kind === kind,
         );
         if (target === undefined || match === undefined)
           return yield* new WorkflowFailure({ reason: "operation", retryable: false });
@@ -140,14 +179,16 @@ export const makeWorkflowContext = (
         const timeout = workflowDurationMillis(parsed.timeout ?? "10 minutes");
         if (timeout === undefined)
           return yield* new WorkflowFailure({ reason: "input", retryable: false });
-        return yield* execution.driver.do(`${kind}:${name.slice(0, 100)}:${stepId}`, parsed, () =>
-          attempt(
-            parsed,
-            execution
-              .invoke({ kind, name: match[0], input: args, stepId, timeout })
-              .pipe(Effect.provideContext(services)),
-          ),
-        );
+        return yield* execution.driver
+          .do(`${kind}:${name.slice(0, 100)}:${stepId}`, parsed, () =>
+            attempt(
+              parsed,
+              execution
+                .invoke({ kind, name: match.name, input: args, stepId, timeout })
+                .pipe(Effect.provideContext(services)),
+            ),
+          )
+          .pipe(Effect.mapError(inStep(name)));
       });
     const invoke = <A>(effect: Effect.Effect<A, WorkflowFailure>) =>
       toPromise(() => effect.pipe(Effect.provideContext(services)), signal)();

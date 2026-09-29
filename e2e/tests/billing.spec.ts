@@ -1,6 +1,7 @@
 import { expect, layer } from "@effect/vitest";
 import { Effect, Schema } from "effect";
 import { BillingTarget } from "../support/billing.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 layer(BillingTarget.layer, { excludeTestServices: true })("Cloud billing sandbox", (it) => {
   it.effect(
@@ -36,13 +37,14 @@ layer(BillingTarget.layer, { excludeTestServices: true })("Cloud billing sandbox
               {
                 path: "index.ts",
                 content: `
-      import { defineApp, mutation, object, string } from "apps";
+      import { defineApp, mutation, object, string, router } from "apps";
       import { always } from "apps/operations/approval";
-      export default defineApp({accounts:{}}, async () => ({ mutations:{
-        echo: mutation({input:object({message:string()})},async(_,input)=>input),
-        guarded: mutation({input:object({message:string()}),approval:always()},async(_,input)=>input)
-      }}));`,
+      export default defineApp({accounts:{}}, async () => ({ tools: router({
+   echo: mutation({input:object({message:string()})},async(_,input)=>input),
+        guarded: mutation({input:object({message:string()}),approval:always()},async(_,input)=>input),
+ })}));`,
               },
+              appsManifest,
             ],
           });
           expect(deployed.status).toBe(200);
@@ -55,18 +57,20 @@ layer(BillingTarget.layer, { excludeTestServices: true })("Cloud billing sandbox
           );
           const call = () =>
             target.owner("POST", `${prefix}/apps/${app.id}/tools/call`, {
-              tool: "mutations.echo",
+              tool: "echo",
+              kind: "mutation",
               input: { message: "synthetic" },
             });
           expect(
             (yield* target.member("POST", `${prefix}/apps/${app.id}/tools/call`, {
-              tool: "mutations.echo",
+              tool: "echo",
+              kind: "mutation",
               input: { message: "denied" },
             })).status,
           ).toBe(403);
           expect((yield* call()).status).toBe(200);
           const mcp = yield* target.connectMcp;
-          const code = `return await Promise.all([tools[${JSON.stringify(app.slug)}].mutations.echo({message:"one"}), tools[${JSON.stringify(app.slug)}].mutations.echo({message:"two"})]);`;
+          const code = `return await Promise.all([tools[${JSON.stringify(app.slug)}].echo({message:"one"}), tools[${JSON.stringify(app.slug)}].echo({message:"two"})]);`;
           const executed = yield* mcp.call("execute", { code });
           expect(executed.isError).not.toBe(true);
           const completed = yield* Schema.decodeUnknownEffect(
@@ -77,7 +81,7 @@ layer(BillingTarget.layer, { excludeTestServices: true })("Cloud billing sandbox
           )(executed.structuredContent);
           expect(completed.execution.value).toEqual([{ message: "one" }, { message: "two" }]);
           const pending = yield* mcp.call("execute", {
-            code: `return await tools[${JSON.stringify(app.slug)}].mutations.guarded({message:"approved"});`,
+            code: `return await tools[${JSON.stringify(app.slug)}].guarded({message:"approved"});`,
           });
           const result = yield* Schema.decodeUnknownEffect(
             Schema.Struct({

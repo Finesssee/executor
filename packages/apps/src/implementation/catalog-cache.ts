@@ -16,11 +16,19 @@ export interface CatalogCacheOptions {
   readonly revalidate?: boolean;
 }
 const schema = <A>(decoder: Schema.Decoder<A>) => wrap(decoder, false);
+/** `header` describes the whole catalog, such as an MCP server's instructions, in the same revision. */
 const Manifest = Schema.Struct({
   revision: Schema.String,
   pages: Schema.Int,
   summaries: Schema.Int,
+  header: Schema.optionalKey(JsonObject),
 });
+
+/** One load: the tools, and optionally a record describing the whole catalog. */
+export interface CatalogLoad<A> {
+  readonly tools: readonly A[];
+  readonly header?: JsonObject;
+}
 const invoke = <A>(work: () => Promise<A>) =>
   Effect.tryPromise({ try: work, catch: (error) => error });
 
@@ -30,7 +38,7 @@ export const catalogCache = <A extends { readonly name: string }, S>(
     readonly schema: Schema.Decoder<A>;
     /** Schema-free projection stored beside the full pages, so browsing never reads schemas. */
     readonly summary: { readonly schema: Schema.Decoder<S>; readonly of: (tool: A) => S };
-    readonly load: (context?: CacheLoadContext) => Effect.Effect<readonly A[], unknown>;
+    readonly load: (context?: CacheLoadContext) => Effect.Effect<CatalogLoad<A>, unknown>;
   },
 ) =>
   Effect.gen(function* () {
@@ -51,10 +59,13 @@ export const catalogCache = <A extends { readonly name: string }, S>(
     const local = yield* Effect.cached(options.load());
     const refresh = (context: CacheLoadContext) =>
       Effect.gen(function* () {
-        const tools = yield* options.load(context);
+        const { tools, header } = yield* options.load(context);
         // Content-addressed, so refreshing an unchanged catalog renews the same parts.
         const digest = yield* invoke(() =>
-          crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(tools))),
+          crypto.subtle.digest(
+            "SHA-256",
+            new TextEncoder().encode(JSON.stringify({ tools, header: header ?? null })),
+          ),
         );
         const revision = Array.from(new Uint8Array(digest), (byte) =>
           byte.toString(16).padStart(2, "0"),
@@ -127,7 +138,12 @@ export const catalogCache = <A extends { readonly name: string }, S>(
         yield* summaryOut();
         yield* flush();
         // The cache publishes this manifest only after all parts, under its fenced loader lease.
-        return { revision, pages, summaries };
+        return {
+          revision,
+          pages,
+          summaries,
+          ...(header === undefined ? {} : { header: yield* json(header) }),
+        };
       });
     const getOptions = {
       key,
@@ -137,10 +153,18 @@ export const catalogCache = <A extends { readonly name: string }, S>(
       load: (context: CacheLoadContext) =>
         Effect.runPromise(refresh(context), { signal: context.signal }),
     };
+    // A router reads its catalog's header and its tools together; concurrent reads share one
+    // manifest round trip.
+    let reading: Promise<typeof Manifest.Type> | undefined;
     const current = () =>
       cache === undefined
         ? Effect.fail(new CacheError({ reason: "unavailable" }))
-        : invoke(() => cache.get(getOptions));
+        : invoke(
+            () =>
+              (reading ??= cache.get(getOptions).finally(() => {
+                reading = undefined;
+              })),
+          );
     if (options.revalidate) {
       if (cache === undefined) yield* local;
       else yield* invoke(() => cache.revalidate(getOptions));
@@ -176,16 +200,22 @@ export const catalogCache = <A extends { readonly name: string }, S>(
       });
     const metadata = () =>
       Effect.gen(function* () {
-        if (cache === undefined) return yield* local;
+        if (cache === undefined) return (yield* local).tools;
         const manifest = yield* current();
         return yield* pages(cache, manifest.revision, "page", manifest.pages, options.schema);
       });
 
     return {
       list: metadata,
+      /** The record stored with the current revision, if the source supplied one. */
+      header: (): Effect.Effect<JsonObject | undefined, unknown> =>
+        cache === undefined
+          ? local.pipe(Effect.map(({ header }) => header))
+          : current().pipe(Effect.map((manifest) => manifest.header)),
       summaries: () =>
         Effect.gen(function* () {
-          if (cache === undefined) return (yield* local).map((tool) => options.summary.of(tool));
+          if (cache === undefined)
+            return (yield* local).tools.map((tool) => options.summary.of(tool));
           const manifest = yield* current();
           return yield* pages(
             cache,
@@ -197,7 +227,7 @@ export const catalogCache = <A extends { readonly name: string }, S>(
         }),
       resolve: (name: string) =>
         cache === undefined
-          ? local.pipe(Effect.map((tools) => tools.find((tool) => tool.name === name)))
+          ? local.pipe(Effect.map(({ tools }) => tools.find((tool) => tool.name === name)))
           : current().pipe(
               Effect.flatMap((manifest) =>
                 invoke(() =>

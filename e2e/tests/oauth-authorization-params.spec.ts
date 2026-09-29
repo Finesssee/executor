@@ -10,6 +10,7 @@ import { Resource } from "../support/contracts.ts";
 import { oauthSetupIssuer } from "../support/oauth-setup-issuer.ts";
 import { createProfile } from "../support/profiles.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const SignIn = Schema.Struct({ authorizationUrl: Schema.String, redirectUri: Schema.String });
 const extras = { access_type: "offline", prompt: "consent" };
@@ -31,10 +32,11 @@ layer(HostedLive, { excludeTestServices: true })("OAuth authorization parameters
             files: [
               {
                 path: "index.ts",
-                content: `import { defineApp, defineProvider, oauth2 } from "apps";
+                content: `import { defineApp, defineProvider, oauth2, router } from "apps";
 const service=defineProvider({name:"Parameterized OAuth",auth:{oauth:oauth2(${JSON.stringify(config)})}});
-export default defineApp({accounts:{service}},async()=>({queries:{}}));`,
+export default defineApp({accounts:{service}},async()=>({tools: router({})}));`,
               },
+              appsManifest,
             ],
           });
         const start = (config: object, client?: object) =>

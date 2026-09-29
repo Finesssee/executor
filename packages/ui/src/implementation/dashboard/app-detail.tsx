@@ -24,17 +24,45 @@ import { productTitle, useDocumentTitle } from "../hooks/document-title.ts";
 import { cn } from "../lib/utils.ts";
 
 const sections = [
-  { view: "overview", label: "Overview", icon: GridViewIcon },
-  { view: "accounts", label: "Accounts", icon: Key01Icon },
-  { view: "tools", label: "Tools", icon: ToolsIcon },
-  { view: "skills", label: "Skills", icon: BookOpen01Icon },
-  { view: "workflows", label: "Workflows", icon: WorkflowSquare01Icon },
-  { view: "schedules", label: "Schedules", icon: Calendar03Icon },
-  { view: "webhooks", label: "Webhooks", icon: WebhookIcon },
-  { view: "source", label: "Source", icon: SourceCodeIcon },
-  { view: "deployments", label: "Deployments", icon: PackageIcon },
-  { view: "settings", label: "Settings", icon: Settings05Icon },
+  { view: "overview", label: "Overview" },
+  { view: "accounts", label: "Accounts" },
+  { view: "tools", label: "Tools" },
+  { view: "skills", label: "Skills" },
+  { view: "workflows", label: "Workflows" },
+  { view: "schedules", label: "Schedules" },
+  { view: "webhooks", label: "Webhooks" },
+  { view: "source", label: "Source" },
+  { view: "deployments", label: "Deployments" },
+  { view: "settings", label: "Settings" },
 ] as const;
+/**
+ * Read at render. Server bundles can split icons into a chunk that imports this one back, so a
+ * module-level table could capture them before that chunk initializes.
+ */
+const sectionIcon = (view: (typeof sections)[number]["view"]) => {
+  switch (view) {
+    case "overview":
+      return GridViewIcon;
+    case "accounts":
+      return Key01Icon;
+    case "tools":
+      return ToolsIcon;
+    case "skills":
+      return BookOpen01Icon;
+    case "workflows":
+      return WorkflowSquare01Icon;
+    case "schedules":
+      return Calendar03Icon;
+    case "webhooks":
+      return WebhookIcon;
+    case "source":
+      return SourceCodeIcon;
+    case "deployments":
+      return PackageIcon;
+    case "settings":
+      return Settings05Icon;
+  }
+};
 const contentClasses = {
   skills: "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
   workflows: "min-h-0 min-w-0 flex-1 overflow-auto",
@@ -140,7 +168,7 @@ export function AppDetailLayout({
             const content = (
               <>
                 <HugeiconsIcon
-                  icon={section.icon}
+                  icon={sectionIcon(section.view)}
                   size={16}
                   strokeWidth={1.7}
                   aria-hidden

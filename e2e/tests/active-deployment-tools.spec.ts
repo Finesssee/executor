@@ -9,6 +9,7 @@ import { McpClient } from "../support/mcp-client.ts";
 import { HostedLive, withHostedCase } from "../support/case.ts";
 import { App } from "../support/contracts.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const Catalog = Schema.Struct({
   deployment: Schema.String,
@@ -26,14 +27,15 @@ const source = (version: number) => [
   {
     path: "index.ts",
     content: `
-import { defineApp, mutation, object } from "apps";
+import { defineApp, mutation, object, router } from "apps";
 import { always } from "apps/operations/approval";
-export default defineApp({accounts:{}}, async()=>({mutations:{
+export default defineApp({accounts:{}}, async()=>({tools: router({
   guarded: mutation({input:object({})${version === 2 ? ",approval:always()" : ""}},async()=>({version:${version}})),
   review: mutation({input:object({}),approval:always()},async()=>({version:${version}}))
-  ${version === 1 ? ",retired:mutation({input:object({})},async()=>({version:1}))" : ""}
-}}));`,
+  ${version === 1 ? ",retired:mutation({input:object({})},async()=>({version:1}))" : ""},
+})}));`,
   },
+  appsManifest,
 ];
 const fixture = Effect.gen(function* () {
   const api = yield* Api,
@@ -86,7 +88,7 @@ layer(HostedLive, { excludeTestServices: true })("Active deployment policy", (it
               apps: [
                 {
                   app: app.id,
-                  tools: { kind: "selected", names: ["mutations.guarded", "mutations.retired"] },
+                  tools: { kind: "selected", names: ["guarded", "retired"] },
                 },
               ],
               approval: "client",
@@ -106,7 +108,7 @@ layer(HostedLive, { excludeTestServices: true })("Active deployment policy", (it
             caller.session,
             "POST",
             `${path}/tools/call`,
-            { tool: "mutations.guarded", input: {}, deployment: catalog.deployment },
+            { tool: "guarded", kind: "mutation", input: {}, deployment: catalog.deployment },
             caller.headers,
           );
           expect(result.status).toBe(200);
@@ -118,7 +120,7 @@ layer(HostedLive, { excludeTestServices: true })("Active deployment policy", (it
             caller.session,
             "POST",
             `${path}/tools/call`,
-            { tool: "mutations.guarded", input: {}, deployment: catalog.deployment },
+            { tool: "guarded", kind: "mutation", input: {}, deployment: catalog.deployment },
             caller.headers,
           );
           expect(
@@ -126,7 +128,7 @@ layer(HostedLive, { excludeTestServices: true })("Active deployment policy", (it
             "A retired build must not bypass the newly required approval",
           ).toBe(404);
           expect(retired.body).toMatchObject({ _tag: "DeploymentNotFound" });
-          for (const endpoint of ["tools", "tools/index", "tools/mutations.guarded"]) {
+          for (const endpoint of ["tools", "tools/index", "tools/guarded"]) {
             const stale = yield* api.request(
               caller.session,
               "GET",
@@ -142,9 +144,9 @@ layer(HostedLive, { excludeTestServices: true })("Active deployment policy", (it
             yield* api.request(caller.session, "GET", `${path}/tools`, undefined, caller.headers),
           );
           expect(current.deployment).not.toBe(catalog.deployment);
-          expect(current.items.map((tool) => tool.name)).not.toContain("mutations.retired");
+          expect(current.items.map((tool) => tool.name)).not.toContain("retired");
           for (const deployment of [undefined, current.deployment]) {
-            for (const endpoint of ["tools/index", "tools/mutations.guarded"]) {
+            for (const endpoint of ["tools/index", "tools/guarded"]) {
               const query = deployment === undefined ? "" : `?deployment=${deployment}`;
               const inspected = yield* api.request(
                 caller.session,
@@ -161,7 +163,8 @@ layer(HostedLive, { excludeTestServices: true })("Active deployment policy", (it
               "POST",
               `${path}/tools/call`,
               {
-                tool: "mutations.guarded",
+                tool: "guarded",
+                kind: "mutation",
                 input: {},
                 ...(deployment === undefined ? {} : { deployment }),
               },
@@ -175,7 +178,7 @@ layer(HostedLive, { excludeTestServices: true })("Active deployment policy", (it
               caller.session,
               "POST",
               `${path}/tools/call`,
-              { tool: "mutations.retired", input: {} },
+              { tool: "retired", kind: "mutation", input: {} },
               caller.headers,
             )).status,
           ).toBe(404);
@@ -204,7 +207,7 @@ layer(HostedLive, { excludeTestServices: true })("Active deployment policy", (it
               {
                 name: "execute",
                 arguments: {
-                  code: `return await tools[${JSON.stringify(app.slug)}].mutations.review({})`,
+                  code: `return await tools[${JSON.stringify(app.slug)}].review({})`,
                 },
               },
               undefined,
@@ -224,7 +227,7 @@ layer(HostedLive, { excludeTestServices: true })("Active deployment policy", (it
               {
                 name: "execute",
                 arguments: {
-                  code: `await tools[${JSON.stringify(app.slug)}].mutations.review({}); return await tools[${JSON.stringify(app.slug)}].mutations.guarded({})`,
+                  code: `await tools[${JSON.stringify(app.slug)}].review({}); return await tools[${JSON.stringify(app.slug)}].guarded({})`,
                 },
               },
               undefined,
@@ -265,7 +268,7 @@ layer(HostedLive, { excludeTestServices: true })("Active deployment policy", (it
             id: grant.grantId,
             policy: {
               kind: "tools",
-              apps: [{ app: app.id, tools: { kind: "selected", names: ["mutations.guarded"] } }],
+              apps: [{ app: app.id, tools: { kind: "selected", names: ["guarded"] } }],
               approval: "client",
             },
           })).status,

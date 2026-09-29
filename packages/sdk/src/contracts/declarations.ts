@@ -9,7 +9,7 @@ import type { Deferred, Effect } from "effect";
  */
 export const declarationFreshness = {
   freshMillis: 10_000,
-  maxStaleMillis: 60_000,
+  maxStaleMillis: 24 * 60 * 60_000,
   refreshMillis: 30_000,
 } as const;
 
@@ -18,18 +18,18 @@ export const declarationFreshness = {
  * The app cache's `freshFor`/`staleFor` already bound how old a remote catalog behind a listing
  * can be, and a new deployment, profile revision, account selection or stored credential is a
  * different listing, so this window only bounds re-evaluation and inputs nothing else tracks,
- * such as a factory that fetches without the app cache. `maxStaleMillis` defaults to the agreed
- * 60 s bound for evaluated metadata. `freshMillis` defaults to 30 s, so a busy catalog is
- * re-evaluated in the background at most twice a minute.
+ * such as a factory that fetches without the app cache. `maxStaleMillis` defaults to 24 hours, so
+ * a listing read at least once a day is served from memory while it refreshes in the background.
+ * `freshMillis` defaults to 30 s, so a busy catalog is re-evaluated in the background at most twice
+ * a minute.
  *
  * `loadMillis` bounds an evaluation only while no request waits for it: a background refresh, or
  * a first listing every reader stopped waiting for. It is stopped once it has run that long with
  * no reader; a reader that waits keeps it running, so a slow app can always be listed by a caller
- * prepared to wait. It defaults to 45 s: ages count from when an evaluation started, so a listing
- * that takes longer than `maxStaleMillis` could never be served, and one that takes 45 s is still
- * served for 15 s while its replacement runs. A host whose background work has a shorter lifetime
- * sets it below that lifetime, so a stalled listing ends as a remembered timeout rather than an
- * interruption.
+ * prepared to wait. It defaults to 45 s and never exceeds `maxStaleMillis`: ages count from when an
+ * evaluation started, so a listing that takes longer than that could never be served. A host whose
+ * background work has a shorter lifetime sets it below that lifetime, so a stalled listing ends as
+ * a remembered timeout rather than an interruption.
  *
  * A slow failure is remembered for `freshMillis` after it failed: a listing that timed out or was
  * stopped after `loadMillis`, or one that failed after at least `slowFailureMillis`. Reads with a
@@ -47,7 +47,7 @@ export interface ToolListingPolicy {
 }
 export const defaultToolListingPolicy: ToolListingPolicy = {
   freshMillis: 30_000,
-  maxStaleMillis: 60_000,
+  maxStaleMillis: 24 * 60 * 60_000,
   loadMillis: 45_000,
   slowFailureMillis: 1_000,
 };
@@ -116,9 +116,8 @@ export interface PendingLoad {
 
 /**
  * Process or isolate memory of evaluated declarations and tool listings. Keys digest every
- * evaluation input. Values are whatever the app returned, which can include text derived from
- * credentials, so they stay in this process and are never written to a shared or persistent
- * store. `pending`, `begin` and `end` track the one evaluation of each key running in this process.
+ * evaluation input. `pending`, `begin` and `end` track the one evaluation of each key running in
+ * this process.
  */
 export interface DeclarationCache {
   readonly get: (key: string) => Effect.Effect<KeptEntry | undefined>;
@@ -128,12 +127,44 @@ export interface DeclarationCache {
   readonly begin: (key: string, load: PendingLoad) => void;
   readonly end: (key: string, load: PendingLoad) => void;
   /**
-   * The app's cached upstream data changed at `at`: an app cache entry was refreshed, replaced
-   * or invalidated, for example after an MCP server announced a changed tool list. Results of
+   * The app's cached upstream data was invalidated or explicitly refreshed at `at`, for example
+   * after an MCP server announced a changed tool list. Results of
    * that app whose evaluation started no later than then are forgotten, including remembered
    * failures, and evaluations already running are not kept.
    */
   readonly changed: (app: string, at: number) => void;
+  /** Whether a result of the app evaluated from `at` predates an invalidation seen here. */
+  readonly outdated: (app: string, at: number) => boolean;
+}
+
+/**
+ * How long a read that missed this process's store waits for the durable copy before it also
+ * starts evaluating. A warm durable store answers well inside it, so a hit never evaluates; a slow
+ * one, such as a Durable Object waking up, delays a miss by at most this much.
+ */
+export const durableHeadStartMillis = 100;
+
+/** A result kept beyond this process: its JSON text and when the read that produced it began. */
+export interface DurableEntry {
+  readonly at: number;
+  readonly json: string;
+}
+
+/**
+ * Evaluated results kept where every process or isolate of a host reads them, under the same keys
+ * as `DeclarationCache`. Values can include text derived from credentials, so a host keeps them
+ * only where it already keeps the app's account-scoped cache, never in a store shared across
+ * owners. An app cache invalidation must make the host forget the app's results evaluated no
+ * later than then. `get` never fails: a failure or a slow store is a miss. `set` may drop a
+ * result, and keeps it at most until `until`.
+ */
+export interface DurableDeclarations {
+  readonly get: (app: string, key: string) => Effect.Effect<DurableEntry | undefined>;
+  readonly set: (
+    app: string,
+    key: string,
+    entry: DurableEntry & { readonly until: number },
+  ) => Effect.Effect<void>;
 }
 
 /**

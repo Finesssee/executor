@@ -4,36 +4,36 @@ Use this when the user asks you to add a service, often from a setup prompt
 copied from the dashboard. Pick the helper below, read the service's
 authentication docs, and ask the user how they sign in when it is unclear. Put
 that method in `provider.ts` ([accounts.md](accounts.md)); never put a
-credential in source. Look up exact helper options with `framework_describe`.
+credential in source. Look up exact helper options with `framework.describe`.
 
 | Interface                   | Helper                                                    |
 | --------------------------- | --------------------------------------------------------- |
-| Remote MCP server           | `mcpOperations` from `apps/mcp`                           |
-| Local MCP process           | `stdioOperations` from `apps/mcp/stdio`                   |
-| OpenAPI or Swagger document | `liveOpenapiOperations` from `apps/openapi`               |
-| GraphQL endpoint            | `graphqlOperations` from `apps/graphql`                   |
+| Remote MCP server           | `mcpRouter` from `apps/mcp`                               |
+| Local MCP process           | `stdioRouter` from `apps/mcp/stdio`                       |
+| OpenAPI or Swagger document | `liveOpenapiRouter` from `apps/openapi`                   |
+| GraphQL endpoint            | `graphqlRouter` from `apps/graphql`                       |
 | Anything else               | Queries and mutations with `fetch` ([tools.md](tools.md)) |
 
 ## Remote MCP tools
 
-Import `mcpOperations` from `apps/mcp`. Add `@modelcontextprotocol/sdk` (currently
+Import `mcpRouter` from `apps/mcp`. Add `@modelcontextprotocol/sdk` (currently
 `1.30.0`) to the app's `package.json` dependencies. The dashboard's quick add
 generates this for public and OAuth servers. A public server needs no account:
 
 ```ts
 import { defineApp } from "apps";
-import { mcpOperations } from "apps/mcp";
+import { mcpRouter } from "apps/mcp";
 
 export default defineApp({ accounts: {} }, async ({ signal }) => ({
-  ...(await mcpOperations({
+  tools: await mcpRouter({
     url: "https://mcp.deepwiki.com/mcp",
     ...(signal === undefined ? {} : { signal }),
-  })),
+  }),
 }));
 ```
 
 Authenticated apps declare `service: provider.many()` and combine discovery
-with `accountOperations(accounts.service, account => mcpOperations({ ... }), { signal })`
+with `tools: await accountRouter(accounts.service, account => mcpRouter({ ... }), { signal })`
 from `apps`. Each tool takes `{ accountId, input }`: the chosen account ID and the
 original upstream input. Same-name tools keep one name with an input schema for
 each account. Empty selections expose no tools.
@@ -59,22 +59,39 @@ Input waits pause the active upstream timeout; the server can impose its own dea
 Discovery cannot prompt. Remote prompts/resources, sampling and URL-mode elicitation
 are not exposed. Stdio uses the separate helper below.
 
+The helper returns a router. Its title, description and icons come from the
+server's `serverInfo`, and its `instructions` become a skill agents can read. To
+keep several servers in one app, mount each under a key; tools become
+`<key>.<tool>` and a server that cannot be reached is reported without hiding the
+others:
+
+```ts
+tools: router({
+  linear: await mcpRouter({ url: "https://mcp.linear.app/mcp", headers, cache, signal }),
+  sentry: router(await mcpRouter({ url: "https://mcp.sentry.dev/mcp", headers, cache, signal }), {
+    description: "Errors and releases for the web app",
+  }),
+}),
+```
+
 ## Local stdio MCP tools
 
-Import `stdioOperations` from `apps/mcp/stdio` and declare
+Import `stdioRouter` from `apps/mcp/stdio` and declare
 `@modelcontextprotocol/sdk` in the app's dependencies. The HTTP helper never
 imports this process adapter. Pass the command, literal arguments, and an
 optional working directory. Declare each secret environment variable as a
 `secrets` field; pass the chosen `account.fields` as the child's environment
-with `provider.many()` and `accountOperations`, as above. Do not embed tokens
+with `provider.many()` and `accountRouter`, as above. Do not embed tokens
 in source, command arguments, or working-directory paths. Servers with no
-environment fields need no account. Use `framework_describe` for the exact
-`stdioOperations` options.
+environment fields need no account. Use `framework.describe` for the exact
+`stdioRouter` options.
 
 The helper discovers tools with the selected account and starts a
 fresh initialized process for each discovery and call. It validates schemas,
 retains MCP result semantics, forwards cancellation, and closes the process
 on completion, error, or timeout. Arguments are literal; there is no shell.
+Unlike `mcpRouter`, it does not read the server's `serverInfo` or
+`instructions`; describe it with `router(await stdioRouter(...), { title, instructions })`.
 The process receives the MCP SDK's basic inherited environment plus the
 selected fields, not the host's full environment. Stderr is ignored. Edit the
 source for server-specific behavior; this helper does not retain sessions
@@ -83,7 +100,7 @@ local Node runtime.
 
 ## OpenAPI APIs
 
-Call `liveOpenapiOperations` from `apps/openapi` with `ctx.cache`, `ctx.fetch`,
+Call `liveOpenapiRouter` from `apps/openapi` with `ctx.cache`, `ctx.fetch`,
 the signal and the selected account. It downloads and compiles the definition
 inside the app, caching each revision; no extra dependency is needed. Pass the
 settings the definition cannot be trusted to decide:
@@ -100,11 +117,18 @@ settings the definition cannot be trusted to decide:
   [accounts.md](accounts.md#oauth-sign-in), preferring `discover`.
 - Optional `fallbackSecurity` when the definition declares no security, and
   `patches` for mistakes in a definition you do not control.
+- Optional `kinds`, keyed by operationId, when an operation's HTTP method
+  misclassifies it as a query or mutation.
+
+Tools are grouped by the operation's first tag, or its first path segment:
+operationId `listProjects` tagged `projects` becomes
+`projects.listProjects`, and `accounts_connect` tagged `accounts`
+becomes `accounts.connect`. Discover the exact names with search.
 
 Operations the helper cannot represent, and operations whose security needs
 another method, are left out rather than failing the app. Public APIs need no
-account: call `liveOpenapiOperations` without `accountOperations` and with
-`methods: {}` and `oauth: []`. `openapiOperations` is the lower-level helper for
+account: call `liveOpenapiRouter` without `accountRouter` and with
+`methods: {}` and `oauth: []`. `openapiRouter` is the lower-level helper for
 normalized metadata. Use `contentType` to choose an alternate declared request
 media type. Binary request bodies and multipart binary fields take base64
 strings. Binary responses return `{ base64, contentType }`; text and NDJSON
@@ -132,10 +156,10 @@ inspect its state before retrying.
 
 ## GraphQL APIs
 
-Use `graphqlOperations` from `apps/graphql` with the endpoint, the selected
+Use `graphqlRouter` from `apps/graphql` with the endpoint, the selected
 account's headers, and optional cancellation signal. Declare `graphql`
 (currently `16.11.0`) in the app's dependencies. Authenticated apps use
-`provider.many()` and `accountOperations` as above; public endpoints need no
+`provider.many()` and `accountRouter` as above; public endpoints need no
 account selection.
 
 Helpers are separate subpath imports. Importing `apps` alone does not load
@@ -144,13 +168,13 @@ resolve from its own installation. A missing peer fails the deployment with
 the package to add. A declared `apps` version owns its framework dependencies;
 otherwise the host supplies them.
 
-MCP apps pass `ctx.cache.forAccount(account)` to `mcpOperations`. Public
+MCP apps pass `ctx.cache.forAccount(account)` to `mcpRouter`. Public
 sources without account requirements can pass `ctx.cache`. The helper returns
-`{ dynamicTools }`; it lists metadata without compiling every tool, and resolves
+a dynamic router; it lists metadata without compiling every tool, and resolves
 one executable for each call. Cached identity includes the server URL, normalized
 headers and account ID. Defaults are five minutes fresh plus five minutes stale.
 
-Set `revalidate: true` on a specific `mcpOperations` call to await a new catalog
+Set `revalidate: true` on a specific `mcpRouter` call to await a new catalog
 at a logical connection or explicit refresh boundary. Do not set it on every
 app evaluation unless every request must reload discovery. Each HTTP transport
 session is short-lived; opening that transport does not force a catalog refresh.
@@ -159,10 +183,10 @@ There is no idle background connection, so TTL or explicit refresh covers change
 made while disconnected. A failed explicit refresh retains the previous catalog.
 Only metadata is cached; credentials and executable handlers remain invocation-owned.
 
-GraphQL apps use the same cache policy through `graphqlOperations`:
+GraphQL apps use the same cache policy through `graphqlRouter`:
 
 ```ts
-await graphqlOperations({
+await graphqlRouter({
   url,
   headers,
   accountId: account.id,
@@ -171,7 +195,7 @@ await graphqlOperations({
 });
 ```
 
-The helper returns `{ dynamicTools }`. One introspection request creates a
+The helper returns a dynamic router. One introspection request creates a
 revision of per-tool definitions. Listing reads those definitions; execution
 loads and compiles only the selected query or mutation, without reading the
 full introspection schema. The current account supplies execution credentials.

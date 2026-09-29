@@ -6,8 +6,10 @@ export class HighlightUnavailable extends Schema.TaggedError<HighlightUnavailabl
 ) {}
 import { Effect } from "effect";
 import { Atom } from "effect/unstable/reactivity";
+import type { HighlighterCore } from "shiki/core";
 
-const highlighterAtom = Atom.make(
+/** One shared Shiki instance for every code view, loaded on first use. */
+export const highlighterAtom = Atom.make(
   Effect.tryPromise({
     try: () => import("../implementation/highlight-engine.ts"),
     catch: () => new HighlightUnavailable({}),
@@ -20,10 +22,19 @@ export const highlightedAtom = Atom.family(
     Atom.make((get) =>
       Effect.gen(function* () {
         const highlighter = yield* get.result(highlighterAtom);
-        return highlighter.codeToTokens(input.code, {
-          lang: input.language,
-          themes: { light: "github-light", dark: "github-dark" },
-        }).tokens;
+        return highlightTokens(highlighter, input.code, input.language);
       }),
     ),
 );
+
+/** Tokenize with both themes; each token carries its light color and a `--shiki-dark` variable. */
+export function highlightTokens(
+  highlighter: Pick<HighlighterCore, "codeToTokens">,
+  code: string,
+  language: string,
+) {
+  return highlighter.codeToTokens(code, {
+    lang: language,
+    themes: { light: "github-light", dark: "github-dark" },
+  }).tokens;
+}

@@ -80,9 +80,9 @@ export const accountFields = (
     : undefined;
 
 /** A submission contains only the selected method's fields, redacted at the form boundary. */
+/** New accounts are named after they are saved. */
 export interface AccountSubmission {
   readonly method: string;
-  readonly label: string;
   readonly fields: Redacted.Redacted<Readonly<Record<string, string | number | boolean>>>;
 }
 /** Product OAuth renderers receive the same pending state as credential submission. */
@@ -93,7 +93,7 @@ export interface AccountOAuthProps {
 }
 
 /** Client selection submitted to the product's OAuth start operation. */
+/** New accounts are named after sign-in, once the connected identity is known. */
 export interface OAuthSubmission {
-  readonly label: string;
   readonly client?: OAuthClientInput;
 }

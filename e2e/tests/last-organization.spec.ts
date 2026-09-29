@@ -43,6 +43,16 @@ layer(TestLive, { excludeTestServices: true })("Last active organization", (it) 
         yield* waitForLastOrganization(second.id);
         const resume = (organization: { id: string; slug: string }) =>
           Effect.gen(function* () {
+            // The server sends the current address, so the page never replaces its own URL
+            // while its data is still arriving.
+            const entry = yield* browser.use("Request the bare root", (page) =>
+              page
+                .context()
+                .request.get("/", { maxRedirects: 0, headers: { accept: "text/html" } }),
+            );
+            expect(
+              new URL(entry.headers()["location"] ?? "", "http://entry.invalid").pathname,
+            ).toBe(`/org/${organization.slug}/apps`);
             yield* browser.use("Return to the bare root", (page) => page.goto("/"));
             yield* browser.use("Entry restores the last active organization", (page) =>
               page.waitForURL(`**/org/${organization.slug}/apps`),

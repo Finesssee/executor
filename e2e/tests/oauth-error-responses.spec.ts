@@ -11,6 +11,7 @@ import { oauthSetupIssuer } from "../support/oauth-setup-issuer.ts";
 import { createProfile } from "../support/profiles.ts";
 import { oauthMcpAppFiles } from "../support/authored-templates.ts";
 import { scenarios } from "../test-plan.ts";
+import { appsManifest } from "../support/apps-release.ts";
 
 const SignIn = Schema.Struct({ authorizationUrl: Schema.String });
 const Failure = Schema.Struct({
@@ -24,14 +25,17 @@ const Echo = Schema.Struct({ authorization: Schema.NullOr(Schema.String) });
 const resourceAppFiles = (name: string, origin: string) => [
   {
     path: "index.ts",
-    content: `import { defineApp, defineProvider, oauth2, query, object } from "apps";
+    content: `import { defineApp, defineProvider, oauth2, query, object, router } from "apps";
 const service = defineProvider({ name: ${JSON.stringify(name)}, auth: { oauth: oauth2({ discover: ${JSON.stringify(origin)}, scopes: ["openid", "read"] }) } });
-export default defineApp({ accounts: { service } }, async ({ accounts }) => ({ queries: { read: query({ input: object({}) }, async ({ fetch }) => {
+export default defineApp({ accounts: { service } }, async ({ accounts }) => ({ tools: router({
+   read: query({ input: object({}) }, async ({ fetch }) => {
   const result = await fetch(${JSON.stringify(`${origin}/resource`)}, { headers: { authorization: "Bearer " + accounts.service.fields.access_token } });
   return result.json();
-}) } }));
+}),
+ }) }));
 `,
   },
+  appsManifest,
 ];
 
 layer(HostedLive, { excludeTestServices: true })("OAuth error responses", (it) => {
@@ -50,11 +54,8 @@ layer(HostedLive, { excludeTestServices: true })("OAuth error responses", (it) =
           idTokenAlgorithms: ["ES256"],
           idTokenAlgorithm: "ES256",
           tokenError: null,
-          tokenType: "Bearer",
           authorizeError: null,
           callbackIssuer: null,
-          challengeScheme: "Bearer",
-          bearerMethods: null,
           refreshTokens: false,
           expiresIn: 3600,
           refreshSubject: "synthetic-subject",
@@ -161,6 +162,29 @@ layer(HostedLive, { excludeTestServices: true })("OAuth error responses", (it) =
             reason: "registered_client_incompatible",
             evidence: "HTTP 200, provider error invalid_client",
           },
+          // Services that reject the client with their own code are read as invalid_client, so a
+          // client registered in this sign-in is reported as incompatible.
+          {
+            name: "GitHub incorrect_client_credentials",
+            tokenError: { status: 200, body: { error: "incorrect_client_credentials" } },
+            reason: "registered_client_incompatible",
+            evidence: "HTTP 200.",
+          },
+          {
+            name: "Salesforce invalid_client_id",
+            tokenError: { status: 400, body: { error: "invalid_client_id" } },
+            reason: "registered_client_incompatible",
+            evidence: "HTTP 400.",
+          },
+          {
+            name: "Dropbox invalid_client description",
+            tokenError: {
+              status: 400,
+              body: { error: "invalid_client: Invalid client_id or client_secret" },
+            },
+            reason: "registered_client_incompatible",
+            evidence: "HTTP 400.",
+          },
           {
             name: "HTTP 200 nonstandard error",
             tokenError: { status: 200, body: { ok: false, error: "private_nonstandard_code" } },
@@ -233,58 +257,6 @@ layer(HostedLive, { excludeTestServices: true })("OAuth error responses", (it) =
           expect(JSON.stringify(result.completed.body)).not.toContain("private_nonstandard_code");
         }
 
-        // A resource that advertised Bearer accepts its service's nonstandard token type.
-        const tokenTypes: ReadonlyArray<{
-          readonly name: string;
-          readonly tokenType: string;
-          readonly challengeScheme: string;
-          readonly bearerMethods: readonly string[] | null;
-          readonly reason: string | undefined;
-        }> = [
-          {
-            name: "Nonstandard type, Bearer challenge",
-            tokenType: "user",
-            challengeScheme: "Bearer",
-            bearerMethods: null,
-            reason: undefined,
-          },
-          {
-            name: "Nonstandard type, Bearer metadata",
-            tokenType: "user",
-            challengeScheme: "DPoP",
-            bearerMethods: ["header"],
-            reason: undefined,
-          },
-          {
-            name: "Nonstandard type, no Bearer advertised",
-            tokenType: "user",
-            challengeScheme: "DPoP",
-            bearerMethods: null,
-            reason: "incompatible_response",
-          },
-          {
-            name: "DPoP-bound token",
-            tokenType: "DPoP",
-            challengeScheme: "Bearer",
-            bearerMethods: null,
-            reason: "unsupported",
-          },
-        ];
-        for (const scenario of tokenTypes) {
-          const [files, name] = mcp(scenario.name);
-          const result = yield* signIn(files, name, scenario);
-          expect(
-            result.completed.status,
-            `${scenario.name}: ${JSON.stringify(result.failure)}`,
-          ).toBe(scenario.reason === undefined ? 200 : 400);
-          if (scenario.reason !== undefined)
-            expect(result.failure, scenario.name).toMatchObject({
-              _tag: "OAuthCompletionFailed",
-              reason: scenario.reason,
-            });
-          expect(result.exchanged, scenario.name).toBe(1);
-        }
-
         // An unsigned ID token is rejected even when the service advertises `none`.
         {
           const [files, name] = mcp("Unsigned ID token");
@@ -324,7 +296,7 @@ layer(HostedLive, { excludeTestServices: true })("OAuth error responses", (it) =
             actors.owner,
             "POST",
             `${prefix}/apps/${result.app.id}/tools/call`,
-            { profile: result.profile.id, tool: "queries.read", input: {} },
+            { profile: result.profile.id, tool: "read", kind: "query", input: {} },
           );
           expect((yield* issuer.metrics).refreshes, scenario.name).toBe(refreshes + 1);
           if (scenario.renewed) {
