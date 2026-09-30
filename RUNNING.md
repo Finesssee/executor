@@ -25,6 +25,21 @@ develop on its `main`, publish a bump, then bump the dependency here. The
 
 ## Dev servers
 
+### Local Jev tool router
+
+The customized local app can route non-empty `tools.search({ query })` calls
+through the saved `typesafe-jev` integration. Set `EXECUTOR_JEV_ROUTER=1` when
+starting the local server. Jev first chooses an integration, then a tool within
+it, using `jev-latest` and a `none_of_these` option at each stage. The search
+returns the selected tool as its sole result. Exact namespace enumeration
+(`tools.search({ namespace, query: "" })`) remains a catalog read.
+
+The Jev connection must already exist in that server's data directory. Routing
+fails closed if Jev is unavailable or returns an invalid choice. This provider
+routes discovery; direct calls to a known tool path still use Executor's normal
+authorization and approval checks. The published CLI does not include this
+local source change until a custom build is run.
+
 - Everything except desktop/cloud: `bun run dev` (turbo, from root)
 - One app: `bun run dev` from its `apps/<name>` directory
 - Self-host boots standalone with just env vars — see

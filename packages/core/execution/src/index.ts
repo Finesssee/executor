@@ -27,6 +27,7 @@ export {
 } from "./skills";
 export { PROVIDED_GLOBAL_NAMES } from "./provided-globals";
 export { ExecutionToolError } from "./errors";
+export { createJevToolDiscoveryProvider } from "./jev-tool-router";
 export {
   defaultToolDiscoveryProvider,
   makeExecutorToolInvoker,

@@ -10,6 +10,7 @@ import { localAnalytics } from "./analytics";
 import { makeLocalApiHandler } from "./app";
 import { createExecutorHandle, disposeExecutor, getExecutorBundle } from "./executor";
 import { createMcpRequestHandler, type McpRequestHandler } from "./mcp";
+import { localToolDiscoveryProvider } from "./tool-discovery";
 
 // ---------------------------------------------------------------------------
 // Local server handlers.
@@ -94,6 +95,7 @@ export const createServerHandlers = async (token: string): Promise<ServerHandler
       createExecutionEngine({
         executor,
         codeExecutor: makeQuickJsExecutor(),
+        toolDiscoveryProvider: localToolDiscoveryProvider,
       }),
       localAnalytics,
       { plane: "mcp", toolkit: false },
@@ -153,6 +155,7 @@ export const createServerHandlers = async (token: string): Promise<ServerHandler
           createExecutionEngine({
             executor: handle.executor,
             codeExecutor: makeQuickJsExecutor(),
+            toolDiscoveryProvider: localToolDiscoveryProvider,
           }),
           localAnalytics,
           { plane: "mcp", toolkit: true },

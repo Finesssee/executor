@@ -16,6 +16,7 @@ import { localAnalytics } from "./analytics";
 import { getExecutorBundle, type LocalExecutor } from "./executor";
 import { makeLocalIdentityLayer } from "./identity";
 import { ErrorCaptureLive } from "./observability";
+import { localToolDiscoveryProvider } from "./tool-discovery";
 
 // ===========================================================================
 // The LOCAL Executor app, as ONE `ExecutorApp.make` call.
@@ -62,6 +63,7 @@ const localFixedExecutionLayer = (executor: LocalExecutor): Layer.Layer<FixedExe
       createExecutionEngine({
         executor,
         codeExecutor: makeQuickJsExecutor(),
+        toolDiscoveryProvider: localToolDiscoveryProvider,
       }),
       localAnalytics,
       { plane: "api", toolkit: false },
