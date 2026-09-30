@@ -196,6 +196,13 @@
     @apply bg-background font-sans text-foreground antialiased;
   }
 
+  @media (pointer: fine) {
+    html,
+    body {
+      overscroll-behavior: none;
+    }
+  }
+
   ::-webkit-scrollbar {
     width: 6px;
     height: 6px;
