@@ -34,7 +34,8 @@ run("verify patched deps", "bun", ["run", "scripts/check-patched-deps.ts"]);
 // per-machine so this is a fast no-op when already present.
 run("playwright chromium", "bunx", ["playwright", "install", "chromium"]);
 
-if (!existsSync(resolve(repoRoot, "node_modules/.bin/vitest"))) {
+const vitestBinary = process.platform === "win32" ? "vitest.exe" : "vitest";
+if (!existsSync(resolve(repoRoot, "node_modules/.bin", vitestBinary))) {
   throw new Error("bootstrap: vitest missing after install — bun install likely failed");
 }
 
